@@ -7,6 +7,7 @@ import {
   type SimulationProfiler,
 } from "./engine";
 import { hashGameState } from "./benchmark";
+import { createOrbitalStationState } from "./orbitalStation";
 import type { BeltConnection, FactoryEntity, GameState, ItemId } from "./types";
 
 export type PerformanceFixtureProfile = "p50" | "p95" | "max" | "player" | "terminal2x";
@@ -75,6 +76,9 @@ function fixtureBelt(id: string, index: number, source: string, target: string, 
 export function createSyntheticPerformanceFixture(profile: PerformanceFixtureProfile): GameState {
   const spec = FIXTURE_SPECS[profile];
   const state = createLogisticsBenchmarkState(spec.stationCount);
+  // Synthetic fixtures are hash-compared across independently constructed
+  // runs, so their new wall-clock-backed extension state must also be fixed.
+  state.orbitalStation = createOrbitalStationState({ nowMs: 0 });
   const source = fixtureEntity("fixture_source", "storage", state.entities.length);
   source.outputs[FIXTURE_ITEM] = 900_000;
   const target = fixtureEntity("fixture_target", "storage", state.entities.length + 1);

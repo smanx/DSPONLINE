@@ -12,7 +12,7 @@ import { WorkspaceFrame } from "./WorkspaceFrame";
 type CenterCategory = "all" | "power" | "production" | "logistics" | "dyson";
 
 const POWER_IDS = new Set<ConstructionId>(["wind_turbine", "solar_panel", "geothermal_power_station", "thermal_power_plant", "mini_fusion_power_plant", "artificial_star", "accumulator", "energy_exchanger"]);
-const LOGISTICS_IDS = new Set<ConstructionId>(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "storage_tank", "splitter_4way", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]);
+const LOGISTICS_IDS = new Set<ConstructionId>(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "orbital_cargo_terminal", "storage_tank", "splitter_4way", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]);
 const DYSON_IDS = new Set<ConstructionId>(["em_rail_ejector", "ray_receiver", "vertical_launching_silo"]);
 
 interface AutomationDisplayDefinition {
@@ -133,18 +133,21 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
   const materialSeconds = getConstructionAutomationMaterialSeconds(game);
   const term = query.trim().toLocaleLowerCase("zh-CN");
   const definitions = useMemo(() => automationDefinitions().filter((definition) => {
+    if (definition.id === "orbital_cargo_terminal" && (game.mode !== "normal" || game.orbitalStation.status === "locked")) return false;
     if (category !== "all" && categoryFor(definition.id) !== category) return false;
     if (!term) return true;
     const materials = definition.costs.map((cost) => ITEMS[cost.itemId].name).join(" ");
     return `${definition.name} ${materials}`.toLocaleLowerCase("zh-CN").includes(term);
-  }), [category, term]);
+  }), [category, game.mode, game.orbitalStation.status, term]);
   const activeTargets = Object.values(game.constructionAutomation.targetStock).filter((target) => (target ?? 0) > 0).length;
   const completedTargets = automationDefinitions().filter((definition) => {
     const target = game.constructionAutomation.targetStock[definition.id] ?? 0;
     const current = isPortableFleetItem(definition.id) ? game.portableFleet[definition.id] ?? 0 : game.construction[definition.id] ?? 0;
     return target > 0 && current >= target;
   }).length;
-  const unlockedBuildingCount = automationDefinitions().filter((definition) => !isPortableFleetItem(definition.id) && (!definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId))).length;
+  const unlockedBuildingCount = automationDefinitions().filter((definition) => !isPortableFleetItem(definition.id) &&
+    (definition.id !== "orbital_cargo_terminal" || game.mode === "normal" && game.orbitalStation.status !== "locked") &&
+    (!definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId))).length;
   const applyBatchTarget = (target: number) => {
     if (!Number.isSafeInteger(target) || target < 1 || target > 100_000_000) {
       setBatchError("请输入 1～100,000,000 的正整数");
@@ -212,7 +215,8 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
         {definitions.map((definition) => {
           const current = Math.floor(isPortableFleetItem(definition.id) ? game.portableFleet[definition.id] ?? 0 : game.construction[definition.id] ?? 0);
           const target = Math.floor(game.constructionAutomation.targetStock[definition.id] ?? 0);
-          const unlocked = !definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId);
+          const unlocked = (definition.id !== "orbital_cargo_terminal" || game.mode === "normal" && game.orbitalStation.status !== "locked") &&
+            (!definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId));
           const complete = target > 0 && current >= target;
           const missing = definition.costs.filter((cost) => (sourceTray[cost.itemId] ?? 0) < cost.amount);
           return <article className={`${target > 0 ? "construction-center-row construction-center-row--targeted" : "construction-center-row"}${complete ? " construction-center-row--complete" : ""}`} key={definition.id}>

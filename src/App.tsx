@@ -18,7 +18,7 @@ import {
   type OnSelectionChangeParams,
 } from "@xyflow/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Activity, AlertTriangle, ArrowUp, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Download, Focus, Map as MapIcon, PanelRightClose, Route, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUp, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Download, Focus, Map as MapIcon, PanelRightClose, Route, Satellite, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
 import {
   ConstructionDock,
   HeaderControls,
@@ -44,6 +44,7 @@ import { usePerformanceMonitor } from "./hooks/usePerformanceMonitor";
 import { MobilePlacementBar, MobileSelectionContextBar, type MobileCanvasMode } from "./components/mobile/MobileFactoryPanels";
 import type { OperationsTab } from "./components/OperationsWorkspace";
 import type { StatisticsTab } from "./components/StatisticsWorkspace";
+import type { StationTab } from "./components/OrbitalStationWorkspace";
 import { ITEMS, RECIPES, getBeltConstructionId, getBeltTiers, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getPlanet, getStarSystem, getTechnology } from "./game/content";
 import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
 import { getSaveSummaryRefreshIntervalMs, shouldRefreshSaveSummaries } from "./game/saveRefreshPolicy";
@@ -80,6 +81,7 @@ import {
   canUpgradeEntities,
   canUpgradeBelt,
   cancelCurrentResearch,
+  clearOrbitalCargoPort,
   clearDysonShells,
   colonizePlanet,
   connectDysonNodes,
@@ -102,6 +104,7 @@ import {
   getConstructionCraftNavigation,
   getConstructionQuickCraftPlan,
   getMaterialDeliverySlotChangeCheck,
+  getOrbitalCargoPortClearCheck,
   getRecursiveHandcraftPlan,
   MIN_CANVAS_REGION_SIZE,
   getEntityOutputCapacity,
@@ -285,7 +288,7 @@ import { removeLeaderboardData } from "./game/leaderboard";
 import { createSecondUnipolarVeinPackage, previewSecondUnipolarVein } from "./game/resourceIntegrity";
 import { trackAnalyticsEvent } from "./game/analytics";
 import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSaveSummary, fetchCloudPublicStatus, hasCloudAuthentication, markCloudSaveSynchronized, readCloudAutoSyncStatus, refreshCloudSaveMetadata, resumeCloudSession, summarizeCloudPayload, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
-import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
+import type { BeltInputPortIndex, BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import { PureIdleMacroClient, PureIdleMacroClientError, type PureIdleMacroProgress } from "./game/pureIdleMacroClient";
 import type { PureIdleMacroMode, PureIdleMacroSummary } from "./game/pureIdleMacro";
@@ -342,6 +345,9 @@ import { createAutomaticRefreshState, resolveProductionRefreshInterval, updateAu
 import { getCanvasLod, shouldAutoOptimizeDenseCanvas, shouldVirtualizeCanvas, type CanvasLod } from "./game/canvasPerformance";
 import { buildAlignmentSpatialIndex, findAlignmentGuides, type AlignmentSpatialIndex } from "./game/alignmentGuides";
 import { synchronizeGalacticActivity, type GalacticActivityPublicStatus } from "./game/galacticActivity";
+import { orbitalStationStatusLabel } from "./game/orbitalStation";
+import { stationTaskDayIndex, synchronizeStationContracts } from "./game/stationContracts";
+import { reconcileOrbitalCargoTerminalBindings } from "./game/stationCargoTerminal";
 import { TutorialWorkspace } from "./components/TutorialWorkspace";
 import { TimeWarpIdleOverlay } from "./components/TimeWarpIdleOverlay";
 import {
@@ -415,7 +421,7 @@ interface BatchConnectionSelection {
   connection: Connection;
   itemId: ItemId;
   tier: BeltTier;
-  targetPortIndex?: 0 | 1 | 2;
+  targetPortIndex?: BeltInputPortIndex;
 }
 
 type InteractionSound = "confirm" | "complete" | "alert" | "place" | "connect" | "upgrade" | "remove" | "travel" | "launch";
@@ -557,6 +563,7 @@ const CampaignWorkspace = lazy(() => importWithRecovery(() => import("./componen
 const GalaxyWorkspace = lazy(() => importWithRecovery(() => import("./components/GalaxyWorkspace"), "银河工作区模块").then((module) => ({ default: module.GalaxyWorkspace })));
 const ConstructionCenterWorkspace = lazy(() => importWithRecovery(() => import("./components/ConstructionCenterWorkspace"), "建筑制造中心模块").then((module) => ({ default: module.ConstructionCenterWorkspace })));
 const SystemSpaceStationWorkspace = lazy(() => importWithRecovery(() => import("./components/SystemSpaceStationWorkspace"), "空间站模块").then((module) => ({ default: module.SystemSpaceStationWorkspace })));
+const OrbitalStationWorkspace = lazy(() => importWithRecovery(() => import("./components/OrbitalStationWorkspace"), "全星系空间站模块").then((module) => ({ default: module.OrbitalStationWorkspace })));
 
 // Content packs must be active before save migration reads any modded IDs.
 const INITIAL_CONTENT_PACK_REGISTRY = loadContentPackRegistry();
@@ -578,9 +585,9 @@ function isAutoInputHandle(handle: string | null | undefined): boolean {
   return handle === "in:auto";
 }
 
-function parseTargetPortIndex(handle: string | null | undefined): 0 | 1 | 2 | undefined {
-  const match = /^in:(?:black-hole|delivery):([0-2])$/.exec(handle ?? "");
-  return match ? Number(match[1]) as 0 | 1 | 2 : undefined;
+function parseTargetPortIndex(handle: string | null | undefined): BeltInputPortIndex | undefined {
+  const match = /^in:(?:black-hole|delivery|orbital):([0-3])$/.exec(handle ?? "");
+  return match ? Number(match[1]) as BeltInputPortIndex : undefined;
 }
 
 function isUniversalInputHandle(handle: string | null | undefined): boolean {
@@ -827,6 +834,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [starMapOpen, setStarMapOpen] = useState(false);
   const [systemSpaceStationOpen, setSystemSpaceStationOpen] = useState(false);
   const [systemSpaceStationId, setSystemSpaceStationId] = useState<StarSystemId | null>(null);
+  const [orbitalStationOpen, setOrbitalStationOpen] = useState(false);
+  const [orbitalStationInitialTab, setOrbitalStationInitialTab] = useState<StationTab | undefined>();
   const [blueprintsOpen, setBlueprintsOpen] = useState(false);
   const [dysonPlannerOpen, setDysonPlannerOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
@@ -1086,6 +1095,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setStarMapOpen(false);
     setSystemSpaceStationOpen(false);
     setSystemSpaceStationId(null);
+    setOrbitalStationOpen(false);
     setBlueprintsOpen(false);
     setDysonPlannerOpen(false);
     setOperationsOpen(false);
@@ -1135,11 +1145,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                 : campaignOpen ? "campaign"
                   : galaxyOpen ? "galaxy"
                     : constructionCenterOpen ? "construction-center"
+                      : orbitalStationOpen ? "orbital-station"
                       : null;
   const mobilePerformanceMode = coarsePointer;
   const constrainedMobile = coarsePointer && lowEndMobile;
   const canvasWorkspaceHidden = pageHidden || technologyOpen || statisticsOpen || recipesOpen || starMapOpen ||
-    systemSpaceStationOpen ||
+    systemSpaceStationOpen || orbitalStationOpen ||
     blueprintsOpen || dysonPlannerOpen || operationsOpen || campaignOpen || galaxyOpen || constructionCenterOpen ||
     (nextMobileShell && mobileNavigation.route.kind === "hub");
   const canvasWorkspacePaused = canvasWorkspaceHidden;
@@ -1294,13 +1305,24 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const response = await fetchCloudPublicStatus().catch(() => null);
       if (cancelled || !response?.activity) return;
       setGalacticActivityStatus(response.activity);
-      if (!response.activity.enabled) return;
       setGame((current) => {
+        let next = current;
+        if (current.mode === "normal") {
+          const orbitalStation = synchronizeStationContracts(
+            current,
+            response.activity!.serverNow,
+            stationTaskDayIndex(response.activity!.serverNow),
+          );
+          if (orbitalStation !== current.orbitalStation) {
+            next = reconcileOrbitalCargoTerminalBindings({ ...current, orbitalStation });
+          }
+        }
+        if (!response.activity!.enabled) return next;
         const existing = current.endgame.constructionActivity.participantId;
         const participantId = existing ?? (typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
           : Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join(""));
-        return synchronizeGalacticActivity(current, response.activity!, participantId);
+        return synchronizeGalacticActivity(next, response.activity!, participantId);
       });
     };
     void refresh();
@@ -2301,6 +2323,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       gameRef.current = next;
       return next;
     });
+  }, []);
+
+  useEffect(() => {
+    if (gameRef.current.mode !== "normal") return;
+    const synchronizeTaskDay = () => {
+      setGame((current) => {
+        if (current.mode !== "normal") return current;
+        const orbitalStation = synchronizeStationContracts(current, Date.now());
+        if (orbitalStation === current.orbitalStation) return current;
+        const next = reconcileOrbitalCargoTerminalBindings({ ...current, orbitalStation });
+        gameRef.current = next;
+        return next;
+      });
+    };
+    synchronizeTaskDay();
+    const timer = window.setInterval(synchronizeTaskDay, 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const persistPlanetViewport = useCallback((planetId: PlanetId, viewport: CanvasViewport) => {
@@ -3633,6 +3672,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setNotice(null);
   }, [closeAllWorkspaces]);
 
+  const openOrbitalStation = useCallback((initialTab?: StationTab) => {
+    if (gameRef.current.mode === "speedrun") return;
+    closeAllWorkspaces();
+    setMobilePanel(null);
+    setOrbitalStationInitialTab(initialTab);
+    setOrbitalStationOpen(true);
+    setNotice(null);
+  }, [closeAllWorkspaces]);
+
   const handleUpgradeInterstellarStation = useCallback((entityId: string) => {
     const status = getInterstellarStationUpgradeStatus(gameRef.current, entityId);
     if (status.blocker !== "ready") {
@@ -3875,6 +3923,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setNotice(mode === "manual" && itemId
       ? `接口 ${slotIndex + 1} 已指定为${ITEMS[itemId].name}`
       : mode === "auto" ? `接口 ${slotIndex + 1} 已恢复自动识别` : `接口 ${slotIndex + 1} 已清空`);
+  }, [commitGame, gameDialog]);
+
+  const clearOrbitalCargoTerminalPort = useCallback(async (entityId: string, portIndex: 0 | 1 | 2 | 3) => {
+    const check = getOrbitalCargoPortClearCheck(gameRef.current, entityId, portIndex);
+    if (!check.ok) {
+      setNotice(check.label);
+      return;
+    }
+    if (check.requiresConfirmation && !await gameDialog.confirm(`${check.label}。确认后缓存会退回本行星物资托盘，传送带会返还施工库存；已提交空间站物资不会退款。`, { danger: true, title: "清空轨道货运接口", confirmLabel: "安全清空" })) return;
+    commitGame((current) => clearOrbitalCargoPort(current, entityId, portIndex, check.requiresConfirmation));
+    setNotice(`轨道货运接口 ${portIndex + 1} 已释放`);
   }, [commitGame, gameDialog]);
 
   const autoLayoutEntities = useCallback((entityIds?: readonly string[]) => {
@@ -5084,6 +5143,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         ? `in:${belt.itemId}`
         : activeEntityById.get(belt.target)?.buildingId === "material_delivery_hub"
           ? `in:delivery:${belt.targetPortIndex}`
+          : activeEntityById.get(belt.target)?.buildingId === "orbital_cargo_terminal"
+            ? `in:orbital:${belt.targetPortIndex}`
           : `in:black-hole:${belt.targetPortIndex}`;
       const className = `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}${focusTone === "line-upstream" ? " factory-edge--line-find-upstream" : focusTone === "line-downstream" ? " factory-edge--line-find-downstream" : focusTone === "line-dim" ? " factory-edge--line-find-dim" : ""}`;
       const routeCenterY = edgeRouteCenters.get(belt.id);
@@ -5210,7 +5271,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const tier = resolveConnectionBeltTier(gameRef.current, beltTierMode, beltTier, params.nodeId, itemId ?? undefined);
     const draft = { nodeId: params.nodeId, handleId: params.handleId, itemId, handleType: params.handleType, tier } satisfies ConnectionDraft;
     updateConnectionDraft(draft);
-    const universalLabel = params.handleId.startsWith("in:delivery:") ? `物资配送接口 ${universalPort! + 1}` : `微型黑洞接口 ${universalPort! + 1}`;
+    const universalLabel = params.handleId.startsWith("in:delivery:")
+      ? `物资配送接口 ${universalPort! + 1}`
+      : params.handleId.startsWith("in:orbital:")
+        ? `轨道货运接口 ${universalPort! + 1}`
+        : `微型黑洞接口 ${universalPort! + 1}`;
     setConnectionHint({
       label: `${itemId ? ITEMS[itemId].name : universalLabel} · Mk.${tier === 3 ? "III" : tier === 2 ? "II" : "I"} 已锁定 · 连接到${params.handleType === "source" ? "输入" : "输出"}端口`,
       tone: "ready",
@@ -6607,6 +6672,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       mobileNavigation.openWorkspace(id);
       return;
     }
+    if (id === "orbital-station") {
+      openOrbitalStation();
+      mobileNavigation.openWorkspace(id);
+      return;
+    }
     openCommandWorkspace(id);
     if (id === "technology") setCampaignFocusTechId(null);
     if (id === "statistics") setStatisticsFocusTab(null);
@@ -6791,6 +6861,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         route={mobileNavigation.route}
         overlay={mobileNavigation.overlay}
         hasConstructionCenter={game.entities.some((entity) => entity.buildingId === "construction_center")}
+        onOpenOrbitalStation={() => openMobileWorkspace("orbital-station")}
         tools={{
           mode: activeMobileCanvasMode,
           blueprintCount: game.blueprints.length,
@@ -7301,7 +7372,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           <button className={`canvas-minimap-toggle nodrag nopan${minimapCollapsed ? " canvas-minimap-toggle--collapsed" : ""}`} type="button" onClick={() => setMinimapCollapsed((collapsed) => !collapsed)} title={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-label={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-expanded={!minimapCollapsed}>
             {minimapCollapsed ? <MapIcon size={16} /> : <PanelRightClose size={16} />}
           </button>
-          <PlanetNavigator game={observedGame} onPlanetChange={onPlanetChange} />
+          {game.mode === "normal" ? <div className="canvas-global-navigation nodrag nopan">
+            <button
+              className={`orbital-station-entry${orbitalStationOpen ? " active" : ""}${game.orbitalStation.contractBoard.accepted.some((contract) => contract.status === "claimable") ? " claimable" : ""}`}
+              type="button"
+              aria-pressed={orbitalStationOpen}
+              aria-label={`${orbitalStationOpen ? "返回工厂画布" : "打开全星系空间站"}，${orbitalStationStatusLabel(game.orbitalStation.status)}`}
+              title={orbitalStationOpen ? "返回工厂画布" : `全星系空间站 · ${orbitalStationStatusLabel(game.orbitalStation.status)}`}
+              onClick={() => {
+                if (orbitalStationOpen) closeAllWorkspaces();
+                else openOrbitalStation();
+              }}
+            >
+              <i><Satellite size={18} /></i>
+              <span><strong>空间站</strong><small>{game.orbitalStation.contractBoard.accepted.some((contract) => contract.status === "claimable") ? "合同奖励待领取" : orbitalStationStatusLabel(game.orbitalStation.status)}</small></span>
+            </button>
+            <PlanetNavigator game={observedGame} onPlanetChange={onPlanetChange} />
+          </div> : <PlanetNavigator game={observedGame} onPlanetChange={onPlanetChange} />}
           <CanvasSelectionTools
             selectionMode={selectionMode}
             regionMode={regionMode}
@@ -7560,6 +7647,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onStationSlotWarperBudgetChange={(entityId, slotIndex, warperBudget) => commitGame((current) => setStationSlotWarperBudget(current, entityId, slotIndex, warperBudget))}
           onLogisticsItemChange={(entityId, itemId) => commitGame((current) => setLogisticsItem(current, entityId, itemId))}
           onMaterialDeliverySlotChange={updateMaterialDeliverySlot}
+          onPickEntityInput={onPickInput}
+          onOpenOrbitalStation={openOrbitalStation}
+          onOrbitalCargoPortClear={(entityId, portIndex) => void clearOrbitalCargoTerminalPort(entityId, portIndex)}
           onGalacticExporterPausedChange={(entityId, paused) => commitGame((current) => setGalacticMaterialExporterPaused(current, entityId, paused))}
           onBlackHolePausedChange={(entityId, paused, confirmActivation) => commitGame((current) => setBlackHolePaused(current, entityId, paused, confirmActivation))}
           onTimeWarpControllerChange={(entityId) => commitGame((current) => setTimeWarpController(current, entityId))}
@@ -7961,6 +8051,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onRequestMode={(entityId, mode) => commitGame((current) => requestStationOperationMode(current, entityId, mode))}
           onSetOutput={(entityId, portIndex, itemId) => commitGame((current) => setElevatorOutputItem(current, entityId, portIndex, itemId, 2))}
           onSetModuleCount={(systemId, module, count) => commitGame((current) => setSystemSpaceStationModuleCount(current, systemId, module, count))}
+        /> : null}
+        {orbitalStationOpen ? <OrbitalStationWorkspace
+          game={game}
+          mobile={compactLayout.isMobileShell}
+          mobileSubview={mobileNavigation.route.kind === "workspace" && mobileNavigation.route.id === "orbital-station" ? mobileNavigation.route.subview : undefined}
+          initialTab={orbitalStationInitialTab}
+          onOpenMobileSubview={nextMobileShell ? mobileNavigation.openWorkspaceSubview : undefined}
+          onMobileBack={nextMobileShell ? mobileNavigation.requestBack : undefined}
+          onGameChange={commitGame}
+          onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setOrbitalStationOpen(false)}
         /> : null}
         {dysonPlannerOpen ? (
           <DysonPlannerWorkspace

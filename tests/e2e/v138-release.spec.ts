@@ -48,7 +48,7 @@ test("save Worker returns a transferable verified sparse envelope", async ({ pag
   expect(result.slotWorker).toBe(true);
   expect(result.slotEnvelope).toEqual({ kind: "slot", slot: 2, mode: "normal" });
   expect(result.slotWriteSuccess).toBe(true);
-  expect(result.slotLoaded).toBe(46);
+  expect(result.slotLoaded).toBe(47);
   expect(result.snapshot).toMatchObject({ reason: "1.0.38 Worker 快照测试", integrity: "valid", valid: true });
 });
 

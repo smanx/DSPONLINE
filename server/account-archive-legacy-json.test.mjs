@@ -42,7 +42,7 @@ function legacyExport(overrides = {}) {
   const speedrunSlot = save("speedrun", "2", 5, "speedrun-slot");
   return {
     exportedAt: EXPORTED_AT,
-    schemaVersion: 7,
+    schemaVersion: 8,
     user: { id: ACCOUNT_ID, displayName: "Synthetic" },
     cloudSave: normalMain,
     cloudSaveHistory: [{ ...normalMain, payload: undefined }],
@@ -91,7 +91,7 @@ test("legacy JSON prepares duplicated normal aliases and explicit speedrun recor
 
   assert.equal(result.format, LEGACY_JSON_ACCOUNT_IMPORT_FORMAT);
   assert.equal(result.version, LEGACY_JSON_ACCOUNT_IMPORT_VERSION);
-  assert.deepEqual(result.source, { accountId: ACCOUNT_ID, exportedAt: EXPORTED_AT, schemaVersion: 7 });
+  assert.deepEqual(result.source, { accountId: ACCOUNT_ID, exportedAt: EXPORTED_AT, schemaVersion: 8 });
   assert.deepEqual(result.refs.map((entry) => `${entry.mode}:${entry.slot}:${entry.revision}`), [
     "normal:main:2", "normal:1:3", "speedrun:main:4", "speedrun:2:5",
   ]);

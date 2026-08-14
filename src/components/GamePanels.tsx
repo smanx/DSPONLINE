@@ -73,6 +73,7 @@ import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConst
 import { getPlanetDisplayName, getPlanetIndustrialProfile, getPlanetOrbitalYields, specializationApplies } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
+import { getOrbitalCargoPortItems } from "../game/stationCargoTerminal";
 import { getInterstellarStationUpgradeStatus } from "../game/systemSpaceStation";
 import type {
   BeltRouteMode,
@@ -379,6 +380,9 @@ interface InspectorPanelProps {
   onEjectorOrbitChange: (entityId: string, orbitId: string) => void;
   onLogisticsItemChange: (entityId: string, itemId: ItemId) => void;
   onMaterialDeliverySlotChange: (entityId: string, slotIndex: number, mode: MaterialDeliverySlotMode, itemId: ItemId | null) => void;
+  onPickEntityInput: (entityId: string, itemId: ItemId) => void;
+  onOpenOrbitalStation: (tab: "construction" | "contracts") => void;
+  onOrbitalCargoPortClear: (entityId: string, portIndex: 0 | 1 | 2 | 3) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
   onPowerGridChange: (entityId: string, gridId: PowerGridId) => void;
@@ -804,6 +808,9 @@ function EntityInspector({
   onEjectorOrbitChange,
   onLogisticsItemChange,
   onMaterialDeliverySlotChange,
+  onPickEntityInput,
+  onOpenOrbitalStation,
+  onOrbitalCargoPortClear,
   onFuelChange,
   onEnergyModeChange,
   onPowerGridChange,
@@ -851,6 +858,9 @@ function EntityInspector({
   onEjectorOrbitChange: (entityId: string, orbitId: string) => void;
   onLogisticsItemChange: (entityId: string, itemId: ItemId) => void;
   onMaterialDeliverySlotChange: (entityId: string, slotIndex: number, mode: MaterialDeliverySlotMode, itemId: ItemId | null) => void;
+  onPickEntityInput: (entityId: string, itemId: ItemId) => void;
+  onOpenOrbitalStation: (tab: "construction" | "contracts") => void;
+  onOrbitalCargoPortClear: (entityId: string, portIndex: 0 | 1 | 2 | 3) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
   onPowerGridChange: (entityId: string, gridId: PowerGridId) => void;
@@ -1353,6 +1363,43 @@ function EntityInspector({
   }
 
   if (entity.kind === "storage" || entity.kind === "splitter") {
+    if (entity.buildingId === "orbital_cargo_terminal") {
+      const ports = getOrbitalCargoPortItems(entity);
+      const binding = entity.orbitalCargoBinding;
+      const contract = binding?.kind === "contract"
+        ? game.orbitalStation.contractBoard.accepted.find((candidate) => candidate.id === binding.contractId)
+        : null;
+      const bindingLabel = binding?.kind === "construction"
+        ? "当前空间站建设阶段"
+        : contract ? contract.title : "未绑定";
+      return (
+        <div className="inspector-content orbital-cargo-inspector">
+          <div className="inspector-identity"><i className="building-mark"><Satellite size={18} /></i><div><span>全星系空间站上传</span><strong>{building.name}</strong></div></div>
+          <section className="delivery-hub-slots" aria-label="轨道货运终端接口">
+            {ports.map((itemId, index) => {
+              const cached = itemId ? Math.max(0, Math.floor(entity.inputs[itemId] ?? 0)) : 0;
+              const cargoCompatible = !game.cargo || game.cargo.itemId === itemId && game.cargo.amount < 100;
+              return <article className={`${itemId ? "configured" : ""} delivery-hub-slot`} key={index}>
+              <header><strong>上传口 {index + 1}</strong><small>{itemId ? ITEMS[itemId].name : "等待线路自动识别"}</small></header>
+              <div className="station-slot-primary"><span className="station-slot-input">缓存 <strong>{itemId ? formatQuantityCompact(cached) : "-"}</strong></span><span className="station-slot-stock">线路 <strong>{game.belts.filter((belt) => belt.target === entity.id && belt.targetPortIndex === index).length}</strong></span></div>
+              {itemId ? <div className="orbital-cargo-port-actions"><button type="button" disabled={cached < 1 || !cargoCompatible} onClick={() => onPickEntityInput(entity.id, itemId)} title={!cargoCompatible ? "请先放下光标中携带的其他物资" : `取回最多 100 件${ITEMS[itemId].name}`}><PackageOpen size={13} />取回缓存</button><button type="button" onClick={() => onOrbitalCargoPortClear(entity.id, index as 0 | 1 | 2 | 3)} title="安全返还缓存和传送带后释放该接口"><RotateCcw size={13} />清空接口</button></div> : null}
+            </article>;
+            })}
+          </section>
+          <dl className="metric-ledger">
+            <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
+            <div><dt>绑定目标</dt><dd>{bindingLabel}</dd></div>
+            <div><dt>最近上传</dt><dd>{entity.productionRate.toFixed(1)}/min</dd></div>
+            <div><dt>累计上传</dt><dd>{formatQuantityCompact(entity.orbitalCargoTotalUploaded ?? "0")}</dd></div>
+            <div><dt>额定耗电</dt><dd><PowerValue valueKw={(building.powerDemandKw ?? 0) * entity.machineCount} /></dd></div>
+          </dl>
+          <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
+          <button className="construction-center-open" type="button" onClick={() => onOpenOrbitalStation(binding?.kind === "contract" ? "contracts" : "construction")}><Satellite size={15} />{binding?.kind === "contract" ? "打开对应空间站合同" : "打开空间站货运管理"}</button>
+          <p className="inspector-description">绑定目标请在全星系空间站工作区管理。解除或切换绑定不会清空这里的缓存；可从接口取回物资，拆除时剩余缓存会保护性返还到本行星托盘。</p>
+          <EntityManagementActions game={game} entity={entity} onSetTarget={onSetTarget} onRemove={onRemove} />
+        </div>
+      );
+    }
     if (entity.buildingId === "material_delivery_hub") {
       const deliveryItems = getMaterialDeliveryItems(entity);
       const deliverySlots = getMaterialDeliverySlots(entity);
@@ -1687,7 +1734,9 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
     const itemNames = [...recipe.inputs, ...recipe.outputs].map((entry) => getItem(entry.itemId).name).join(" ");
     return `${recipe.name} ${itemNames} ${getBuilding(recipe.buildingId).name}`.toLocaleLowerCase("zh-CN").includes(term);
   }), [term]);
-  const constructionDefinitions = useMemo(() => CONSTRUCTION.filter((definition) => !term || `${definition.name} ${definition.costs.map((cost) => getItem(cost.itemId).name).join(" ")}`.toLocaleLowerCase("zh-CN").includes(term)), [term]);
+  const constructionDefinitions = useMemo(() => CONSTRUCTION.filter((definition) =>
+    (definition.buildingId !== "orbital_cargo_terminal" || game.mode === "normal" && game.orbitalStation.status !== "locked") &&
+    (!term || `${definition.name} ${definition.costs.map((cost) => getItem(cost.itemId).name).join(" ")}`.toLocaleLowerCase("zh-CN").includes(term))), [game.mode, game.orbitalStation.status, term]);
   const handcraftOutputItemIds = useMemo(() => new Set(Object.values(RECIPES).filter((recipe) => isHandcraftableRecipe(recipe.id)).flatMap((recipe) => recipe.outputs.map((output) => output.itemId))), []);
   const constructionPlans = useMemo(() => new Map(constructionDefinitions.map((definition) => [
     definition.buildingId,
@@ -1973,7 +2022,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           {props.selectedEntity.interactionLocked ? <div className="inspector-lock-banner"><LockKeyhole size={16} /><span><strong>建筑已锁定</strong><small>模拟与物流继续运行，修改操作已禁用</small></span><button type="button" onClick={() => props.onEntityLockChange(props.selectedEntity!.id, false)}><Unlock size={16} />解锁</button></div> : null}
           <InspectorLayoutControls preference={layoutPreference} onChange={updateLayoutPreference} />
           <fieldset className="inspector-lockable" disabled={props.selectedEntity.interactionLocked}>
-          <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onEjectorOrbitChange={props.onEjectorOrbitChange} onLogisticsItemChange={props.onLogisticsItemChange} onMaterialDeliverySlotChange={props.onMaterialDeliverySlotChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetTarget={props.onStationFleetTarget} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onRemoveSprayCoater={props.onRemoveSprayCoater} onOpenResourceSettings={props.onOpenResourceSettings} onProliferatorConfiguration={props.onProliferatorConfiguration} onSetTarget={props.onEntityStackTarget} onUpgrade={props.onUpgradeEntity} onUpgradeInterstellarStation={props.onUpgradeInterstellarStation} onQuantumAttachment={props.onQuantumAttachment} onOrbitalCollectorQuantumMode={props.onOrbitalCollectorQuantumMode} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} onBlackHolePausedChange={props.onBlackHolePausedChange} onTimeWarpControllerChange={props.onTimeWarpControllerChange} onTimeWarpEnabledChange={props.onTimeWarpEnabledChange} onTimeWarpRequestedMultiplierChange={props.onTimeWarpRequestedMultiplierChange} onOpenTutorial={props.onOpenTutorial} galacticActivityStatus={props.galacticActivityStatus} />
+          <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onEjectorOrbitChange={props.onEjectorOrbitChange} onLogisticsItemChange={props.onLogisticsItemChange} onMaterialDeliverySlotChange={props.onMaterialDeliverySlotChange} onPickEntityInput={props.onPickEntityInput} onOpenOrbitalStation={props.onOpenOrbitalStation} onOrbitalCargoPortClear={props.onOrbitalCargoPortClear} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetTarget={props.onStationFleetTarget} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onRemoveSprayCoater={props.onRemoveSprayCoater} onOpenResourceSettings={props.onOpenResourceSettings} onProliferatorConfiguration={props.onProliferatorConfiguration} onSetTarget={props.onEntityStackTarget} onUpgrade={props.onUpgradeEntity} onUpgradeInterstellarStation={props.onUpgradeInterstellarStation} onQuantumAttachment={props.onQuantumAttachment} onOrbitalCollectorQuantumMode={props.onOrbitalCollectorQuantumMode} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} onBlackHolePausedChange={props.onBlackHolePausedChange} onTimeWarpControllerChange={props.onTimeWarpControllerChange} onTimeWarpEnabledChange={props.onTimeWarpEnabledChange} onTimeWarpRequestedMultiplierChange={props.onTimeWarpRequestedMultiplierChange} onOpenTutorial={props.onOpenTutorial} galacticActivityStatus={props.galacticActivityStatus} />
           </fieldset>
         </div>
       ) : props.selectedBelt ? (
@@ -2004,6 +2053,7 @@ export const CONSTRUCTION_BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
   "conveyor_belt_mk3",
   "storage_mk1",
   "material_delivery_hub",
+  "orbital_cargo_terminal",
   "splitter_4way",
   "storage_tank",
   "oil_extractor",
@@ -2039,6 +2089,7 @@ export function constructionBuildIcon(id: BuildingId | ConveyorBeltId) {
   if (id === "matrix_lab") return <FlaskConical size={18} />;
   if (id === "storage_mk1") return <Database size={18} />;
   if (id === "material_delivery_hub") return <PackageOpen size={18} />;
+  if (id === "orbital_cargo_terminal") return <Satellite size={18} />;
   if (id === "storage_tank" || id === "oil_extractor" || id === "water_pump") return <Droplets size={18} />;
   if (id === "fractionator") return <Droplets size={18} />;
   if (id === "splitter_4way") return <GitFork size={18} />;
@@ -2100,7 +2151,7 @@ function loadCompactConstruction(): boolean {
 const CONSTRUCTION_CATEGORY_IDS: Record<Exclude<ConstructionCategory, "all" | "recent">, Set<BuildingId | ConveyorBeltId>> = {
   power: new Set(["wind_turbine", "solar_panel", "geothermal_power_station", "thermal_power_plant", "mini_fusion_power_plant", "artificial_star", "accumulator", "energy_exchanger"]),
   production: new Set(["mining_machine", "arc_smelter", "plane_smelter", "assembling_machine_mk1", "assembling_machine_mk2", "assembling_machine_mk3", "matrix_lab", "oil_extractor", "oil_refinery", "water_pump", "chemical_plant", "quantum_chemical_plant", "fractionator", "miniature_particle_collider", "construction_center"]),
-  logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "space_station_construction_launcher", "orbital_collector"]),
+  logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "orbital_cargo_terminal", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "space_station_construction_launcher", "orbital_collector"]),
   dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver", "galactic_material_exporter", "micro_black_hole_connector", "time_warp_device"]),
 };
 
@@ -2112,13 +2163,14 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
   const [discardMode, setDiscardMode] = useState(false);
   const horizontalPan = useHorizontalPan<HTMLDivElement>();
   const unlockedBuildOrder = useMemo(() => CONSTRUCTION_BUILD_ORDER.filter((id) => {
+    if (id === "orbital_cargo_terminal" && (game.mode !== "normal" || game.orbitalStation.status === "locked")) return false;
     if ((game.construction[id] ?? 0) > 0) return true;
     if (isConveyorBeltId(id) && game.belts.some((belt) => belt.tier === getBeltTier(id))) return true;
     if (id === "mining_machine" && game.entities.some((entity) => entity.minerCount > 0)) return true;
     if (!isConveyorBeltId(id) && game.entities.some((entity) => entity.buildingId === id)) return true;
     const requiredTechId = getConstructionDefinition(id)?.requiredTechId;
     return !requiredTechId || isTechnologyCompleted(game, requiredTechId);
-  }), [game.construction, game.belts, game.entities, game.research.completedTechIds]);
+  }), [game.construction, game.belts, game.entities, game.mode, game.orbitalStation.status, game.research.completedTechIds]);
   const visibleBuildOrder = useMemo(() => category === "all"
     ? unlockedBuildOrder
     : category === "recent"

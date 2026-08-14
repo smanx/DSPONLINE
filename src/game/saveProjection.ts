@@ -5,7 +5,7 @@ import { omitSaveContractDefaults } from "./saveFieldContract";
 import type { BeltConnection, BlueprintDefinition, FactoryEntity, GameState, ItemId } from "./types";
 
 /**
- * Pure, Worker-safe projection of runtime state into the v46 persistent JSON
+ * Pure, Worker-safe projection of runtime state into the v47 persistent JSON
  * shape. This module must never construct or import a Worker.
  */
 export function projectPersistentSaveState(state: GameState, contentPackRegistry: ContentPackRegistry): GameState {
@@ -23,6 +23,17 @@ export function projectPersistentSaveState(state: GameState, contentPackRegistry
     if (entity.buildingId === "micro_black_hole_connector" && state.version >= 46) {
       if (typeof entity.blackHolePaused !== "boolean" || typeof entity.blackHoleActivationConfirmed !== "boolean") {
         throw new TypeError("A current micro black hole must have explicit pause and activation-confirmation state before saving");
+      }
+    }
+    if (entity.buildingId === "orbital_cargo_terminal" && state.version >= 47) {
+      const binding = entity.orbitalCargoBinding;
+      const validBinding = binding === null || binding === undefined || binding.kind === "construction" ||
+        binding.kind === "contract" && typeof binding.contractId === "string" && binding.contractId.length > 0 && binding.contractId.length <= 180;
+      if (state.mode !== "normal" || entity.machineCount !== 1 || !Array.isArray(entity.orbitalCargoPortItems) ||
+        entity.orbitalCargoPortItems.length !== 4 || !validBinding || !Number.isFinite(entity.orbitalCargoProgress) ||
+        (entity.orbitalCargoProgress ?? -1) < 0 || (entity.orbitalCargoProgress ?? 1) >= 1 ||
+        typeof entity.orbitalCargoTotalUploaded !== "string" || !/^(0|[1-9][0-9]{0,255})$/.test(entity.orbitalCargoTotalUploaded)) {
+        throw new TypeError("A current orbital cargo terminal must have one machine, four stable ports, and valid upload state before saving");
       }
     }
     // Older clients briefly wrote quantumTarget to every entity. It remains a

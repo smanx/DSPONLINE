@@ -90,6 +90,8 @@ export const API_SERVER_RELEASE_FILES = Object.freeze([
   "server/save-field-contract.test.mjs",
   "server/server.test.mjs",
   "server/security-governance.integration.test.mjs",
+  "server/station-profile.mjs",
+  "server/station-profile.test.mjs",
   "server/speedrun-recovery.mjs",
   "server/speedrun-recovery.test.mjs",
   "server/speedrun.test.mjs",

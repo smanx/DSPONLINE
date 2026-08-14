@@ -44,6 +44,7 @@ export interface LeaderboardEntry extends LeaderboardSubmission {
   isLocal: boolean;
   submitted: boolean;
   verified: boolean;
+  stationPublicId?: string;
 }
 
 export interface LeaderboardSnapshot {

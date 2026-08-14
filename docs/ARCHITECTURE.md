@@ -1,5 +1,7 @@
 # 系统架构
 
+> **全星系空间站扩展是隔离开发态，不是发布基线。** 分支 `codex/space-station-expansion` 使用 `GameState v47 / envelope v2 / cloud schema v8 / SQLite layout v3`；当前生产与并行 1.0.43 工作仍应按各自文档判断。正式合并前必须重新编号任何已被占用的版本，并完成 Web、Windows、Android 前向读取桥接。
+
 > **1.0.42 开发基线（2026-08-14）**：香港已发布的 1.0.41 P0 热修源码 `2e43f564…` 是本版运行时父级。在线云正文回收继续使用定向 orphan cleanup；微型黑洞两个显式布尔字段继续强制持久化。本版在该基线上增加大本地存档同 writer 续租、可验证冲突恢复、未提交时间扭曲预算恢复、增产剂 1 亿上限和无限矿物速通标签。GameState v46、envelope v2、云 schema v7、SQLite layout v2 和 IndexedDB records 结构均不升级。
 
 > **1.0.41 香港 P0 热修（已发布）**：云存档自动删除从同步全库 GC 改为事务内定向 orphan cleanup；启动时只审计 `cloud_save_payloads` 每行的 SQLite 类型和最多 161 字符 alias 投影，以实际 alias 维护逻辑行索引和 checksum 引用计数。损坏 alias 或非 TEXT 动态类型令索引不完整，在线回收一律保留候选；显式离线维护 GC 仍全量解析 alias、解析正文并核对大小/SHA-256。固定 `32daa4f` 未复现微型黑洞运行意图丢失，Web 侧仅在稀疏投影后强制保留两个显式布尔字段并拒绝保存缺失字段的当前态。完整生产状态见 [1.0.41 发布记录](./releases/1.0.41.md)。
@@ -7,6 +9,18 @@
 > **当前发布基线（2026-08-14）**：香港 Web/API 使用 `1.0.41+2e43f5644241`，上海使用原始 1.0.41；两端均为 GameState v46、envelope v2、cloud schema v7、SQLite layout v2。有效资产的 v43 空间站实验存档不迁入量子共享池，传统物流站升级入口仍作为兼容域命令保留；普通与速通存档按模式隔离。
 
 > **1.0.38 正式基线（2026-08-11）**：保存/云上传/离线/纯挂机采用 Worker 权威序列化与可转移缓冲区，传送带、生产、电力和量子物流复用稳定运行时批次，持久存档使用兼容的稀疏 v46 JSON；1.0.37 的资源目录修复、离线决策、科技树和星图批量入口继续全量保留。正式构建继续使用 `GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`，没有数据库或排行榜迁移；两地直接代码回滚为完整 1.0.37。
+
+## 全星系空间站扩展边界（隔离开发）
+
+- 新玩法只写 `GameState.orbitalStation`，不会读取、迁移或清空历史 `systemSpaceStations`、`galacticHubNetwork` 或银河出口记录。速通模式得到规范空状态且没有入口。
+- 三阶段成本快照、合同板、徽记/声望、装饰收藏、布局、档案和独立视口属于全局空间站；四个输入口、绑定、缓存、分配游标和累计上传属于各行星 `orbital_cargo_terminal` 实体。
+- 货运终端复用权威模拟域和 `SimulationLookupContext.orbitalCargoTerminals` 索引；没有终端的旧档不会在每步扫描实体。批量、逐秒、低电和稀疏端口使用同一整数公平游标。
+- 每日合同属于墙钟域，按 `Asia/Shanghai` 单调任务日、银河种子、槽位和规则版本派生；模拟倍率、暂停和时间扭曲不推进任务日。匿名公共状态中的服务端时间只允许向前校准。
+- `/station/:publicId` 在启动层被分流到独立只读页面，不初始化本地存档。服务端只从普通主云档重建 `station-showcase-v1` 白名单快照，客户端不能提交自制快照。
+- SQLite layout v3 将 `station_profiles`、`station_favorites`、`station_signals`、`station_moderation` 与 `app_state`、云存档正文分离；v2→v3 迁移不重写云 payload/blob 行。
+- 公开主页可见性与 `leaderboardVisible` 独立。收藏、通讯信号和访问不进入 GameState、模拟哈希、奖励或排行榜公式。
+
+完整模块所有权、迁移与合并门禁见 [空间站开发交接](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md)。
 
 ## 1. 总体拓扑
 

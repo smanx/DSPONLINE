@@ -24,6 +24,7 @@ import {
   RotateCcw,
   Send,
   Save,
+  Satellite,
   ShieldCheck,
   Trophy,
   Trash2,
@@ -824,7 +825,7 @@ export function GalaxyWorkspace({
                     <div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.isLocal ? "当前账户" : leaderboardStatus === "ready" ? "真实玩家" : "本地模拟样本"}</small></span></div>
                     <span className="galaxy-rank-footprint"><strong>{entry.metrics.exploredSystems} 星系 · {entry.metrics.colonizedPlanets} 行星</strong><small>峰值发电 <PowerValue valueKw={entry.metrics.peakGenerationKw} /></small></span>
                     <strong className="galaxy-rank-value" title={`${formatQuantityExact(Math.floor(entry.value))}${snapshot.category.unit ? ` ${snapshot.category.unit}` : category === "dyson" ? " kW" : ""}`}>{formatLeaderboardValue(entry.value, category)}<small>{snapshot.category.unit}</small></strong>
-                    <span className={`galaxy-rank-status${entry.isLocal && !entry.submitted ? " galaxy-rank-status--preview" : ""}`}>{entry.verified ? <ShieldCheck size={13} /> : <Activity size={13} />}{leaderboardStatus === "ready" ? "主云存档计算" : entry.accountId.startsWith("npc_") ? "模拟基准" : "本地记录"}</span>
+                    <span className="galaxy-rank-actions"><span className={`galaxy-rank-status${entry.isLocal && !entry.submitted ? " galaxy-rank-status--preview" : ""}`}>{entry.verified ? <ShieldCheck size={13} /> : <Activity size={13} />}{leaderboardStatus === "ready" ? "主云存档计算" : entry.accountId.startsWith("npc_") ? "模拟基准" : "本地记录"}</span>{entry.stationPublicId ? <a href={`/station/${entry.stationPublicId}`} target="_blank" rel="noreferrer" title={`访问${entry.displayName}的空间站`}><Satellite size={13} />访问空间站</a> : null}</span>
                   </article>
                 ))}
               </div>

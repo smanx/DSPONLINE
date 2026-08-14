@@ -53,6 +53,7 @@ function cloneBlueprint(blueprint: BlueprintDefinition): BlueprintDefinition {
       offset: { ...entity.offset },
       elevatorOutputItems: entity.elevatorOutputItems ? [...entity.elevatorOutputItems] : undefined,
       stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
+      orbitalCargoPortItems: entity.orbitalCargoPortItems ? [...entity.orbitalCargoPortItems] : undefined,
     })),
     resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
     belts: blueprint.belts.map((belt) => ({ ...belt })),
@@ -146,6 +147,10 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     issues.push(`设备 ${index + 1} 的 machineCount=${String(value.machineCount)} 超出允许范围 1～${MAX_BUILDING_STACK_COUNT}`);
     return null;
   }
+  if (value.buildingId === "orbital_cargo_terminal" && value.machineCount !== 1) {
+    issues.push(`设备 ${index + 1} 的轨道货运终端不能堆叠`);
+    return null;
+  }
   if (value.recipeId !== undefined && (typeof value.recipeId !== "string" || !(value.recipeId in RECIPES))) {
     issues.push(`设备 ${index + 1} 引用了当前目录中不存在的配方 ${String(value.recipeId)}`);
     return null;
@@ -177,6 +182,13 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
       return typeof item === "string" && item in ITEMS ? item as ItemId : null;
     })
     : undefined;
+  const rawOrbitalCargoPortItems = Array.isArray(value.orbitalCargoPortItems) ? value.orbitalCargoPortItems : null;
+  const orbitalCargoPortItems = value.buildingId === "orbital_cargo_terminal" && rawOrbitalCargoPortItems && rawOrbitalCargoPortItems.length <= 4
+    ? Array.from({ length: 4 }, (_, portIndex) => {
+      const item = rawOrbitalCargoPortItems[portIndex];
+      return typeof item === "string" && item in ITEMS ? item as ItemId : null;
+    })
+    : value.buildingId === "orbital_cargo_terminal" ? [null, null, null, null] : undefined;
   return {
     key: value.key,
     buildingId: value.buildingId as BlueprintEntityTemplate["buildingId"],
@@ -189,6 +201,7 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     ...(value.buildingId === "interstellar_logistics_station" && typeof value.quantumTarget === "boolean" ? { quantumTarget: value.quantumTarget } : {}),
     ...(value.buildingId === "micro_black_hole_connector" && typeof value.operationEnabledOnDeploy === "boolean" ? { operationEnabledOnDeploy: value.operationEnabledOnDeploy } : {}),
     ...(elevatorOutputItems ? { elevatorOutputItems } : {}),
+    ...(orbitalCargoPortItems ? { orbitalCargoPortItems } : {}),
     ...(value.distributionMode === "balanced" || value.distributionMode === "priority" ? { distributionMode: value.distributionMode } : {}),
     ...(typeof value.fuelItemId === "string" && value.fuelItemId in ITEMS ? { fuelItemId: value.fuelItemId as ItemId } : {}),
     ...(value.energyMode === "auto" || value.energyMode === "charge" || value.energyMode === "discharge" ? { energyMode: value.energyMode } : {}),
@@ -233,7 +246,7 @@ function parseBelt(value: unknown, index: number, entityKeys: Set<string>, issue
     ...(typeof value.monitorEnabled === "boolean" ? { monitorEnabled: value.monitorEnabled } : {}),
     ...(value.routeMode === "bezier" || value.routeMode === "auto" || value.routeMode === "upper" || value.routeMode === "lower" || value.routeMode === "manual" ? { routeMode: value.routeMode } : {}),
     ...(validNumber(value.routeOffsetY, -10_000, 10_000) ? { routeOffsetY: Math.round(value.routeOffsetY) } : {}),
-    ...(value.targetPortIndex !== undefined && [0, 1, 2].includes(Number(value.targetPortIndex))
+    ...(value.targetPortIndex !== undefined && [0, 1, 2, 3].includes(Number(value.targetPortIndex))
       ? { targetPortIndex: Number(value.targetPortIndex) as BlueprintBeltTemplate["targetPortIndex"] }
       : {}),
     ...(value.elevatorOutputIndex !== undefined && [0, 1, 2, 3, 4].includes(Number(value.elevatorOutputIndex))

@@ -249,7 +249,7 @@ describe("shared save-field contract", () => {
     });
     expect(getSaveFieldDefinition("belt", "lanes")).toMatchObject({
       default: { kind: "literal", value: 1 },
-      missing: { defaultVersions: [46], requiredFromVersion: 38 },
+      missing: { defaultVersions: [46, 47], requiredFromVersion: 38 },
     });
   });
 

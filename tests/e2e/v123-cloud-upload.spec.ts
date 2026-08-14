@@ -38,7 +38,7 @@ test("cloud upload preparation keeps a large save off the main thread", async ({
   expect(result.rawBytes).toBeGreaterThan(1_000_000);
   expect(result.payloadBytes).toBeGreaterThan(1_000_000);
   expect(result.summary.integrity).toBe("valid");
-  expect(result.summary.stateVersion).toBe(46);
+  expect(result.summary.stateVersion).toBe(47);
   expect(result.summary.entityCount).toBeGreaterThan(0);
   expect(result.maxLongTaskMs).toBeLessThan(200);
   console.info("cloud-upload-large-save-metrics", JSON.stringify(result));

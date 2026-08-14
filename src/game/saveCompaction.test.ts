@@ -9,7 +9,7 @@ import { inspectSave, migrateGame, serializeEnvelope } from "./storage";
 
 const environment = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } }).process?.env;
 
-describe("v46 sparse save projection", () => {
+describe("v47 sparse save projection", () => {
   it("consumes the shared contract for every projected entity and belt default", () => {
     const state = createInitialState(1, false);
     const station = structuredClone(state.entities[0]);
@@ -200,7 +200,7 @@ describe("v46 sparse save projection", () => {
       expect(persistedBelt).not.toHaveProperty(key);
     }
     const inspection = inspectSave(raw);
-    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(inspection.state!.entities.find((entity) => entity.id === primary.id)).toMatchObject({
       inputs: { iron_ore: 42 }, outputs: { iron_ore: 7 }, progress: 0.5, powerFactor: 0.8, productionRate: 12,
     });
@@ -250,7 +250,7 @@ describe("v46 sparse save projection", () => {
       expect(Object.prototype.hasOwnProperty.call(projected, "blackHoleActivationConfirmed")).toBe(true);
     }
     const loaded = inspectSave(raw);
-    expect(loaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(loaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(loaded.state!.entities.find((entity) => entity.id === "black-hole-running")).toMatchObject({
       blackHolePaused: false,
       blackHoleActivationConfirmed: true,
@@ -318,7 +318,7 @@ describe("v46 sparse save projection", () => {
       belts: state!.belts.length,
     };
     console.log(`V138_SAVE_COMPACTION ${JSON.stringify(report)}`);
-    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(compactBytes).toBeLessThan(sourceBytes);
   }, 120_000);
 });

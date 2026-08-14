@@ -11,7 +11,8 @@ export type MobileWorkspaceId =
   | "campaign"
   | "operations"
   | "galaxy"
-  | "construction-center";
+  | "construction-center"
+  | "orbital-station";
 
 export type MobileSheetId = "build" | "inventory" | "inspector" | "planet" | "tools";
 export type MobileSheetSnap = "peek" | "half" | "full";

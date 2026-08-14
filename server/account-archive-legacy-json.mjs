@@ -6,6 +6,7 @@ import { normalizeCloudQuotaPolicy } from "./cloud-quota.mjs";
 
 const SAVE_MODES = ["normal", "speedrun"];
 const SAVE_SLOTS = ["main", "1", "2", "3"];
+const SUPPORTED_LEGACY_JSON_SCHEMA_VERSIONS = new Set([7, 8]);
 const MANUAL_SLOTS = SAVE_SLOTS.slice(1);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const LEGACY_JSON_FORMAT = "dspidle-legacy-json-account-import";
@@ -74,7 +75,7 @@ function validateSource(value, expectedAccountId) {
     fail("ACCOUNT_ARCHIVE_LEGACY_JSON_INVALID", "旧版 JSON 账号导出根节点无效");
   }
   const exportedAt = safeInteger(value.exportedAt, 0, Number.MAX_SAFE_INTEGER, "旧版导出时间");
-  if (value.schemaVersion !== 7) {
+  if (!SUPPORTED_LEGACY_JSON_SCHEMA_VERSIONS.has(value.schemaVersion)) {
     fail("ACCOUNT_ARCHIVE_LEGACY_JSON_SCHEMA_UNSUPPORTED", "旧版 JSON 云 schema 版本不受支持");
   }
   if (!value.user || typeof value.user !== "object" || Array.isArray(value.user) ||

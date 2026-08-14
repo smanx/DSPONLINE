@@ -426,8 +426,8 @@ test("authorizes the Android WebView origin and rejects unknown origins", async 
 test("registers by username, requires a main cloud save for ranking and verifies a bound email", async () => {
   const health = await request("/api/health");
   assert.equal(health.body.mailProvider, "custom");
-  assert.equal(health.body.schemaVersion, 7);
-  assert.equal(health.body.storageLayoutVersion, 2);
+  assert.equal(health.body.schemaVersion, 8);
+  assert.equal(health.body.storageLayoutVersion, 3);
   const registered = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ username: "Pilot_One", password: "strong-pass-123", displayName: "测试工程师" }) });
   assert.equal(registered.response.status, 201);
   assert.ok(registered.body.token);
@@ -485,7 +485,7 @@ test("opens cloud saves and verified leaderboard submissions without a mail prov
     };
     const health = await isolatedRequest("/api/health");
     assert.equal(health.body.mailProvider, "disabled");
-    assert.equal(health.body.schemaVersion, 7);
+    assert.equal(health.body.schemaVersion, 8);
     const registered = await isolatedRequest("/api/auth/register", {
       method: "POST",
       headers: { "x-forwarded-for": "spoofed-a, 203.0.113.42" },
@@ -1220,7 +1220,7 @@ test("protects detailed metrics and aggregates privacy-safe visits and events", 
   assert.equal(JSON.stringify(server.store.data.analytics).includes(sessionId), false);
 });
 
-test("migrates schema v3 data to v7 without losing accounts, saves or players", async () => {
+test("migrates schema v3 data to v8 without losing accounts, saves or players", async () => {
   const migrationDirectory = await mkdtemp(path.join(tmpdir(), "dsp-schema-v3-"));
   const dataFile = path.join(migrationDirectory, "cloud.json");
   const playerHash = "a".repeat(64);
@@ -1243,7 +1243,7 @@ test("migrates schema v3 data to v7 without losing accounts, saves or players", 
   try {
     migrationServer = await createCloudServer({ dataFile, databaseFile: "", adminToken, logger: { error() {} } });
     await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
-    assert.equal(migrationServer.store.data.schemaVersion, 7);
+    assert.equal(migrationServer.store.data.schemaVersion, 8);
     assert.equal(migrationServer.store.data.users.user_legacy.email, "legacy@example.com");
     assert.match(migrationServer.store.data.users.user_legacy.username, /^pilot_[a-f0-9]{12}$/);
     assert.equal(migrationServer.store.data.users.user_legacy.emailVerifiedAt, 1);
@@ -1268,7 +1268,7 @@ test("migrates schema v3 data to v7 without losing accounts, saves or players", 
 
     migrationServer = await createCloudServer({ dataFile, databaseFile: "", adminToken, logger: { error() {} } });
     await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
-    assert.equal(migrationServer.store.data.schemaVersion, 7);
+    assert.equal(migrationServer.store.data.schemaVersion, 8);
     assert.equal(migrationServer.store.data.users.user_legacy.username, migratedUsername);
     assert.equal(migrationServer.store.data.cloudSaveHistory.user_legacy.length, 1);
   } finally {
@@ -1309,7 +1309,7 @@ test("splits legacy SQLite cloud payloads from app metadata without losing revis
   try {
     migrationServer = await createCloudServer({ databaseFile, logger: { error() {} } });
     await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
-    assert.equal(migrationServer.store.data.storageLayoutVersion, 2);
+    assert.equal(migrationServer.store.data.storageLayoutVersion, 3);
     assert.equal(migrationServer.store.data.cloudSaves.user_legacy.payload, undefined);
     assert.equal(migrationServer.store.data.cloudSaves.user_legacy.summary.stateVersion, 24);
     assert.equal(migrationServer.store.readCloudSavePayload("user_legacy", "main", 1), largePayload);
@@ -1820,7 +1820,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp and accepts Android v35 through current v46 saves", async () => {
+test("validates v34 time warp and accepts Android v35 through v46 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],

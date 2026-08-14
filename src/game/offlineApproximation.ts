@@ -594,6 +594,7 @@ export function getOfflineApproximationBlocker(state: GameState, seconds: number
   const dynamicBuildings = new Set([
     "orbital_collector", "ray_receiver", "artificial_star", "em_rail_ejector", "vertical_launching_silo",
     "construction_center", "galactic_material_exporter", "micro_black_hole_connector", "space_station_construction_launcher",
+    "orbital_cargo_terminal",
     "thermal_power_plant", "mini_fusion_power_plant", "energy_exchanger", "accumulator",
   ]);
   if (state.entities.some((entity) => entity.buildingId && dynamicBuildings.has(entity.buildingId))) return "存在戴森、物流或巨构边界";

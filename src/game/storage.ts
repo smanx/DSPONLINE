@@ -39,6 +39,9 @@ import { normalizeHubInteger, SYSTEM_HUB_MAX_DIGITS } from "./systemHubLogistics
 import { createEmptyQuantumLogisticsNetworkState, normalizeQuantumInteger, normalizeQuantumLogisticsNetworkState, QUANTUM_MAX_INTEGER_DIGITS } from "./quantumLogisticsNetwork";
 import { evaluateSpeedrunMilestones, normalizeSpeedrunState } from "./speedrun";
 import { normalizeIdleSettlementState } from "./idleSettlement";
+import { normalizeOrbitalStationState } from "./orbitalStation";
+import { getOrbitalCargoPortItems } from "./stationCargoTerminal";
+import { addStationInteger } from "./stationMath";
 import { getMissingContentPackRequirements, loadContentPackRegistry, type ContentPackRegistry } from "./contentPacks";
 import { projectPersistentSaveState } from "./saveProjection";
 import {
@@ -56,7 +59,7 @@ import {
   type LocalSaveStorageEstimate,
 } from "./localSaveStore";
 import { LocalSaveConflictError, LocalSaveReadOnlyError } from "./localSaveCoordination";
-import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SaveMode, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
+import type { ActivityMaterialId, BeltConnection, BeltInputPortIndex, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SaveMode, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
 import type { OfflineApproximationReport } from "./offlineApproximation";
 import type { OfflineComplexityReport } from "./offlineComplexityTypes";
 import type { OfflineSettlementFailureKind } from "./offlineSettlementStrategy";
@@ -1022,7 +1025,7 @@ function normalizeGalacticHubNetwork(saved: Record<string, any>): GalacticHubNet
 export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegistry = loadContentPackRegistry()): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   // v43 was an unpublished space-station/elevator experiment. Never merge
   // its station inventory or fleet into the quantum pool. A v43 envelope that
   // actually contains those fields is rejected; a clean v43 fixture can still
@@ -1045,7 +1048,8 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     : DEFAULT_GALAXY_SEED;
   const initial = createInitialState(savedSeed, saved.version < 20);
   const galaxy = normalizeGalaxyState(saved.version >= 20 ? saved.galaxy : { seed: initial.galaxy.seed }, saved.version < 20);
-  const entities = saved.entities.map((entity: FactoryEntity) => {
+  const entities = saved.entities.filter((entity: FactoryEntity) =>
+    entity?.buildingId !== "orbital_cargo_terminal" || saved.version >= 47 && saved.mode !== "speedrun").map((entity: FactoryEntity) => {
     // `quantumTarget` was briefly written to every building by an older
     // client. Keep it only for interstellar stations; ordinary buildings
     // must not carry the extension back into the next cloud save.
@@ -1069,9 +1073,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     const accumulator = entity.buildingId === "accumulator";
     const energyExchanger = entity.buildingId === "energy_exchanger";
     const materialDeliveryHub = entity.buildingId === "material_delivery_hub";
+    const orbitalCargoTerminal = entity.buildingId === "orbital_cargo_terminal";
     const deliverySlots = materialDeliveryHub ? normalizeMaterialDeliverySlots(entity, saved.version) : undefined;
     const blackHoleConnector = entity.buildingId === "micro_black_hole_connector";
-    const machineCount = persistedNonNegativeInteger(entity.machineCount, `实体 ${entity.id ?? "未知"}.machineCount`);
+    const machineCount = orbitalCargoTerminal ? 1 : persistedNonNegativeInteger(entity.machineCount, `实体 ${entity.id ?? "未知"}.machineCount`);
     const minerCount = persistedNonNegativeInteger(entity.minerCount, `实体 ${entity.id ?? "未知"}.minerCount`);
     const storedEnergyCapacity = accumulator || energyExchanger
       ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * machineCount
@@ -1134,6 +1139,25 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         ? [...new Set(deliverySlots!.flatMap((slot) => slot.itemId ? [slot.itemId] : []))]
         : undefined,
       deliverySlots,
+      orbitalCargoPortItems: orbitalCargoTerminal && saved.version >= 47
+        ? Array.from({ length: 4 }, (_, index) => {
+          const itemId = entity.orbitalCargoPortItems?.[index];
+          return itemId && itemId in ITEMS ? itemId : null;
+        })
+        : undefined,
+      orbitalCargoBinding: orbitalCargoTerminal && saved.version >= 47
+        ? entity.orbitalCargoBinding?.kind === "construction"
+          ? { kind: "construction" as const }
+          : entity.orbitalCargoBinding?.kind === "contract" && typeof entity.orbitalCargoBinding.contractId === "string" && entity.orbitalCargoBinding.contractId.length <= 180
+            ? { kind: "contract" as const, contractId: entity.orbitalCargoBinding.contractId }
+            : null
+        : undefined,
+      orbitalCargoProgress: orbitalCargoTerminal && saved.version >= 47 && typeof entity.orbitalCargoProgress === "number" && Number.isFinite(entity.orbitalCargoProgress)
+        ? Math.max(0, Math.min(0.999999999, entity.orbitalCargoProgress))
+        : orbitalCargoTerminal ? 0 : undefined,
+      orbitalCargoTotalUploaded: orbitalCargoTerminal && saved.version >= 47
+        ? normalizeDecimalIntegerString(entity.orbitalCargoTotalUploaded, "0", 256)
+        : orbitalCargoTerminal ? "0" : undefined,
       stationMode: entity.kind === "station" ? orbitalCollector ? "supply" : entity.stationMode ?? "supply" : entity.stationMode,
       stationTier: interstellarStation ? saved.version >= 43 && entity.stationTier === 2 ? 2 : 1 : undefined,
       stationOperationMode: interstellarStation && saved.version >= 43 && entity.stationTier === 2 && entity.stationOperationMode === "elevator" ? "elevator" : interstellarStation ? "legacy" : undefined,
@@ -1229,6 +1253,34 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     };
   }) as FactoryEntity[];
 
+  const terminalByPlanet = new Map<PlanetId, FactoryEntity>();
+  let duplicateTerminalRefunds = 0;
+  for (let index = entities.length - 1; index >= 0; index -= 1) {
+    const entity = entities[index];
+    if (entity.buildingId !== "orbital_cargo_terminal") continue;
+    const retained = terminalByPlanet.get(entity.planetId);
+    if (!retained) {
+      terminalByPlanet.set(entity.planetId, entity);
+      continue;
+    }
+    for (const [itemId, amount] of Object.entries(entity.inputs) as Array<[ItemId, number]>) {
+      retained.inputs[itemId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(retained.inputs[itemId] ?? 0) + Math.floor(amount ?? 0));
+    }
+    for (const [itemId, amount] of Object.entries(entity.outputs) as Array<[ItemId, number]>) {
+      retained.outputs[itemId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(retained.outputs[itemId] ?? 0) + Math.floor(amount ?? 0));
+    }
+    const retainedPorts = getOrbitalCargoPortItems(retained);
+    for (const itemId of getOrbitalCargoPortItems(entity)) {
+      if (!itemId || retainedPorts.includes(itemId)) continue;
+      const emptyPort = retainedPorts.indexOf(null);
+      if (emptyPort >= 0) retainedPorts[emptyPort] = itemId;
+    }
+    retained.orbitalCargoPortItems = retainedPorts;
+    retained.orbitalCargoTotalUploaded = addStationInteger(retained.orbitalCargoTotalUploaded, entity.orbitalCargoTotalUploaded);
+    duplicateTerminalRefunds += 1;
+    entities.splice(index, 1);
+  }
+
   for (const resource of initial.entities.filter((entity) => entity.kind === "vein")) {
     // A v20+ save already owns an immutable galaxy resource catalogue. Rebuilding
     // the baseline with the same seed can legitimately produce a different
@@ -1250,6 +1302,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     const amount = saved.construction?.[buildingId];
     return [buildingId, Math.max(0, Math.floor(typeof amount === "number" ? amount : 0))];
   })) as GameState["construction"];
+  construction.orbital_cargo_terminal = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    (construction.orbital_cargo_terminal ?? 0) + duplicateTerminalRefunds,
+  );
   if (saved.version < 31) {
     const legacySorterRefunds = [
       ["sorter_mk1", "conveyor_belt_mk1"],
@@ -1290,12 +1346,15 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       totalTransferred: nonNegativeInteger(belt.totalTransferred),
       congestion: Math.min(1, nonNegativeNumber(belt.congestion)),
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
-      targetPortIndex: saved.version >= 34 &&
-        (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2) &&
-        (entities.find((entity) => entity.id === belt.target)?.buildingId === "micro_black_hole_connector" ||
-          saved.version >= 39 && entities.find((entity) => entity.id === belt.target)?.buildingId === "material_delivery_hub")
-        ? belt.targetPortIndex
-        : undefined,
+      targetPortIndex: (() => {
+        const targetBuildingId = entities.find((entity) => entity.id === belt.target)?.buildingId;
+        const port = belt.targetPortIndex;
+        if (!Number.isInteger(port) || port < 0 || port > 3) return undefined;
+        if (targetBuildingId === "orbital_cargo_terminal" && saved.version >= 47) return port as BeltInputPortIndex;
+        if ((targetBuildingId === "micro_black_hole_connector" && saved.version >= 34 ||
+          targetBuildingId === "material_delivery_hub" && saved.version >= 39) && port <= 2) return port as BeltInputPortIndex;
+        return undefined;
+      })(),
     } as BeltConnection;
   }) : [];
   for (const belt of migratedBelts) {
@@ -1317,6 +1376,23 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     target.deliverySlots = slots;
     target.deliveryItemIds = [...new Set(slots.flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
   }
+  for (const belt of migratedBelts) {
+    const target = entities.find((entity) => entity.id === belt.target && entity.buildingId === "orbital_cargo_terminal");
+    if (!target) continue;
+    const ports = getOrbitalCargoPortItems(target);
+    const requested = belt.targetPortIndex;
+    let resolved = requested !== undefined && (!ports[requested] || ports[requested] === belt.itemId)
+      ? requested
+      : ports.findIndex((itemId) => itemId === belt.itemId);
+    if (resolved < 0) resolved = ports.findIndex((itemId) => itemId === null);
+    if (resolved < 0 || resolved > 3) {
+      belt.targetPortIndex = undefined;
+      continue;
+    }
+    belt.targetPortIndex = resolved as BeltInputPortIndex;
+    if (!ports[resolved]) ports[resolved] = belt.itemId;
+    target.orbitalCargoPortItems = ports;
+  }
   const occupiedBlackHolePorts = new Set<string>();
   const belts = migratedBelts.filter((belt) => {
     const source = entities.find((entity) => entity.id === belt.source);
@@ -1331,6 +1407,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       if (belt.targetPortIndex === undefined) return false;
       const slot = target.deliverySlots?.[belt.targetPortIndex];
       return Boolean(slot && slot.mode !== "disabled" && slot.itemId === belt.itemId);
+    }
+    if (target.buildingId === "orbital_cargo_terminal") {
+      if (belt.targetPortIndex === undefined) return false;
+      return target.orbitalCargoPortItems?.[belt.targetPortIndex] === belt.itemId;
     }
     if (target.buildingId !== "micro_black_hole_connector") return belt.targetPortIndex === undefined;
     if (belt.targetPortIndex === undefined) return false;
@@ -1557,7 +1637,9 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             x: typeof entity.offset?.x === "number" && Number.isFinite(entity.offset.x) ? entity.offset.x : 0,
             y: typeof entity.offset?.y === "number" && Number.isFinite(entity.offset.y) ? entity.offset.y : 0,
           },
-          machineCount: persistedPositiveInteger(entity.machineCount, `蓝图 ${blueprint.name ?? blueprintIndex + 1} 设备 ${entity.key ?? entityIndex + 1}.machineCount`),
+          machineCount: entity.buildingId === "orbital_cargo_terminal"
+            ? 1
+            : persistedPositiveInteger(entity.machineCount, `蓝图 ${blueprint.name ?? blueprintIndex + 1} 设备 ${entity.key ?? entityIndex + 1}.machineCount`),
           recipeId,
           targetDysonOrbitId: entity.buildingId === "em_rail_ejector" && saved.version >= 41 &&
             typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0 && entity.targetDysonOrbitId.length <= 160
@@ -1583,6 +1665,12 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             ? [...new Set(deliverySlots!.flatMap((slot) => slot.itemId ? [slot.itemId] : []))]
             : undefined,
           deliverySlots,
+          orbitalCargoPortItems: entity.buildingId === "orbital_cargo_terminal" && saved.version >= 47
+            ? Array.from({ length: 4 }, (_, index) => {
+              const itemId = entity.orbitalCargoPortItems?.[index];
+              return typeof itemId === "string" && itemId in ITEMS ? itemId as ItemId : null;
+            })
+            : undefined,
           distributionMode: entity.distributionMode === "priority" ? "priority" as const : entity.distributionMode === "balanced" ? "balanced" as const : undefined,
           fuelItemId,
           energyMode: validEnergyMode(entity.energyMode) ? entity.energyMode : undefined,
@@ -1642,9 +1730,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         if (!keys.has(belt.sourceKey) || !keys.has(belt.targetKey) || typeof belt.itemId !== "string" || !(belt.itemId in ITEMS)) return [];
         const tier = validBeltTier(belt.tier) ? belt.tier : 1;
         const targetTemplate = blueprintEntities.find((entity) => entity.key === belt.targetKey);
-        const targetPortIndex = (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2) &&
-          (targetTemplate?.buildingId === "micro_black_hole_connector" || targetTemplate?.buildingId === "material_delivery_hub")
-          ? belt.targetPortIndex as 0 | 1 | 2
+        const targetPortIndex = (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2 || belt.targetPortIndex === 3) &&
+          (targetTemplate?.buildingId === "orbital_cargo_terminal" && saved.version >= 47 ||
+            belt.targetPortIndex <= 2 && (targetTemplate?.buildingId === "micro_black_hole_connector" || targetTemplate?.buildingId === "material_delivery_hub"))
+          ? belt.targetPortIndex as BeltInputPortIndex
           : undefined;
         const elevatorOutputIndex = (belt.elevatorOutputIndex === 0 || belt.elevatorOutputIndex === 1 || belt.elevatorOutputIndex === 2 || belt.elevatorOutputIndex === 3 || belt.elevatorOutputIndex === 4) &&
           blueprintEntities.some((entity) => entity.key === belt.sourceKey && entity.buildingId === "interstellar_logistics_station" && entity.stationTier === 2)
@@ -2164,6 +2253,22 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   // Missing mode values are never promoted to ranked play. Legacy saves stay
   // readable, but only an explicit speedrun marker can preserve that mode.
   const mode: SaveMode = saved.mode === "speedrun" ? "speedrun" : "normal";
+  const totalProduced = integerRecord(saved.totalProduced);
+  const orbitalStation = normalizeOrbitalStationState(saved.version >= 47 ? saved.orbitalStation : undefined, {
+    mode,
+    universeMatrixProduced: totalProduced.universe_matrix ?? 0,
+  });
+  orbitalStation.layout.featuredAchievementIds = orbitalStation.layout.featuredAchievementIds.filter((achievementId) =>
+    unlockedAchievementIds.includes(achievementId));
+  const acceptedContractIds = new Set(orbitalStation.contractBoard.accepted.map((contract) => contract.id));
+  for (const entity of entities) {
+    if (entity.buildingId !== "orbital_cargo_terminal" || !entity.orbitalCargoBinding) continue;
+    if (entity.orbitalCargoBinding.kind === "construction") {
+      if (!["eligible", "core-building", "dock-building", "showcase-building"].includes(orbitalStation.status)) entity.orbitalCargoBinding = null;
+    } else if (!acceptedContractIds.has(entity.orbitalCargoBinding.contractId)) {
+      entity.orbitalCargoBinding = null;
+    }
+  }
   const idleSettlement = normalizeIdleSettlementState(saved.idleSettlement);
   const speedrun = mode === "speedrun"
     ? normalizeSpeedrunState(saved.speedrun)
@@ -2180,7 +2285,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   const migrated = {
     ...initial,
     ...saved,
-    version: 46,
+    version: 47,
     mode,
     activePlanetId,
     entities,
@@ -2192,7 +2297,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     construction,
     constructionAutomation,
     portableFleet,
-    totalProduced: integerRecord(saved.totalProduced),
+    totalProduced,
     research: {
       selectedTechId,
       pausedTechId,
@@ -2241,6 +2346,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     systemSpaceStations,
     galacticHubNetwork,
     quantumLogisticsNetwork,
+    orbitalStation,
     timeWarp,
     endgame,
   } as GameState;

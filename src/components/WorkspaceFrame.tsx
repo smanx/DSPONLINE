@@ -34,6 +34,9 @@ export const WorkspaceFrame = forwardRef<HTMLElement, WorkspaceFrameProps>(funct
       ...(shell ? Array.from(shell.querySelectorAll<HTMLElement>(
         ":scope > .game-header, :scope > .mobile-next-topbar, :scope > .mobile-next-bottom-nav",
       )) : []),
+      ...(shell && surface.classList.contains("orbital-station-workspace")
+        ? Array.from(shell.querySelectorAll<HTMLElement>(".canvas-global-navigation"))
+        : []),
       ...Array.from(surface.ownerDocument.querySelectorAll<HTMLElement>("[data-workspace-portal='true']")),
     ];
   }, []);
