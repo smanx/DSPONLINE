@@ -15,7 +15,7 @@
 
 硬边界：上海节点必须继续由上海本机提供前端与 `/api`，不得改成香港反代或域名跳转。上海为 HTTP，前端必须继续拒绝云账号密码传输。
 
-> 当前生产状态（2026-08-14）：香港、上海 Web/API 均运行 `1.0.42-c24e6247d257`，构建 ID 为 `1.0.42+c24e6247d257`；上海下载页和 Android/Windows stable 均为 `1.0.42`。发布代理控制目录含 `d885a9e…` 只读 stale keep-alive 热修，writer 请求不重试。两地数据库继续独立使用 schema v7 / SQLite layout v2；回滚只切代码和静态制品，不恢复数据库。香港 `/canary/previous/` 继续 302 到不可变 `/canary/1.0.37-853ecdb12795/`。完整备份、切换、原生、下载、代理和观察证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
+> 当前生产状态（2026-08-15）：香港 Web generation 13 current 为 `web-1.0.43-fceca3eda51c`、Build ID `1.0.43+fceca3eda51c`，直接 previous 为 `web-1.0.42-c24e6247d257`；香港 API、上海 Web/API、上海下载页和 Android/Windows stable 均保持 1.0.42。发布代理继续 forward 到 `api-1.0.42-c24e6247d257`，活动 API `NRestarts=0`，pending switch 为空。两地数据库继续独立使用 schema v7 / SQLite layout v2；本次 Web-only 发布没有 API/数据库/上海/下载/原生写入。香港 `/canary/previous/` 继续 302 到不可变 `/canary/1.0.37-853ecdb12795/`。完整 1.0.43 切换、两次安全回滚、真实附件与观察证据见 [releases/1.0.43.md](./releases/1.0.43.md)；1.0.42 双节点/原生/下载历史见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
 > 1.0.39 API 优先 P0 已发布，1.0.38 Web/Android/Windows 无需清缓存或重装即可恢复上传。Release Agent 已分别创建并验证两节点快照，用各自备份副本合成验证 v46 稀疏普通/速通 main 与手动槽、原始正文/校验/revision、历史恢复、服务重启、v45 稠密兼容与非法值拒绝；普通/速通复核阈值独立、隐藏状态和永久冻结由完整远端服务测试与香港隔离副本覆盖。本版没有 schema/layout migration；回滚只切回 1.0.38 代码并重启，绝不恢复生产数据库。
 
@@ -38,7 +38,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港、上海 Web/API 已切换到 `1.0.42-c24e6247d257`，上海下载站为不可变目录 `download-site-1.0.42-c24e6247d257`；Web/API 构建为 `1.0.42+c24e6247d257` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港 Web-only 稳定入口 `/canary/previous/` 按用户要求继续指向 `web-1.0.37-853ecdb12795`。Android 1.0.42 APK SHA-256 为 `7a2450b21b23619004ed6b665f1ebe5067b5b158f0f53ce09bf1d8bb14864b95`；Windows setup SHA-256 为 `c837b5b3ca4aa6f6715349e7bdbfae162d71206976936e52f6b24e5bb8fcbe2d`，Authenticode `NotSigned`。1.0.42 香港发布前备份为 3,284,348,928 字节、上海为 393,216 字节，均为 `0600` 并通过 `quick_check`、schema v7/layout v2。公网健康、下载 9/9、Range、缓存、桌面/手机浏览器和 1.0.37 回退 PWA 隔离均已复验。两地 API `NRestarts=0`；发布收口磁盘约为香港 74%、上海 75%。完整证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
+香港 Web 已切换到 `web-1.0.43-fceca3eda51c`；香港 API 与上海 Web/API 保持 `1.0.42-c24e6247d257`，上海下载站保持不可变 `download-site-1.0.42-c24e6247d257`。两地继续使用 GameState v46、云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名，公开 `/canary/previous/` 仍指向 `web-1.0.37-853ecdb12795`。Android 1.0.42 APK、Windows 1.0.42 setup、签名状态及下载哈希均未改变。香港 Web 直接回滚目标为 `web-1.0.42-c24e6247d257`；生产收口磁盘香港约 74%，API PID/restarts 与 proxy generation 保持不变。完整 1.0.43 Web 证据见 [releases/1.0.43.md](./releases/1.0.43.md)，1.0.42 API/上海/原生/下载证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
@@ -206,6 +206,14 @@ sudo dsp-idle-switch-release --rollback-last \
 ```
 
 `--rollback-last` 走同一备份证据、预热、单写锁、readiness、排队和优雅关闭流程，只回滚代码，绝不恢复、替换或初始化数据库。重复执行同一目标为 no-op，`switch.lock` 阻止两个切换器并行。测试故障注入只有显式设置 `DSP_ENABLE_RELEASE_FAULT_INJECTION=1` 才能启用，生产禁止设置。
+
+#### 1.0.43 香港 Web-only 当前回滚状态
+
+1.0.43 的生产收口状态精确为 generation 13：current Web `web-1.0.43-fceca3eda51c`、previous Web `web-1.0.42-c24e6247d257`、current/previous API 均为 `api-1.0.42-c24e6247d257`、pending switch 不存在、proxy 保持 forward，活动 API PID 与 `NRestarts=0` 未变。只有只读检查仍精确满足这一状态时，`--rollback-last` 才指向 1.0.42；generation 或 current/previous 漂移时必须停手重新审计，不能凭本文盲目回滚。
+
+若需回滚，继续使用发布时已验证的 backup evidence，并要求切换后得到下一 generation、current Web 1.0.42、previous Web 1.0.43、API 仍为 1.0.42、pending 为空；随后逐字验证 `/version.json` 的 1.0.42 Build ID、根页、`sw.js`、hashed asset、health/ready、proxy、Nginx 和 API PID/restarts。回滚不恢复数据库，不删除 1.0.43 不可变目录，不触碰上海、下载页、原生包、账号或玩家存档。
+
+本次 generation 9→10 与 generation 11→12 都是受保护的安全前进/回滚对：第一次由物理绑定出口的单次 TLS 前超时触发，后续 server-local、正常公网、Chrome 与同尺寸 1.0.42 control 证明制品无误；第二次由探针错误要求 `application/manifest+json` 触发，而 1.0.42/1.0.43 实际继承的精确响应均为 413 B、固定 SHA-256、`no-cache`、`application/octet-stream`。第三次只有在把该继承字节/MIME 与 Chrome `Page.getAppManifest` 无错误作为精确契约后才完成 generation 13。未来 MIME 修复必须作为独立 Nginx 变更执行活动配置备份、候选 `nginx -t`、原子安装、正式 `nginx -t`/reload 和回滚；不得把现网响应误记为 `application/manifest+json`。
 
 固定顺序为：验证备份证据 → 候选在备份克隆和 4390 端口达到 health/ready → `drain` 并等待在途写归零 → `hold` 并等待全部请求归零 → 停旧实例 → 验证单写锁空闲 → 启动新实例并等待 readiness → 发布软链与代理 generation。启动、readiness、Nginx reload 或 SQLite 锁失败时恢复旧 unit/upstream 和软链。代理队列默认 512，保护窗口和 Nginx API `proxy_read_timeout` 均为 300 秒；systemd `TimeoutStopSec` 为 90 秒。超过有界窗口时返回明确 503 与 `Retry-After`，不会无限占用内存。
 

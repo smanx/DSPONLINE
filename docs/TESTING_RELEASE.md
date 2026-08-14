@@ -1,10 +1,10 @@
 # 测试与发布基线
 
-> `1.0.43` 超大存档热修候选仍**未部署**：`35ab5746baf3`（直接父级/权威 1.0.42 生产基线 `e905eaf2c985`）已通过 typecheck、production build/startup budget、完整 Vitest 141 文件通过/6 跳过、1,238/18、0 失败；storage/mode/preview/coordination/store/large-save/release-note/tutorial 聚焦为 133/133；Chromium 新增返回保存专项 2/2。只读真实附件 36,704,109 bytes 的 `inspectSave` 为 437 ms（门禁 <5,000 ms），源 SHA-256 `cd2356ea…a81b1` 不变；v136 exact/gameplay hash `4215dbfa / 96f7e0b2` 不变。该构建正常产出独立 save-inspection Worker，无 worker-entry 循环。完整 Chromium 前两轮分别找到 latest 公告锁定 v1.0.42，以及 `v142-ui-review` 旧 locator/`v32-buffer-settings` DEV localStorage mirror 竞态；权威 IndexedDB 重载验证同时揭示存档迁移曾把 UI 允许的增产剂 1 亿上限截为 10 万。`6c2df9686031`（直接父级 `2b29b64d86fb`）统一使用 gameplay 上下界，并把 E2E 改为 IndexedDB backend/cache 逐字一致、revision +1、backup 等于旧 primary、manual 后 mirror 为空、pagehide mirror 正向生成及 reload 后清理/无冲突/UI 保留的契约。修复后相关 Vitest 129/129、typecheck 和两条失败用例联合 Chromium 2/2 通过。Release Agent 在同一 runtime/test tree 的 clean `2ecd5ad1a64d` 上完成完整 Chromium：364 总项、356 通过、8 项显式环境门禁跳过、0 失败，耗时 1,039.2 秒。本次 final tip 仅新增 provenance/门禁文档；仍必须 clean build、production-preview PWA 与 version smoke，且不得复用旧构建/失败候选。未执行 SSH、生产写入、切流、下载页更新、正式签名或真实设备发布门禁。
+> `1.0.43` 超大存档热修已完成香港 Web-only 稳定发布：最终 clean source `fceca3eda51cf7e488e176e23c6119ba104b77fd`，runtime/test tree `6c2df9686031fa1db68b1d862f33364cbbae95a6`，Build ID `1.0.43+fceca3eda51c`。完整 Vitest 为 1,238/18、同 runtime/test tree 完整 Chromium 为 356/8、0 失败；final-tip clean build 为 1,929 modules，production-preview PWA 3/3，Web 归档 122/122。只读真实附件 36,704,109 bytes 的初次检查 437 ms，本机/生产 UI 旅程验证导入预览、确认进入、manual revision/backup、受控返回和重载正确性；源 bytes/SHA 前后不变。香港 generation 13 current 为 `web-1.0.43-fceca3eda51c`，previous 为 1.0.42；API、数据库、上海、原生、下载页和玩家生产数据均未修改。注意：受控 Continue→Pause 仍耗时 20,887 ms，Long Task 峰值 20,291 ms，运行态近乎不可玩的反馈未由 1.0.43 解决，已升级为 1.0.44 P0。
 
 > `1.0.42` 已基于香港最终 1.0.41 热修固定为 `c24e6247d2572e54e30e173d3e16bfd85829b92f / 1.0.42+c24e6247d257`。最终门禁：Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，均 0 失败；root/server production audit 0，125 个运行时许可证。production build 为 1,928 模块、startup 185,929 B gzip、menu 281,809 B、forbidden 0。API 162 文件临时 SQLite 启动、Android unsigned bundle/assemble/lint/zipalign、Windows PE/ASAR/48 MiB/4 进程隔离启动均通过。source 214/214、candidate 10/10、provenance 3/3。旧 `8056d2cb…` 候选只作历史诊断且不得发布。
 
-> **当前正式发布基线（2026-08-14）**：香港、上海 Web/API 和上海下载 stable 均为 `1.0.42+c24e6247d257`。两节点远端 server 各 356/2、Linux ops 各 59/2；正式 Android APK 使用批准长期证书并在 API 36.1 模拟器完成 1.0.38→1.0.42 覆盖，Windows setup 继续 `NotSigned`。观察期代理热修提交 `d885a9e…` 后，本地 ops 为 56/6，Linux Node 20/22 聚焦各 4/4；只读 stale socket 可重试一次，writer 不重试。生产事实见 [1.0.42 发布记录](./releases/1.0.42.md)。
+> **当前正式发布基线（2026-08-15）**：香港 Web 为 `1.0.43+fceca3eda51c`；香港 API、上海 Web/API、上海下载 stable、Android/Windows stable 均保持 1.0.42。香港 generation 13 直接 Web 回滚目标为 `web-1.0.42-c24e6247d257`，API PID 与 `NRestarts=0` 保持，pending switch 为空；正式事实见 [1.0.43 发布记录](./releases/1.0.43.md)。1.0.42 的双节点/API/原生/下载基线继续见 [1.0.42 发布记录](./releases/1.0.42.md)。
 
 > `DSPIDLE-1041-HK-GC-HOTFIX` + `DSPIDLE-1041-BLACK-HOLE-STATE` 开发候选（2026-08-14）：根 `npm ci` 安装 456 包并报告 1 moderate/4 high 的全依赖审计项，server `npm ci` 安装 75 包且 0 漏洞；随后根/server `npm audit --omit=dev` 均为 0。typecheck、125 个运行时包许可证和 production build 通过，构建 1925 模块且 startup/menu 预算通过。Vitest 为 136 文件通过/6 文件跳过、1209/18；server 为 355/2；ops 为 55/6（6 条 Linux 专属）；完整 Chromium E2E 为 334/9（343 总项、909.7 秒）；全部 0 失败、0 超时。native clean 首轮因未生成 `android/app/src/main/assets/capacitor.plugins.json` 得到 22 通过/1 跳过/1 失败，先 build 再 `cap sync android` 后复跑为 23/1、0 失败；Android/Windows 不发布。所有服务端写测试使用合成账号与临时 SQLite，没有生产访问。
 
@@ -47,13 +47,13 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | `1.0.42`：1,231 项通过、18 项条件跳过、0 失败 | 引擎暂停边界、递归制造守恒、Worker/稀疏存档与导入边界、单极磁石扩容、科研宏观账本、离线决策、纯挂机幂等与守恒、模式存档隔离、v1-v46 存档、传送带/物流索引 oracle 和云同步等 |
-| 浏览器 E2E | `npm run test:e2e` | `1.0.42`：Chromium 353/9、Firefox/WebKit 2/2、0 失败 | 大档租约/冲突、时间扭曲恢复、增产剂上限、速通资源标签及完整既有回归 |
+| 单元/领域 | `npm test` | `1.0.43` runtime：1,238 项通过、18 项条件跳过、0 失败；第二轮返修相关 129/129 | 引擎暂停边界、递归制造守恒、Worker/稀疏存档与导入边界、O(E+B) 迁移、manual/return revision、增产剂重载、模式存档隔离、v1-v46 存档和云同步等 |
+| 浏览器 E2E | `npm run test:e2e` | `1.0.43` 同 runtime/test tree：Chromium 356/8、0 失败；production-preview PWA 3/3 | 大档租约/冲突、Worker 导入、revision/backup、当前/历史公告、PWA/version 和完整既有回归 |
 | 云服务 | `npm run test:server` | `1.0.42`：356 项通过、2 项可选夹具跳过；两节点远端结果相同 | 云槽、schema/layout、原子写入、大正文、排行榜和恢复保护 |
 | 运维工具 | `npm run test:ops` | 候选 55/6；代理热修后 56/6；两节点 Linux 各 59/2 | SQLite 一致性快照、异地恢复、Nginx、节点探针、发布备份证据、稳定交接代理、单写锁和切换故障回滚 |
 | 原生配置与发布工具 | `npm run test:native` | 24/24 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝、显式发布基址、桌面包内元数据和静态下载页清单门禁 |
 | 第三方许可证 | `npm run licenses:check` | 125 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
-| 生产构建 | `npm run build` | clean runtime `1.0.42+c24e6247d257` 构建通过 | `tsc -b`、Vite chunk、普通离线/宏观 Worker 和 PWA 资源；生产多 Worker 入口硬关闭 |
+| 生产构建 | `npm run build` | clean source `fceca3e`：1,929 modules，startup gzip 185,923 B，Build ID `1.0.43+fceca3eda51c`，无 `.dirty` | `tsc -b`、Vite chunk、独立 save-inspection Worker、普通离线/宏观 Worker 和 PWA 资源 |
 | Windows setup | `npm run desktop:dist` | 1.0.42 setup；FileVersion/ProductVersion 1.0.42；隔离启动 4 个进程；`NotSigned` | Electron 启动、包内 Build ID、正式 API/更新地址和稳定清单 |
 | Android release | `npm run android:release` | 1.0.42 / 1000042；APK v2/v3、zipalign、批准证书和正式 URL 通过 | applicationId、versionCode、SDK、签名连续性、模拟器升级和稳定清单 |
 
@@ -1237,3 +1237,20 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 - 可选真实夹具必须只读，断言精确 bytes/SHA-256 前后不变，并设置有意义的 <5,000 ms 检查门禁；附件不得进入 Git、制品或写入测试。
 
 主菜单 `savePreview` 的完整 `JSON.parse` 语义在 1.0.43 保持不变。手写 partial scanner 无法安全复制重复 key、嵌套同名字段、截断正文和 fallback 顺序，因此可信 IndexedDB summary index/Worker projection 作为 1.0.44 独立设计，不混入本热修。
+
+正式发布门禁结果：
+
+| 门禁 | 最终结果 |
+| --- | --- |
+| Source / build | clean `fceca3eda51cf7e488e176e23c6119ba104b77fd`；Build ID `1.0.43+fceca3eda51c`；1,929 modules；startup gzip 185,923 B；forbidden startup modules 0 |
+| 不可变制品 | source/Web 归档及 manifest/SHA256SUMS 独立复算；Web 122/122，client 744 B 直接引用 256,220 B inspection Worker；旧 a47 候选保持作废 |
+| 完整浏览器 | clean `2ecd5ad1a64d` 的相同 runtime/test tree：364 total，356 passed / 8 explicit env-gated skipped / 0 failed，1,039.2 s；final tip 的 docs-only 差异已独立证明 |
+| production preview | PWA/version/current-v143/history-v142 3/3；compiled preview 黑盒精确核对 Build ID、manifest 与 client→worker；一次错误选择 DEV-only `/src` 内省用例的失败作为 harness-incompatible 诊断保留 |
+| 香港切换 | generation 9→10 与 11→12 两次均由 guard 安全回滚；第三次 generation 13 成功，current 1.0.43 / previous 1.0.42，API 1.0.42、PID/restarts、proxy 与 pending 状态不变 |
+| 公网与 PWA | normal public 36/36、Chrome worker h2+gzip 3/3、physical candidate/control 12/12、live PWA 3/3；最终三轮 root/version/SW/manifest/worker/health/ready 全部 HTTP 200 且哈希/Build ID 精确 |
+| 正式附件 UI | import→preview 1,379 ms；confirm→canvas 5,185.4 ms；manual save 2,809.2 ms；return 2,859.7 ms；reload 858.3 ms；revision 0→1→2→3、backup 链逐字正确、mirror/conflict 为空；源文件前后逐字不变 |
+| 隐私/零写 | 临时 profile、无 trace/截图/附件副本；cookies/cloud auth 为空；所有预期 API 由严格本地 shim 校验并返回，unknown API/write 0；独立 Nginx 证据为 12 次 GET 200、`/api` 0、non-GET 0 |
+
+正式附件还暴露出本热修范围外的运行态 P0：受控 Continue→Pause 为 20,887 ms，Long Task 峰值 20,291 ms。1.0.43 只证明迁移/初次进入、保存和返回持久化链正确且显著有界，不能据此宣称主动模拟可玩性已恢复；1.0.44 必须以 P0 继续优化。
+
+香港 `manifest.webmanifest` 仍继承 1.0.42 的精确响应契约：HTTP 200、413 B、SHA-256 `fc70a386379d0a32eb71fc17a0694d40ad3b1a5ac9b0b61e81a4aa16da0536bf`、`Cache-Control: no-cache`、`Content-Type: application/octet-stream`。Chrome `Page.getAppManifest` 无错误且 PWA ready/controller/offline/update 通过；这不是 `application/manifest+json`，须作为独立 Nginx 技术债修正，不能改写本次既有生产事实。完整证据与回滚状态见 [1.0.43 正式发布记录](./releases/1.0.43.md)。

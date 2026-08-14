@@ -1,12 +1,14 @@
 # DSP极简网络项目现状
 
-> **1.0.43 超大存档热修候选（2026-08-14，未部署）**：开发分支 `codex/1.0.43-large-save-hotfix-dev` 以 `e905eaf2c985`（已包含 `d885a9e1e887` 运维热修与 1.0.42 正式生产记录）为权威生产基线/祖先，原始超大存档运行时 `35ab5746baf3` 的直接父级才是 `e905eaf2c985`。在不升级 GameState v46、envelope v2、cloud schema v7、SQLite layout v2 或 IndexedDB records 结构的前提下，把线路迁移从最坏数十亿次重复比较改为保持原顺序的 O(E+B) 索引/分区；文件导入与工厂内云恢复改由 Worker 完整检查；立即保存不再先同步后异步双写，受控返回主页仅在已提交 source 仍覆盖卸载状态时跳过 cleanup。36,704,109-byte 玩家附件只读检查为 437 ms，27,153 实体/48,917 线路，SHA-256 `cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1` 前后不变；v136 差分 exact/gameplay hash `4215dbfa / 96f7e0b2` 不变。`35ab5746baf3` 运行时已通过 production build/startup budget、完整 Vitest 1,238/18 和专项 Chromium 2/2；没有 SSH、生产写入、部署或下载页变更。完整 Chromium 前两轮分别发现 latest 公告锁定 1.0.42，以及 `v142-ui-review` 旧 locator/`v32-buffer-settings` DEV localStorage mirror 竞态，旧 `1.0.43-a47eb33d0b84` 外部候选已作废且不得复用。`6c2df9686031`（直接父级 `2b29b64d86fb`）将用例改为 v143 当前四项和 IndexedDB 权威 revision/backup/逐字读回/重载契约，并修复了增产剂缓存上限重载时误截到 10 万的真实问题，现与 UI/模拟边界统一为 1 亿。修复后相关 Vitest 129/129、typecheck 和两条失败用例联合 Chromium 2/2 通过；Release Agent 在同一 runtime/test tree 的 clean `2ecd5ad1a64d` 上完成完整 Chromium 364 项：356 通过、8 项显式环境门禁跳过、0 失败，耗时 1,039.2 秒。本次 final tip 仅在 `2ecd5ad` 之上更正文档 provenance，必须重做 clean build/Build ID/PWA/version smoke，不得把旧构建或失败候选记为通过。主菜单冷启动摘要仍使用原生 `JSON.parse`，可信写时摘要索引延后到 1.0.44。
+> **1.0.43 香港 Web 稳定热修（2026-08-14，已发布）**：香港 Web current 已原子切换到不可变 `web-1.0.43-fceca3eda51c` / Build ID `1.0.43+fceca3eda51c`，previous 为 `web-1.0.42-c24e6247d257`；香港 API 保持 `api-1.0.42-c24e6247d257`，上海 Web/API、上海下载页、Android/Windows stable 均保持 1.0.42。运行时/测试树 `6c2df9686031` 在不升级 GameState v46、envelope v2、cloud schema v7、SQLite layout v2 或 IndexedDB records 的前提下，将 v46 线路迁移降为保持原顺序的 O(E+B) 索引/分区，使用 Worker 完整检查导入/云恢复，并修复立即保存重复持久化、受控返回 cleanup 和增产剂 1 亿上限重载截断。最终源码/制品为 clean `fceca3eda51cf7e488e176e23c6119ba104b77fd`；旧 `1.0.43-a47eb33d0b84` 永久作废。两次受保护切换分别因物理绑定探针 TLS 超时和继承 manifest MIME 的错误预期安全回滚到 1.0.42；第三次 generation 13 切换、真实附件导入/保存/返回、PWA、健康和约 1 小时 47 分观察通过，API/数据库/上海/原生/下载页/玩家数据均未修改。完整证据见 [候选记录](./releases/1.0.43-candidate.md)、[Release Agent 交接](./RELEASE_HANDOFF_1.0.43.md) 与 [正式发布记录](./releases/1.0.43.md)。
 
-> **当前生产与开发基线（2026-08-14）**：香港、上海 Web/API 与上海下载 stable 已统一发布 `1.0.42+c24e6247d257`；运行时源码为 `c24e6247d2572e54e30e173d3e16bfd85829b92f`，发布运维热修为 `d885a9e1e8870517b65a42f8a41c6179f93fbd51`。Android 为长期证书签名的 `1.0.42 / 1000042`，Windows setup 继续明确 `NotSigned`。GameState v46、envelope v2、云 schema v7、SQLite layout v2 不变；两地数据库独立且没有恢复或迁移，排行榜历史没有修改。香港 `/canary/previous/` 仍保留不可变 1.0.37。完整证据见 [1.0.42 发布记录](./releases/1.0.42.md)。
+> **当前生产与开发基线（2026-08-15）**：香港 Web 为 `1.0.43+fceca3eda51c`；香港 API、上海 Web/API、上海下载 stable 与 Android/Windows stable 均为 1.0.42。Android 继续为长期证书签名的 `1.0.42 / 1000042`，Windows setup 继续明确 `NotSigned`。GameState v46、envelope v2、云 schema v7、SQLite layout v2 不变；两地数据库独立且没有恢复或迁移，排行榜历史没有修改。香港直接 Web 回滚目标为 1.0.42；公开 `/canary/previous/` 仍保留不可变 1.0.37。1.0.44 应从本文档收口提交继续开发，但产品运行时边界以 `fceca3e` 制品与 `6c2df96` runtime/test tree 为准。
 
-> **方向变更（2026-07-31，兼容边界延续至 1.0.42）**：量子物流网络当前以 GameState v46 为 Web/API 数据基线。旧 v43 空间站实验存档若包含有效空间站资产会被拒绝加载，不能合并到量子共享库存；代码仍保留传统物流站 Mk.I→Mk.II 的兼容升级入口，供现有站点和本地批量升级测试使用。
+> **1.0.44 P0：超大存档运行态仍不可接受**。1.0.43 只收敛迁移/导入初次进入、手动保存与返回主页的重复持久化路径，不代表超大工厂主动模拟已经流畅。正式 36.7 MB 附件旅程中，受控 Continue→Pause 往返仍耗时 `20,887 ms`，Long Task 峰值为 `20,291 ms`；玩家也独立反馈运行时接近不可玩。这是 1.0.43 的明确残余风险，必须在 1.0.44 以 P0 继续处理，不能用本次发布状态或导入/保存改善宣称“全部卡顿已解决”。
 
-> 基线日期：2026-08-13
+> **方向变更（2026-07-31，兼容边界延续至 1.0.43）**：量子物流网络当前以 GameState v46 为 Web/API 数据基线。旧 v43 空间站实验存档若包含有效空间站资产会被拒绝加载，不能合并到量子共享库存；代码仍保留传统物流站 Mk.I→Mk.II 的兼容升级入口，供现有站点和本地批量升级测试使用。
+
+> 基线日期：2026-08-15
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
@@ -42,7 +44,7 @@
 
 > 1.0.38 最终门禁为 Vitest 950/18、Playwright 280/11、server 70/2、ops 6/6、native 8/8、生产依赖审计 0，source/Web/API 161/161，下载 9/9、bundle 10/10。Android 使用批准长期证书并完成 API 36.1 模拟器 `1.0.37 → 1.0.38` 覆盖升级；Windows 继续 `NotSigned`。用户只对本候选明确豁免 Android 真机、低配 Windows、Windows 覆盖升级和约一小时后台/锁屏门禁，并接受 60 秒精确模拟 13.5～13.8 秒、移动 Canvas 最大帧 139ms、既有长窗口近似误差和 30 MiB 云上传上限的残余风险。生产备份、隔离启动、原子切换、完整下载哈希、Range/cache、6 场 Chrome、PWA、COSFS 缓存处置和回滚证据见 [1.0.38 正式发布记录](./releases/1.0.38.md)。
 
-> `1.0.37` 按用户要求继续作为香港公开 previous-stable 和历史下载回退基线，但不再是 Web/API 的直接代码回滚目标。其源码为 `853ecdb12795844c484b1415f8e72967a25e343d`，Build ID 为 `1.0.37+853ecdb12795`；`/canary/previous/` 指向不可变 `/canary/1.0.37-853ecdb12795/`，当前 1.0.42 worker、Cache Storage 和正式根页离线重开保持隔离。历史证据见 [1.0.37 正式发布记录](./releases/1.0.37.md)。
+> `1.0.37` 按用户要求继续作为香港公开 previous-stable 和历史下载回退基线，但不再是 Web/API 的直接代码回滚目标。其源码为 `853ecdb12795844c484b1415f8e72967a25e343d`，Build ID 为 `1.0.37+853ecdb12795`；`/canary/previous/` 指向不可变 `/canary/1.0.37-853ecdb12795/`，当前 1.0.43 worker、Cache Storage 和正式根页离线重开保持隔离。历史证据见 [1.0.37 正式发布记录](./releases/1.0.37.md)。
 
 > `1.0.36` 为更早历史稳定版，已不再是直接回滚或 previous-stable；其固定 fallback 路径返回 `410`。历史证据见 [1.0.36 正式发布记录](./releases/1.0.36.md)。
 
@@ -88,7 +90,7 @@
 
 > 2026-08-02 10:08-10:21 的本次复核：真实夹具 Canvas 探针 P50/P95 为 `0.114/0.261 ms`；多 Worker 只读探针 1/2/4/8 Worker 中位墙钟为 `117.09/62.47/36.75/23.44 ms`，不等于完整模拟收益。60 秒观察 + 300 秒合同验证未找到可安全封存的闭合产线，合同路径只下降约 `0.126%`，完整性能对比见 [PERFORMANCE_COMPARISON_1.0.22_CANDIDATE_2026-08-02.md](./PERFORMANCE_COMPARISON_1.0.22_CANDIDATE_2026-08-02.md)。在线/离线小时级和全量 E2E 长测仍是候选门禁，1.0.22 不得提前切换。
 
-> 当前量子物流基线仍是 GameState v46、envelope v2；共享库存使用规范十进制大整数，量子塔在五秒边界结算，传统路线和尾货保持兼容。上传、下载使用两个独立的全星区额度，基础吞吐为 `5000/min × 银河物流倍率² × 全部量子塔堆叠`，轨道采集器可作为只上传供应端接入，量子模式继续保留行星内运输机配送。香港/上海当前统一运行 1.0.42，量子数据结构没有迁移。
+> 当前量子物流基线仍是 GameState v46、envelope v2；共享库存使用规范十进制大整数，量子塔在五秒边界结算，传统路线和尾货保持兼容。上传、下载使用两个独立的全星区额度，基础吞吐为 `5000/min × 银河物流倍率² × 全部量子塔堆叠`，轨道采集器可作为只上传供应端接入，量子模式继续保留行星内运输机配送。香港 Web 为 1.0.43，香港 API 与上海 Web/API 为 1.0.42；量子数据结构没有迁移。
 
 > `1.0.20` 量子上传热修附带云存档兼容修复：供应塔送达物资可直接进入量子共享库存；服务端接受普通蓝图建筑遗留的 `quantumTarget: false`，客户端读取后在下一次保存时清理普通建筑字段，仅保留星际物流站字段。云上传把格式无效、完整性失败和体积过大分开报告；GameState、存档 envelope 和云 schema 均不升级。
 
@@ -110,7 +112,7 @@
 
 > 香港正式节点已按 verified backup → dry-run → stopped-service transaction → post-check 顺序完成一次排行榜完整性处置。只删除 1 条公开 submission 并写入 1 条内部限制；账号、主云档、历史正文和其他同名账号均未删除或改写。上海没有执行该数据处置。
 
-> 香港与上海线上 Web/API 当前为 `1.0.42-c24e6247d257`，公网 Build ID 为 `1.0.42+c24e6247d257`；上海下载站为不可变目录 `download-site-1.0.42-c24e6247d257`。两地服务和对应定时器 active、API `NRestarts=0`。香港公开 `/canary/previous/` 仍为不可变 1.0.37；代码回滚只切不可变目录，不能恢复数据库。两地发布前快照均为 `0600`、`quick_check=ok`、schema v7/layout v2；数据库没有跨节点复制、恢复、替换或初始化。完整证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
+> 香港 Web current 为 `web-1.0.43-fceca3eda51c`，公网 Build ID 为 `1.0.43+fceca3eda51c`；香港 API、上海 Web/API、上海下载站与原生 stable 仍为 1.0.42。香港 generation 13 的直接 Web previous 为 `web-1.0.42-c24e6247d257`，API `NRestarts=0`；公开 `/canary/previous/` 仍为不可变 1.0.37。代码回滚只切不可变 Web 目录，不能恢复数据库。完整 1.0.43 生产证据见 [releases/1.0.43.md](./releases/1.0.43.md)，1.0.42 双节点/原生/下载历史见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
 ### `1.0.16` 存档冻结修复（双节点已上线）
 
@@ -423,7 +425,7 @@
 
 ### 存档与在线服务
 
-- 当前 clean 发布源码、香港与上海生产均为 `GameState` v46；存档封装格式保持 v2。1.0.42 不升级 GameState、存档 envelope、云 schema 或 SQLite layout；旧实体、线路、库存、科研投入、在途路线、量子库存、制造 WIP、太阳帆和戴森计划均沿用 v46 兼容边界。
+- 当前 clean 发布源码、香港与上海生产均为 `GameState` v46；存档封装格式保持 v2。1.0.43 不升级 GameState、存档 envelope、云 schema 或 SQLite layout；旧实体、线路、库存、科研投入、在途路线、量子库存、制造 WIP、太阳帆和戴森计划均沿用 v46 兼容边界。
 - 自动保存选项为关闭、30/60/120 秒和 10 分钟，默认 30 秒；关闭周期保存不影响切后台、`pagehide`、卸载和返回主菜单的紧急保存。手机端存档摘要扫描降至 30 秒，全屏工作区或网页后台期间冻结底层画布快照更新。
 - 本地主存档、槽位和快照不再持久化 `productionHistory`，内存统计曲线仍照常运行并在刷新后重新积累。主档、备份、快照和三个槽位使用 IndexedDB；主存档先写入、读回并校验，成功后才通知界面，配额异常只会清理自动快照并重试一次，最终失败会持续提示玩家立即导出。
 - 本地主存档有校验和和上一份有效备份；自动快照最多 2 份、至少相隔 5 分钟，手动快照和 3 个手动槽位不会被自动清理。旧 localStorage 副本只有在 IndexedDB 读回一致后才删除；手动槽位与快照删除均要求连续两次确认并显示目标摘要。
@@ -459,8 +461,8 @@
 
 | 概念 | 当前值 | 用途 |
 | --- | --- | --- |
-| npm 应用版本 | clean 运行时源码、香港与上海 Web/API、Windows 和 Android 均为 `1.0.42`；Android versionCode `1000042` | 两类原生清单与文件由上海下载节点提供 |
-| 游戏状态版本 | clean 运行时源码、香港与上海均为 `46` | 1.0.42 不升级 GameState，继续保留旧版本迁移链 |
+| npm 应用版本 | clean 香港 Web 源码/制品为 `1.0.43`；香港 API、上海 Web/API、Windows 和 Android 均为 `1.0.42`；Android versionCode `1000042` | 1.0.43 仅发布香港 Web；两类原生清单与文件继续由上海下载节点提供 |
+| 游戏状态版本 | clean 运行时源码、香港与上海均为 `46` | 1.0.43 不升级 GameState，继续保留旧版本迁移链 |
 | 存档封装版本 | `2` | 校验和、元数据和导入导出格式 |
 | 云服务 schema | 工作区与线上 `7`，SQLite layout `2` | v7 增加唯一用户名；layout v2 拆分云存档正文 |
 | 本地身份 schema | `2` | 本地排行账本和可选云账号绑定，不属于 `GameState` |
@@ -469,7 +471,7 @@
 
 不要把“v33 存档状态”当作产品版本。每个正式发布都应先确定 SemVer，再生成可追溯构建 ID 和 Git 标签。
 
-香港和上海 Web/API 当前为 `1.0.42-c24e6247d257`，构建 ID 为 `1.0.42+c24e6247d257`。上海下载页和 Windows/Android 稳定清单均为 `1.0.42`，Android versionCode 为 `1000042`。备份、回滚、公网和原生证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
+香港 Web 当前为 `web-1.0.43-fceca3eda51c`，构建 ID 为 `1.0.43+fceca3eda51c`；香港 API 与上海 Web/API 为 `1.0.42-c24e6247d257`。上海下载页和 Windows/Android 稳定清单均为 `1.0.42`，Android versionCode 为 `1000042`。香港 Web-only 发布与回滚证据见 [releases/1.0.43.md](./releases/1.0.43.md)，其余 1.0.42 证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
 香港与上海 Web/API 代码回滚必须使用仍兼容 1 亿增产剂上限和速通 `resourceMode` 的不可变候选；不得直接切回旧验证器。1.0.37 继续作为用户指定的公开 Web previous-stable，旧版安装包和目录继续保留。固定 Web/API 切换工具路径为 `/usr/local/sbin/dsp-idle-switch-release`，下载页回滚目标记录在 `/var/www/dsp-idle-downloads/release-state/previous-release`，回滚不得恢复数据库。两地 Nginx 应用规则均使用 40 MiB 上传边界、`version.json` no-cache 和 `/var/www/dsp-idle/shared/assets` 历史 hashed-asset 回退；发布收口磁盘约为香港 74%、上海 75%，继续按 80% 告警、90% 保护阈值监控。
 
@@ -479,6 +481,7 @@
 
 | 检查 | 基线结果 |
 | --- | --- |
+| `1.0.43` / v46 香港 Web 稳定热修 | source `fceca3e…`、runtime/test tree `6c2df96…`、Build ID `1.0.43+fceca3eda51c`；Vitest 1,238/18、完整 Chromium 356/8、production-preview PWA 3/3、不可变 Web 122/122、generation 13 公网/PWA/真实附件与 1 小时 47 分观察通过；API/DB/上海/原生/下载不变。超大档运行态 Continue→Pause 20,887 ms 与 Long Task 峰值 20,291 ms 是 1.0.44 P0，不计为已解决 |
 | `1.0.42` / v46 正式发布 | runtime `c24e624…`、Build ID `1.0.42+c24e6247d257`；Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、PWA 1/1；远端 server 两节点各 356/2、Linux ops 各 59/2；代理热修后 ops 56/6、Linux Node 20/22 聚焦各 4/4；source 214/214、candidate 10/10、provenance 3/3，全部 0 失败 |
 | `1.0.40` / v46 开发候选 | 固定运行时 SHA `58d3e6f986ec…`；129 个 Vitest 文件通过/6 跳过，1180 项通过/18 项跳过；Chromium 327/2、Firefox/WebKit 2/2、生产预览 PWA 1/1；server 343/2、ops 34/34、native 24/24；206 文件 source manifest、6 个候选制品、CycloneDX 1.5 SBOM、3-subject provenance、类型检查、125 个运行时许可证、生产构建和根/server 生产依赖审计 0 通过。尚未部署；原生正式签名、实体设备、隔离 Linux 和生产备份副本仍是 Release Agent 门禁 |
 | `1.0.39` / v46 Web/API 正式发布 | 107 个测试文件通过、6 个跳过；950 项 Vitest 通过、18 项跳过；Playwright 282 项通过、11 项条件夹具跳过；服务端 75/2、运维 6/6、原生工具 8/8、163 文件 source manifest、2 文件 candidate manifest、Web 128、API 35、类型检查、128 个运行时许可证和生产构建通过；双节点备份、独立副本隔离、原子切换、真实云 PUT 观察、完整下载 9/9、Range/cache、当前/历史资源、6 场 Chrome 和 1.0.37 PWA 隔离通过；下载与 native stable 保持 1.0.38 |
@@ -528,11 +531,11 @@
 | `0.8.1` / v32 正式回归 | 31 个文件 320/320 Vitest；119/119 Playwright；服务端 23/23；运维 5/5；生产构建通过 |
 | v32 缓存设置视觉门禁 | 桌面、经典手机、新版手机；80/100/125/150/200%；预设与自定义输入均通过 |
 | v32 生产内存门禁 | Chrome/360 各 30 分钟；强制 GC 活跃堆分别 +2.17 MiB / +1.87 MiB，DOM 与监听器均 0 增长 |
-| Vitest | 1.0.42 正式发布基线为 1,231 项通过、18 项显式跳过、0 失败 |
-| Playwright Chrome | 1.0.42 clean 运行时源码全量回归为 353 项通过、9 项显式条件夹具跳过、0 失败 |
+| Vitest | 1.0.43 runtime 为 1,238 项通过、18 项显式跳过、0 失败；第二轮返修相关 129/129 |
+| Playwright Chrome | 1.0.43 相同 runtime/test tree 全量回归为 356 项通过、8 项显式条件夹具跳过、0 失败；正式附件旅程另行通过但保留运行态卡顿结论 |
 | Node 云服务测试 | 当前 API 发布目录为 `api-1.0.42-c24e6247d257`；本地与两地未激活目录均为 356 项通过、2 项可选夹具跳过 |
 | 运维备份/恢复/Nginx/探针 | 开发候选 55/6；代理热修后 56/6；两地 Linux 各 59/2，全部 0 失败 |
-| Vite 生产构建 | 通过 |
+| Vite 生产构建 | clean `fceca3e`：1,929 modules，startup gzip 185,923 B，forbidden startup modules 0，Build ID 无 `.dirty` |
 | 桌面、手机竖屏、手机横屏 | 已进行视觉与交互检查 |
 | 手机新版阶段 0-3 focused E2E | 9/9 通过，并纳入 108 项全量回归 |
 | 正式 HTTPS 入口 | 已进行浏览器验收 |
@@ -543,6 +546,7 @@
 
 ### P0：发布与数据安全
 
+- 1.0.43 的 36.7 MB 正式附件在初次导入、确认进入、手动保存和返回主页上已完成正确性/耗时验收，但主动模拟 Continue→Pause 仍需 20,887 ms，Long Task 峰值 20,291 ms；玩家独立反馈运行接近不可玩。该项从现网性能残余提升为 1.0.44 P0，必须单独分析模拟推进/渲染/派生瓶颈，不能用本热修的 O(E+B) 迁移优化代替。
 - 云服务仍是单进程、单 SQLite 文件架构；认证加密异地备份和恢复演练已经形成首个闭环，但仍需持续检查 timer、30 天密文保留期和每月恢复报告。
 - 腾讯云发信域名与地址已经完成验证，正式代码已支持 SES API；正式环境仍缺少完整的审核模板 ID 和最小权限 CAM 凭据。用户名注册、登录、四槽云存档和排行榜不受影响；邮箱绑定、验证重发和找回密码仍返回 `503 EMAIL_SERVICE_UNAVAILABLE`。
 - 账号系统已有设备会话撤销，但尚未实现异常地点检测、登录告警和后台人工账号处置。
@@ -551,6 +555,7 @@
 
 ### P1：性能与运维
 
+- 香港 Nginx 仍将精确 `manifest.webmanifest` 以 `application/octet-stream` + `no-cache` 返回；1.0.42/1.0.43 字节与配置继承一致，Chrome manifest 解析及 PWA 安装/控制/离线更新门禁均通过。后续只能在独立 Nginx 热修中以配置备份、`nginx -t`、原子安装和回滚证据修正 MIME，不能在应用发布时顺手改生产配置。
 - 两个节点已对 JS/CSS 启用 gzip，hashed asset 保持 immutable；Brotli、真实用户一周趋势和更细的资源预算仍可继续补充。
 - `src/styles.css`、`src/game/engine.ts`、`tests/e2e/game-flow.spec.ts` 和 `src/App.tsx` 已经成为超大文件，修改冲突和回归成本较高。
 - Web/服务端已有可复现清单、原子切换、健康检查和固定路径回滚工具，但仍缺少从提交到双节点灰度发布的 CI 流水线。
