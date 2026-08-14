@@ -1300,3 +1300,8 @@ production-preview Chrome 的匿名活动行星为 106 节点，默认与 expand
 最终 commit-tip 独占窗口为 2026-08-15 05:27:10～05:27:48（Asia/Shanghai），端口 4361 前后均空闲，完整 9/9 通过。两日未活动的旧 Node test 树与用户常驻 Chrome 由 root 预先确认 CPU 静止，期间没有新外部 Playwright/Vite/测试树。此前与 runtime aggregation 重叠的采样、因测试直接操作视觉隐藏 checkbox 而功能失败的采样，以及随后未进入最终代码的 bulk-drag 实验 targeted 采样全部作废，没有混入上表。
 
 门禁汇总：focused Vitest 4 files / 316 tests 通过，typecheck 通过；`server.test.mjs` 39/2 通过并证明现网 c24 开放式 v46 queue validator/PUT 接受字面 `allowExactOverlap: true`；production build 1,931 modules，startup 总 gzip 186,944 B、JS 94,934 B、CSS 92,010 B，预算通过。真实 35 MiB / active 4,213 权威门禁不在本分支伪造或替代，仍必须由集成分支使用正确 IndexedDB loader 验证 Continue/Pause second-painted、React commit/layout 与 running pan/zoom；本专项未部署。
+## 56. `1.0.44` / v46 物流槽位稀疏存档开发门禁
+
+本开发项不升级 GameState v46、envelope v2、cloud schema v7、SQLite layout v2 或 IndexedDB version 2。共享 `station-slot` 契约覆盖本地/远程模式、最低装载率、库存上下限、优先级、中转策略和翘曲器预算；只有缺失字段读取默认值，显式 `null`、错误类型与越界值继续由服务端拒绝。
+
+聚焦门禁覆盖默认字段省略、非默认/`null` 保留、中间空槽不折叠、尾部空槽裁剪、加载补足五槽、client/server 契约一致、dense/sparse 精确重载及 1,000 秒玩法哈希/逐字段等价。匿名 lean 语义夹具为 54,306 实体、97,834 条线路、21,186 座物流站，稀疏正文 29,175,494 bytes；它用于确定性兼容与守恒回归，不作为玩家同形容量证据。可选只读真实派生门禁在内存中做确定性 ID/reference remap，得到 54,306 实体、97,834 条线路、20,138 座物流站的独立 2x 形状，稀疏正文 58,857,707 bytes，低于 60 MiB。原只读玩家附件由 36,704,109 bytes 投影为 29,572,337 bytes；源文件 bytes、mtime 与 SHA-256 `cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1` 前后不变，附件未进入 Git 或制品。
