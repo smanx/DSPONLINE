@@ -58,7 +58,11 @@ export function replaySimulationRuntimeStartupInWorker(
   const sourceTransfer = serializeSimulationStateForTransfer(state);
   const cancelChannel = typeof MessageChannel === "undefined" ? null : new MessageChannel();
   const timeoutMs = Math.max(1_000, options.timeoutMs ?? 120_000);
-  let requestId = 0;
+  // The replay request is posted with id 1. Starting at zero causes the
+  // message handler to discard the valid first response forever and leaves
+  // Continue stuck on “正在回放”. The second, explicit checkpoint barrier uses
+  // id 2 below.
+  let requestId = 1;
   let settled = false;
   let timeout: ReturnType<typeof setTimeout> | null = null;
   let abortListener: (() => void) | null = null;
