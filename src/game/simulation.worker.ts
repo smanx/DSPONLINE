@@ -7,16 +7,28 @@ import type { GameState } from "./types";
 import { captureSimulationProjectionBaseline, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
 import { runTimeWarpApproximateSettlement, type TimeWarpApproximationReport } from "./offlineApproximation";
+import {
+  applySimulationCommandPatch,
+  deserializeSimulationStateTransfer,
+  serializeSimulationStateForTransfer,
+  type SimulationCommandPatch,
+  type SimulationStateTransfer,
+} from "./simulationRuntimeProtocol";
 
 export interface SimulationWorkerRequest {
   id: number;
+  kind?: "advance" | "checkpoint";
   state?: GameState;
+  /** One-time/bootstrap state; callers transfer the backing buffer. */
+  stateTransfer?: SimulationStateTransfer;
+  /** Ordered UI command against the last acknowledged Worker revision. */
+  command?: SimulationCommandPatch;
   simulationSeconds: number;
   wallSeconds: number;
   profile?: boolean;
   registryFingerprint: string;
   registry?: ContentPackRuntimeSnapshot;
-  protocol?: "full" | "delta";
+  protocol?: "full" | "delta" | "projection";
   stateRevision?: number;
   multicore?: MulticoreSimulationOptions;
   /** Use the guarded short-calibration macro path for pure-idle time warp. */
@@ -33,6 +45,7 @@ export interface SimulationWorkerResponse {
   transferBytes?: number;
   profiler?: SimulationProfiler;
   needsState?: boolean;
+  needsResync?: boolean;
   reusedState?: boolean;
   cacheRebuilt?: boolean;
   registryFingerprint?: string;
@@ -40,12 +53,14 @@ export interface SimulationWorkerResponse {
   registryError?: string;
   /** Optional P4 projection; `state` remains the compatibility oracle. */
   projection?: SimulationProjection;
-  protocol?: "full" | "delta";
+  protocol?: "full" | "delta" | "projection";
   stateRevision?: number;
   delta?: SimulationStateDelta;
   deltaFallback?: "larger-than-full";
   multicore?: { enabled: boolean; workerCount: number; fallback?: boolean; reason?: string };
   timeWarpApproximation?: TimeWarpApproximationReport;
+  checkpoint?: SimulationStateTransfer;
+  commandApplied?: boolean;
 }
 
 let runtime: PersistentSimulationRuntime | null = null;
@@ -76,7 +91,8 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
 };
 
 async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequest>, receivedAt: number): Promise<void> {
-  const { id, state, simulationSeconds, wallSeconds, profile, registryFingerprint, registry, stateRevision } = event.data;
+  const { id, stateTransfer, simulationSeconds, wallSeconds, profile, registryFingerprint, registry, stateRevision } = event.data;
+  const state = event.data.state ?? (stateTransfer ? deserializeSimulationStateTransfer(stateTransfer) : undefined);
   const profiler = profile ? createSimulationProfiler() : undefined;
   const reusedState = !state && Boolean(runtime);
   if (profiler && reusedState) profiler.persistentRuntimeHits += 1;
@@ -128,8 +144,46 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
     } satisfies SimulationWorkerResponse);
     return;
   }
+  let commandApplied = false;
+  if (event.data.command) {
+    if (event.data.command.baseRevision !== runtimeRevision) {
+      const checkpoint = serializeSimulationStateForTransfer(runtime.state);
+      self.postMessage({
+        id,
+        changed: false,
+        durationMs: Math.max(0, performance.now() - receivedAt),
+        needsResync: true,
+        stateRevision: runtimeRevision,
+        registryFingerprint: activeRegistryFingerprint ?? undefined,
+        checkpoint,
+      } satisfies SimulationWorkerResponse, [checkpoint.buffer]);
+      return;
+    }
+    const commandedState = applySimulationCommandPatch(runtime.state, event.data.command);
+    replacePersistentSimulationRuntimeState(runtime, commandedState, profiler);
+    runtimeRevision += 1;
+    commandApplied = true;
+  }
+  if (event.data.kind === "checkpoint") {
+    const checkpoint = serializeSimulationStateForTransfer(runtime.state);
+    self.postMessage({
+      id,
+      changed: commandApplied,
+      commandApplied,
+      durationMs: Math.max(0, performance.now() - receivedAt),
+      protocol: event.data.protocol ?? "projection",
+      stateRevision: runtimeRevision,
+      registryFingerprint: activeRegistryFingerprint ?? undefined,
+      checkpoint,
+    } satisfies SimulationWorkerResponse, [checkpoint.buffer]);
+    return;
+  }
   const startedAt = performance.now();
   const previousState = runtime.state;
+  // The legacy experimental delta comparator requires an immutable pre-step
+  // oracle because the persistent engine mutates runtime records in place.
+  // This expensive clone remains isolated behind its opt-in device switch.
+  const deltaBaseline = event.data.protocol === "delta" && !suppliedState ? structuredClone(previousState) : null;
   const projectionBaseline = captureSimulationProjectionBaseline(previousState);
   const previousRevision = runtimeRevision;
   const multicorePlan = requestMulticorePlan(runtime.state, event.data.multicore);
@@ -181,16 +235,17 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   if (profiler && result.cacheRebuilt) profiler.persistentRuntimeRebuilds += 1;
   const response: SimulationWorkerResponse = {
     id,
-    changed: result.changed,
+    changed: result.changed || commandApplied,
     durationMs: Math.max(0, performance.now() - startedAt),
     protocol: event.data.protocol ?? "full",
     stateRevision: runtimeRevision,
-    ...(result.changed && (event.data.protocol !== "delta" || suppliedState) ? { state: result.state } : {}),
+    ...(commandApplied ? { commandApplied } : {}),
+    ...((result.changed || commandApplied) && event.data.protocol !== "projection" && (event.data.protocol !== "delta" || suppliedState) ? { state: result.state } : {}),
     ...(profile ? { profiler } : {}),
     reusedState,
     cacheRebuilt: result.cacheRebuilt,
     registryFingerprint: activeRegistryFingerprint ?? undefined,
-    ...(result.changed ? { projection: createSimulationProjection(projectionBaseline, result.state) } : {}),
+    ...(result.changed ? { projection: createSimulationProjection(projectionBaseline, result.state, { compact: event.data.protocol === "projection" }) } : {}),
     ...(event.data.multicore ? { multicore: {
       enabled: multicoreUsed,
       workerCount: multicoreUsed ? multicoreExecutor?.workerCount ?? multicorePlan.workerCount : multicorePlan.workerCount,
@@ -200,7 +255,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
     ...(timeWarpApproximation ? { timeWarpApproximation } : {}),
   };
   if (result.changed && event.data.protocol === "delta" && !suppliedState) {
-    const delta = createSimulationStateDelta(previousState, result.state, previousRevision, runtimeRevision);
+    const delta = createSimulationStateDelta(deltaBaseline ?? previousState, result.state, previousRevision, runtimeRevision);
     if (shouldUseSimulationDelta(result.state, delta)) {
       response.delta = delta;
     } else {

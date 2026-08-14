@@ -313,9 +313,23 @@ import {
   type PureIdleRecoveryRecord,
   type PureIdleStopReason,
 } from "./game/pureIdleRecovery";
-import { mergeSimulationProjections, type SimulationProjection } from "./game/simulationProjection";
+import {
+  applySimulationProjectionToState,
+  createSimulationProjectionStateIndex,
+  hydrateSimulationProjection,
+  mergeSimulationProjections,
+  type SimulationProjection,
+  type SimulationProjectionStateIndex,
+} from "./game/simulationProjection";
 import { applySimulationStateDelta, readExperimentalSimulationDeltaMode } from "./game/simulationDelta";
-import { readMulticoreSimulationOptions } from "./game/multicoreSimulation";
+import {
+  applySimulationCommandPatch,
+  createSimulationCommandPatch,
+  deserializeSimulationStateTransfer,
+  serializeSimulationStateForTransfer,
+  type SimulationCommandPatch,
+} from "./game/simulationRuntimeProtocol";
+import { readMulticoreSimulationOptions, type MulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
 import { accumulateSimulationBudget, NORMAL_SIMULATION_SLICE_SECONDS, takeSimulationBudgetSlice } from "./game/simulationBudget";
 import {
@@ -750,6 +764,15 @@ function serializedPayloadBytes(value: unknown): number {
   }
 }
 
+interface SimulationReplayOperation {
+  command: SimulationCommandPatch | null;
+  simulationSeconds: number;
+  wallSeconds: number;
+  multicore: MulticoreSimulationOptions | undefined;
+  approximate: boolean;
+  registry: ContentPackRuntimeSnapshot;
+}
+
 function minerPlacementHint(buildingId: BuildingId): string {
   if (buildingId === "oil_extractor") return "原油萃取站需要部署在原油涌泉上";
   if (buildingId === "water_pump") return "抽水站需要部署在水或硫酸海洋上";
@@ -983,8 +1006,47 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const simulationWorkerDisabledRef = useRef(false);
   const contentPackRuntimeSnapshotRef = useRef<ContentPackRuntimeSnapshot>(createContentPackRuntimeSnapshot(INITIAL_CONTENT_PACK_REGISTRY));
   const simulationWorkerRegistryFingerprintRef = useRef<string | null>(null);
-  const simulationSubmissionRef = useRef<{ id: number; state: GameState; simulationSeconds: number; wallSeconds: number; registryFingerprint: string; submittedAt: number; baseStateRevision: number | null; requestBytes: number } | null>(null);
+  const simulationSubmissionRef = useRef<{
+    id: number;
+    kind: "initialize" | "advance" | "recovery-initialize" | "recovery-advance" | "recovery-checkpoint";
+    baseState: GameState;
+    state: GameState;
+    command: SimulationCommandPatch | null;
+    simulationSeconds: number;
+    wallSeconds: number;
+    registryFingerprint: string;
+    registry: ContentPackRuntimeSnapshot;
+    submittedAt: number;
+    baseStateRevision: number | null;
+    requestBytes: number;
+    multicore: MulticoreSimulationOptions | undefined;
+    approximate: boolean;
+  } | null>(null);
   const simulationStateRevisionRef = useRef(0);
+  const simulationProjectionIndexRef = useRef<SimulationProjectionStateIndex>(createSimulationProjectionStateIndex(loaded.state));
+  const simulationCheckpointBarrierRef = useRef(false);
+  const simulationSaveBarrierDepthRef = useRef(0);
+  const simulationCheckpointRequestRef = useRef<{
+    id: number | null;
+    promise: Promise<GameState>;
+    resolve: (state: GameState) => void;
+    reject: (error: Error) => void;
+    baseState: GameState | null;
+    state: GameState | null;
+    command: SimulationCommandPatch | null;
+  } | null>(null);
+  const dispatchSimulationCheckpointRef = useRef<() => void>(() => undefined);
+  const latestAuthoritativeCheckpointRef = useRef<GameState>(loaded.state);
+  const simulationReplayJournalRef = useRef<SimulationReplayOperation[]>([]);
+  const simulationRecoveryRef = useRef<{
+    operations: SimulationReplayOperation[];
+    nextOperationIndex: number;
+    confirmedView: GameState;
+    desiredState: GameState;
+    finalCommand: SimulationCommandPatch | null;
+    attempts: number;
+  } | null>(null);
+  const dispatchSimulationRecoveryRef = useRef<() => void>(() => undefined);
   const experimentalSimulationDeltaRef = useRef(readExperimentalSimulationDeltaMode());
   const multicoreSimulationOptionsRef = useRef(readMulticoreSimulationOptions());
   const lastSimulationResultRef = useRef<GameState | null>(null);
@@ -1511,6 +1573,142 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     };
   }, []);
 
+  const dispatchSimulationCheckpoint = useCallback(() => {
+    const pending = simulationCheckpointRequestRef.current;
+    if (!pending || pending.id !== null || simulationSubmissionRef.current || simulationRecoveryRef.current) return;
+    const worker = simulationWorkerRef.current;
+    const confirmedState = lastSimulationResultRef.current;
+    if (!worker || simulationWorkerDisabledRef.current || !confirmedState) {
+      simulationCheckpointRequestRef.current = null;
+      simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+      pending.resolve(stateWithSimulationDebt(gameRef.current));
+      return;
+    }
+    const state = gameRef.current;
+    const command = createSimulationCommandPatch(confirmedState, state, simulationStateRevisionRef.current);
+    const registrySnapshot = contentPackRuntimeSnapshotRef.current;
+    const request: SimulationWorkerRequest = {
+      id: simulationRequestIdRef.current + 1,
+      kind: "checkpoint",
+      ...(command ? { command } : {}),
+      simulationSeconds: 0,
+      wallSeconds: 0,
+      registryFingerprint: registrySnapshot.fingerprint,
+      protocol: "projection",
+      stateRevision: simulationStateRevisionRef.current,
+      ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
+    };
+    simulationRequestIdRef.current = request.id;
+    pending.id = request.id;
+    pending.baseState = confirmedState;
+    pending.state = state;
+    pending.command = command;
+    try {
+      worker.postMessage(request);
+    } catch (error) {
+      simulationCheckpointRequestRef.current = null;
+      simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+      pending.reject(error instanceof Error ? error : new Error("模拟检查点请求失败"));
+    }
+  }, [stateWithSimulationDebt]);
+  dispatchSimulationCheckpointRef.current = dispatchSimulationCheckpoint;
+
+  const requestAuthoritativeSimulationCheckpoint = useCallback((): Promise<GameState> => {
+    const existing = simulationCheckpointRequestRef.current;
+    if (existing) return existing.promise;
+    if ((!simulationWorkerRef.current || simulationWorkerDisabledRef.current || !lastSimulationResultRef.current) && !simulationRecoveryRef.current) {
+      return Promise.resolve(stateWithSimulationDebt(gameRef.current));
+    }
+    let resolve!: (state: GameState) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<GameState>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    simulationCheckpointBarrierRef.current = true;
+    simulationCheckpointRequestRef.current = {
+      id: null,
+      promise,
+      resolve,
+      reject,
+      baseState: null,
+      state: null,
+      command: null,
+    };
+    queueMicrotask(() => dispatchSimulationCheckpointRef.current());
+    return promise;
+  }, [stateWithSimulationDebt]);
+
+  const dispatchSimulationRecovery = useCallback(() => {
+    const recovery = simulationRecoveryRef.current;
+    const worker = simulationWorkerRef.current;
+    if (!recovery || !worker || simulationSubmissionRef.current) return;
+    const operation = recovery.operations[recovery.nextOperationIndex];
+    const registrySnapshot = operation?.registry ?? contentPackRuntimeSnapshotRef.current;
+    const command = operation?.command
+      ? { ...operation.command, baseRevision: simulationStateRevisionRef.current }
+      : !operation && recovery.finalCommand
+        ? { ...recovery.finalCommand, baseRevision: simulationStateRevisionRef.current }
+        : null;
+    const request: SimulationWorkerRequest = operation ? {
+      id: simulationRequestIdRef.current + 1,
+      kind: "advance",
+      ...(command ? { command } : {}),
+      simulationSeconds: operation.simulationSeconds,
+      wallSeconds: operation.wallSeconds,
+      registryFingerprint: registrySnapshot.fingerprint,
+      registry: registrySnapshot,
+      protocol: "projection",
+      stateRevision: simulationStateRevisionRef.current,
+      multicore: operation.multicore,
+      approximate: operation.approximate,
+    } : {
+      id: simulationRequestIdRef.current + 1,
+      kind: "checkpoint",
+      ...(command ? { command } : {}),
+      simulationSeconds: 0,
+      wallSeconds: 0,
+      registryFingerprint: registrySnapshot.fingerprint,
+      registry: registrySnapshot,
+      protocol: "projection",
+      stateRevision: simulationStateRevisionRef.current,
+    };
+    simulationRequestIdRef.current = request.id;
+    simulationSubmissionRef.current = {
+      id: request.id,
+      kind: operation ? "recovery-advance" : "recovery-checkpoint",
+      baseState: recovery.confirmedView,
+      state: recovery.desiredState,
+      command,
+      simulationSeconds: operation?.simulationSeconds ?? 0,
+      wallSeconds: operation?.wallSeconds ?? 0,
+      registryFingerprint: registrySnapshot.fingerprint,
+      registry: registrySnapshot,
+      baseStateRevision: simulationStateRevisionRef.current,
+      submittedAt: performance.now(),
+      requestBytes: 0,
+      multicore: operation?.multicore,
+      approximate: operation?.approximate ?? false,
+    };
+    try {
+      worker.postMessage(request);
+    } catch {
+      simulationSubmissionRef.current = null;
+      simulationRecoveryRef.current = null;
+      simulationWorkerDisabledRef.current = true;
+      simulationWorkerRef.current = null;
+      setSimulationWorkerActive(false);
+      worker.terminate();
+      const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
+      latestAuthoritativeCheckpointRef.current = stopped;
+      lastSimulationResultRef.current = stopped;
+      gameRef.current = stopped;
+      setGame(stopped);
+      setNotice("模拟 Worker 恢复失败，已回到最近精确检查点并暂停模拟");
+    }
+  }, []);
+  dispatchSimulationRecoveryRef.current = dispatchSimulationRecovery;
+
   const currentPrimarySaveSource = useCallback(() => {
     const submitted = simulationSubmissionRef.current;
     const pendingViewportSignature = JSON.stringify([...pendingPlanetViewportRef.current.entries()].map(([planetId, pending]) => [
@@ -1540,11 +1738,26 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const persistPrimarySave = useCallback(async (state?: GameState): Promise<SaveGameResult> => {
     const monitorSave = performanceMonitor.isActive();
     const startedAt = monitorSave ? performance.now() : 0;
-    const result = await saveGameVerified(state ?? stateWithSimulationDebt(gameRef.current));
-    if (monitorSave) performanceMonitor.recordSave({ durationMs: performance.now() - startedAt, bytes: result.bytes ?? 0, stages: result.timings ?? null });
-    setSaveFailure(result.success ? null : result);
-    return result;
-  }, [performanceMonitor.isActive, performanceMonitor.recordSave, stateWithSimulationDebt]);
+    const ownsBarrier = state === undefined;
+    if (ownsBarrier) {
+      simulationSaveBarrierDepthRef.current += 1;
+      simulationCheckpointBarrierRef.current = true;
+    }
+    try {
+      const saveState = state ?? await requestAuthoritativeSimulationCheckpoint();
+      const result = await saveGameVerified(saveState);
+      if (monitorSave) performanceMonitor.recordSave({ durationMs: performance.now() - startedAt, bytes: result.bytes ?? 0, stages: result.timings ?? null });
+      setSaveFailure(result.success ? null : result);
+      return result;
+    } finally {
+      if (ownsBarrier) {
+        simulationSaveBarrierDepthRef.current = Math.max(0, simulationSaveBarrierDepthRef.current - 1);
+        if (simulationSaveBarrierDepthRef.current === 0 && !simulationCheckpointRequestRef.current) {
+          simulationCheckpointBarrierRef.current = false;
+        }
+      }
+    }
+  }, [performanceMonitor.isActive, performanceMonitor.recordSave, requestAuthoritativeSimulationCheckpoint]);
 
   const setPureIdleRecoveryContinueState = useCallback((available: boolean) => {
     pureIdleContinueAvailableRef.current = available;
@@ -2307,7 +2520,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (returnToMenuSaveInFlightRef.current) return;
     returnToMenuSaveInFlightRef.current = true;
     const source = currentPrimarySaveSource();
-    const result = await persistPrimarySave(stateWithSimulationDebt(source.game));
+    const result = await persistPrimarySave();
     if (!result.success) {
       returnToMenuSaveInFlightRef.current = false;
       setNotice(result.message);
@@ -2320,7 +2533,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     // save, preserving the former no-progress-loss behavior.
     controlledReturnCommitRef.current = source;
     onReturnToMenu();
-  }, [currentPrimarySaveSource, onReturnToMenu, persistPrimarySave, playTone, stateWithSimulationDebt]);
+  }, [currentPrimarySaveSource, onReturnToMenu, persistPrimarySave, playTone]);
 
   const spawnInteractionBurst = useCallback((x: number, y: number, label: string, tone: InteractionBurst["tone"] = "positive") => {
     const id = burstSequenceRef.current + 1;
@@ -2419,6 +2632,52 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     simulationWorkerRef.current = worker;
     setSimulationWorkerActive(true);
     worker.onmessage = (event: MessageEvent<SimulationWorkerResponse>) => {
+      const checkpointRequest = simulationCheckpointRequestRef.current;
+      if (checkpointRequest?.id === event.data.id) {
+        if (event.data.needsRegistry || event.data.registryError || event.data.needsState || !event.data.checkpoint || typeof event.data.stateRevision !== "number") {
+          simulationCheckpointRequestRef.current = null;
+          simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+          checkpointRequest.reject(new Error(event.data.registryError ?? "模拟 Worker 未返回有效检查点"));
+          return;
+        }
+        try {
+          const authoritative = deserializeSimulationStateTransfer(event.data.checkpoint);
+          simulationStateRevisionRef.current = event.data.stateRevision;
+          latestAuthoritativeCheckpointRef.current = authoritative;
+          simulationReplayJournalRef.current = [];
+          simulationWorkerRegistryFingerprintRef.current = event.data.registryFingerprint ?? simulationWorkerRegistryFingerprintRef.current;
+          if (event.data.needsResync) {
+            const current = gameRef.current;
+            const baseState = checkpointRequest.baseState ?? current;
+            const pending = createSimulationCommandPatch(baseState, current, event.data.stateRevision);
+            const rebased = pending ? applySimulationCommandPatch(authoritative, pending) : authoritative;
+            lastSimulationResultRef.current = authoritative;
+            simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(authoritative);
+            gameRef.current = rebased;
+            setGame(rebased);
+            checkpointRequest.id = null;
+            checkpointRequest.baseState = null;
+            checkpointRequest.state = null;
+            checkpointRequest.command = null;
+            queueMicrotask(() => dispatchSimulationCheckpointRef.current());
+            return;
+          }
+          latestAuthoritativeCheckpointRef.current = authoritative;
+          simulationReplayJournalRef.current = [];
+          const confirmedView = checkpointRequest.state ?? gameRef.current;
+          lastSimulationResultRef.current = confirmedView;
+          simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(confirmedView);
+          const saveState = stateWithSimulationDebt(authoritative);
+          simulationCheckpointRequestRef.current = null;
+          simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+          checkpointRequest.resolve(saveState);
+        } catch (error) {
+          simulationCheckpointRequestRef.current = null;
+          simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+          checkpointRequest.reject(error instanceof Error ? error : new Error("模拟检查点解析失败"));
+        }
+        return;
+      }
       const submission = simulationSubmissionRef.current;
       if (!submission || event.data.id !== submission.id) return;
       const latency = Math.max(0, performance.now() - submission.submittedAt);
@@ -2434,7 +2693,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         });
       }
       simulationSubmissionRef.current = null;
-      const currentRegistryFingerprint = contentPackRuntimeSnapshotRef.current.fingerprint;
       if (event.data.needsRegistry || event.data.registryError) {
         simulationPendingSecondsRef.current += submission.simulationSeconds;
         simulationPendingWallSecondsRef.current += submission.wallSeconds;
@@ -2447,19 +2705,144 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         setNotice(`模拟 Worker 内容包同步失败：${event.data.registryError ?? "注册表需要刷新"}，已切换到安全模拟`);
         return;
       }
-      if (submission.registryFingerprint !== currentRegistryFingerprint || event.data.registryFingerprint !== submission.registryFingerprint) {
+      if (event.data.registryFingerprint !== submission.registryFingerprint) {
         simulationPendingSecondsRef.current += submission.simulationSeconds;
         simulationPendingWallSecondsRef.current += submission.wallSeconds;
-        lastSimulationResultRef.current = null;
         simulationWorkerRegistryFingerprintRef.current = event.data.registryFingerprint ?? null;
+        worker.dispatchEvent(new ErrorEvent("error", { message: "模拟 Worker 注册表响应不匹配" }));
         return;
       }
       simulationWorkerRegistryFingerprintRef.current = event.data.registryFingerprint;
       if (event.data.needsState) {
         simulationPendingSecondsRef.current += submission.simulationSeconds;
         simulationPendingWallSecondsRef.current += submission.wallSeconds;
+        const confirmedView = lastSimulationResultRef.current ?? latestAuthoritativeCheckpointRef.current;
+        const desiredState = gameRef.current;
+        simulationRecoveryRef.current = {
+          operations: [...simulationReplayJournalRef.current],
+          nextOperationIndex: 0,
+          confirmedView,
+          desiredState,
+          finalCommand: createSimulationCommandPatch(confirmedView, desiredState, 0),
+          attempts: 0,
+        };
         lastSimulationResultRef.current = null;
+        simulationWorkerRef.current = null;
+        setSimulationWorkerActive(false);
+        worker.terminate();
+        setSimulationWorkerGeneration((generation) => generation + 1);
         return;
+      }
+      if (submission.kind === "recovery-initialize" || submission.kind === "recovery-advance" || submission.kind === "recovery-checkpoint") {
+        const recovery = simulationRecoveryRef.current;
+        if (!recovery || event.data.needsResync || typeof event.data.stateRevision !== "number") {
+          simulationRecoveryRef.current = null;
+          simulationWorkerDisabledRef.current = true;
+          simulationWorkerRef.current = null;
+          setSimulationWorkerActive(false);
+          worker.terminate();
+          const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
+          latestAuthoritativeCheckpointRef.current = stopped;
+          lastSimulationResultRef.current = stopped;
+          simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(stopped);
+          gameRef.current = stopped;
+          setGame(stopped);
+          setNotice("模拟 Worker 无法完成精确恢复，已回到最近检查点并暂停模拟");
+          return;
+        }
+        simulationStateRevisionRef.current = event.data.stateRevision;
+        if (submission.kind === "recovery-initialize") {
+          queueMicrotask(() => dispatchSimulationRecoveryRef.current());
+          return;
+        }
+        if (submission.kind === "recovery-advance") {
+          recovery.nextOperationIndex += 1;
+          queueMicrotask(() => dispatchSimulationRecoveryRef.current());
+          return;
+        }
+        if (!event.data.checkpoint) {
+          simulationRecoveryRef.current = null;
+          setNotice("模拟 Worker 恢复检查点缺失，已暂停等待手动保存");
+          setGame((current) => {
+            const stopped = setPaused(current, true);
+            gameRef.current = stopped;
+            return stopped;
+          });
+          return;
+        }
+        try {
+          const authoritative = deserializeSimulationStateTransfer(event.data.checkpoint);
+          const current = gameRef.current;
+          if (current !== recovery.desiredState) {
+            const laterCommand = createSimulationCommandPatch(recovery.desiredState, current, event.data.stateRevision);
+            latestAuthoritativeCheckpointRef.current = authoritative;
+            recovery.operations = [];
+            recovery.nextOperationIndex = 0;
+            recovery.confirmedView = recovery.desiredState;
+            recovery.desiredState = current;
+            recovery.finalCommand = laterCommand;
+            queueMicrotask(() => dispatchSimulationRecoveryRef.current());
+            return;
+          }
+          latestAuthoritativeCheckpointRef.current = authoritative;
+          simulationReplayJournalRef.current = [];
+          simulationRecoveryRef.current = null;
+          lastSimulationResultRef.current = authoritative;
+          simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(authoritative);
+          gameRef.current = authoritative;
+          setGame(authoritative);
+          setSimulationWorkerActive(true);
+          setNotice("模拟 Worker 已从精确检查点恢复，未完成时间已保留");
+          if (simulationCheckpointRequestRef.current) {
+            simulationCheckpointRequestRef.current.id = null;
+            queueMicrotask(() => dispatchSimulationCheckpointRef.current());
+          }
+        } catch {
+          simulationRecoveryRef.current = null;
+          const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
+          lastSimulationResultRef.current = stopped;
+          gameRef.current = stopped;
+          setGame(stopped);
+          setNotice("模拟 Worker 恢复数据校验失败，已回到最近检查点并暂停模拟");
+        }
+        return;
+      }
+      if (event.data.needsResync) {
+        if (!event.data.checkpoint || typeof event.data.stateRevision !== "number") {
+          simulationPendingSecondsRef.current += submission.simulationSeconds;
+          simulationPendingWallSecondsRef.current += submission.wallSeconds;
+          lastSimulationResultRef.current = null;
+          setSimulationWorkerGeneration((generation) => generation + 1);
+          return;
+        }
+        try {
+          const authoritative = deserializeSimulationStateTransfer(event.data.checkpoint);
+          simulationStateRevisionRef.current = event.data.stateRevision;
+          latestAuthoritativeCheckpointRef.current = authoritative;
+          simulationReplayJournalRef.current = [];
+          simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(authoritative);
+          lastSimulationResultRef.current = authoritative;
+          setGame((current) => {
+            const pending = createSimulationCommandPatch(submission.baseState, current, event.data.stateRevision!);
+            const next = pending ? applySimulationCommandPatch(authoritative, pending) : authoritative;
+            gameRef.current = next;
+            return next;
+          });
+        } catch {
+          lastSimulationResultRef.current = null;
+          setSimulationWorkerGeneration((generation) => generation + 1);
+        }
+        return;
+      }
+      if (submission.kind === "advance" && (submission.command || submission.simulationSeconds > 0 || submission.wallSeconds > 0)) {
+        simulationReplayJournalRef.current.push({
+          command: submission.command,
+          simulationSeconds: submission.simulationSeconds,
+          wallSeconds: submission.wallSeconds,
+          multicore: submission.multicore,
+          approximate: submission.approximate,
+          registry: submission.registry,
+        });
       }
       if (submission.state.timeWarp.enabled && typeof event.data.durationMs === "number") {
         const baseMultiplier = submission.state.settings.simulationSpeed;
@@ -2480,53 +2863,52 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         setTimeWarpPendingUi(simulationPendingSecondsRef.current);
       }
       setGame((current) => {
-        if (current !== submission.state) {
-          if (current.paused) {
-            // A pause is a hard simulation boundary. Drop an in-flight
-            // segment rather than turning it into paused-time debt.
-            simulationPendingSecondsRef.current = 0;
-            simulationPendingWallSecondsRef.current = 0;
-            return current;
-          }
-          simulationPendingSecondsRef.current += submission.simulationSeconds;
-          simulationPendingWallSecondsRef.current += submission.wallSeconds;
-          return current;
-        }
+        let confirmed = submission.state;
+        let projectionIndex = simulationProjectionIndexRef.current;
         if (!event.data.changed) {
-          lastSimulationResultRef.current = current;
           if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
-          return current;
-        }
-        if (event.data.delta) {
-          if (submission.baseStateRevision === null || event.data.delta.baseRevision !== simulationStateRevisionRef.current) {
+        } else if (event.data.delta) {
+          if (submission.baseStateRevision === null || event.data.delta.baseRevision !== submission.baseStateRevision) {
             simulationPendingSecondsRef.current += submission.simulationSeconds;
             simulationPendingWallSecondsRef.current += submission.wallSeconds;
             lastSimulationResultRef.current = null;
             return current;
           }
-          const next = applySimulationStateDelta(current, event.data.delta);
+          confirmed = applySimulationStateDelta(submission.state, event.data.delta);
           simulationStateRevisionRef.current = event.data.delta.nextRevision;
-          lastSimulationResultRef.current = next;
-          gameRef.current = next;
-          if (event.data.projection) {
-            pendingCanvasProjectionRef.current = mergeSimulationProjections(pendingCanvasProjectionRef.current, event.data.projection);
-          }
-          return next;
-        }
-        if (!event.data.state) {
+          projectionIndex = createSimulationProjectionStateIndex(confirmed);
+        } else if (event.data.state) {
+          confirmed = event.data.state;
+          if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
+          projectionIndex = createSimulationProjectionStateIndex(confirmed);
+        } else if (event.data.projection) {
+          const applied = applySimulationProjectionToState(submission.state, event.data.projection, projectionIndex);
+          confirmed = applied.state;
+          projectionIndex = applied.index;
+          const canvasProjection = hydrateSimulationProjection(event.data.projection, confirmed, projectionIndex);
+          pendingCanvasProjectionRef.current = mergeSimulationProjections(pendingCanvasProjectionRef.current, canvasProjection);
+          if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
+        } else if (!event.data.commandApplied) {
           simulationPendingSecondsRef.current += submission.simulationSeconds;
           simulationPendingWallSecondsRef.current += submission.wallSeconds;
           lastSimulationResultRef.current = null;
           return current;
         }
-        if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
-        lastSimulationResultRef.current = event.data.state;
-        gameRef.current = event.data.state;
-        if (event.data.projection) {
-          pendingCanvasProjectionRef.current = mergeSimulationProjections(pendingCanvasProjectionRef.current, event.data.projection);
-        }
-        return event.data.state;
+        simulationProjectionIndexRef.current = projectionIndex;
+        lastSimulationResultRef.current = confirmed;
+        // Commands made while the Worker was advancing are rebased onto the
+        // acknowledged projection. The already-completed simulation slice is
+        // never submitted twice, including when the command was Pause.
+        const pending = current === submission.state
+          ? null
+          : createSimulationCommandPatch(submission.state, current, simulationStateRevisionRef.current);
+        const next = pending ? applySimulationCommandPatch(confirmed, pending) : confirmed;
+        gameRef.current = next;
+        return next;
       });
+      if (simulationCheckpointBarrierRef.current) {
+        queueMicrotask(() => dispatchSimulationCheckpointRef.current());
+      }
     };
     worker.onerror = () => {
       const submission = simulationSubmissionRef.current;
@@ -2534,16 +2916,97 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         abortPureIdleForWorkerFailure("模拟 Worker 异常，纯挂机已安全停止；未完成预算没有计入收益");
         return;
       }
+      const existingRecovery = simulationRecoveryRef.current;
+      if (existingRecovery) {
+        simulationSubmissionRef.current = null;
+        simulationWorkerRef.current = null;
+        setSimulationWorkerActive(false);
+        worker.terminate();
+        existingRecovery.attempts += 1;
+        existingRecovery.nextOperationIndex = 0;
+        if (existingRecovery.attempts <= 2) {
+          simulationWorkerDisabledRef.current = false;
+          setSimulationWorkerGeneration((generation) => generation + 1);
+          return;
+        }
+        simulationRecoveryRef.current = null;
+        simulationWorkerDisabledRef.current = true;
+        const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
+        lastSimulationResultRef.current = stopped;
+        simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(stopped);
+        gameRef.current = stopped;
+        setGame(stopped);
+        setNotice("模拟 Worker 连续恢复失败，已回到最近精确检查点并暂停模拟");
+        return;
+      }
       if (submission) {
         simulationPendingSecondsRef.current += submission.simulationSeconds;
         simulationPendingWallSecondsRef.current += submission.wallSeconds;
       }
+      const confirmedView = lastSimulationResultRef.current ?? latestAuthoritativeCheckpointRef.current;
+      const desiredState = gameRef.current;
+      simulationRecoveryRef.current = {
+        operations: [...simulationReplayJournalRef.current],
+        nextOperationIndex: 0,
+        confirmedView,
+        desiredState,
+        finalCommand: createSimulationCommandPatch(confirmedView, desiredState, 0),
+        attempts: 0,
+      };
+      const checkpointRequest = simulationCheckpointRequestRef.current;
+      if (checkpointRequest) checkpointRequest.id = null;
+      simulationSubmissionRef.current = null;
+      simulationWorkerDisabledRef.current = false;
+      simulationWorkerRef.current = null;
+      lastSimulationResultRef.current = null;
+      setSimulationWorkerActive(false);
+      worker.terminate();
+      setNotice("模拟 Worker 异常，正在从精确检查点恢复；未完成时间不会丢失");
+      setSimulationWorkerGeneration((generation) => generation + 1);
+    };
+    try {
+      const recovering = Boolean(simulationRecoveryRef.current);
+      const initialState = recovering ? latestAuthoritativeCheckpointRef.current : gameRef.current;
+      const registrySnapshot = contentPackRuntimeSnapshotRef.current;
+      const stateTransfer = serializeSimulationStateForTransfer(initialState);
+      const request: SimulationWorkerRequest = {
+        id: simulationRequestIdRef.current + 1,
+        kind: "advance",
+        stateTransfer,
+        simulationSeconds: 0,
+        wallSeconds: 0,
+        registryFingerprint: registrySnapshot.fingerprint,
+        registry: registrySnapshot,
+        protocol: "projection",
+        stateRevision: 0,
+      };
+      simulationRequestIdRef.current = request.id;
+      lastSimulationResultRef.current = null;
+      simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(initialState);
+      simulationSubmissionRef.current = {
+        id: request.id,
+        kind: recovering ? "recovery-initialize" : "initialize",
+        baseState: initialState,
+        state: initialState,
+        command: null,
+        simulationSeconds: 0,
+        wallSeconds: 0,
+        registryFingerprint: registrySnapshot.fingerprint,
+        registry: registrySnapshot,
+        baseStateRevision: null,
+        submittedAt: performance.now(),
+        requestBytes: stateTransfer.byteLength,
+        multicore: undefined,
+        approximate: false,
+      };
+      worker.postMessage(request, [stateTransfer.buffer]);
+    } catch {
       simulationSubmissionRef.current = null;
       simulationWorkerDisabledRef.current = true;
       simulationWorkerRef.current = null;
       setSimulationWorkerActive(false);
       worker.terminate();
-    };
+    }
     return () => {
       worker.terminate();
       simulationWorkerRef.current = null;
@@ -2844,6 +3307,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       simulationPendingSecondsRef.current = nextPendingSimulationSeconds;
       simulationPendingWallSecondsRef.current = accumulatedBudget.wallSeconds;
       if (timeWarpLimits) setTimeWarpPendingUi(simulationPendingSecondsRef.current);
+      // Checkpoints are an ordered save barrier. Wall/simulation budget keeps
+      // accumulating, but no later advance may overtake the serialized state.
+      if (simulationCheckpointBarrierRef.current) return;
       const worker = simulationWorkerRef.current;
       if (worker && !simulationWorkerDisabledRef.current) {
         if (simulationSubmissionRef.current) return;
@@ -2859,30 +3325,46 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         simulationPendingSecondsRef.current = budget.remainingSimulationSeconds;
         simulationPendingWallSecondsRef.current = budget.remainingWallSeconds;
         const mainState = gameRef.current;
+        const confirmedState = lastSimulationResultRef.current;
+        if (!confirmedState) {
+          simulationPendingSecondsRef.current += simulationSeconds;
+          simulationPendingWallSecondsRef.current += pendingWallSeconds;
+          setSimulationWorkerGeneration((generation) => generation + 1);
+          return;
+        }
+        const command = createSimulationCommandPatch(confirmedState, mainState, simulationStateRevisionRef.current);
         const registrySnapshot = contentPackRuntimeSnapshotRef.current;
+        const protocol = experimentalSimulationDeltaRef.current && !command ? "delta" : "projection";
         const request: SimulationWorkerRequest = {
           id: simulationRequestIdRef.current + 1,
-          ...(mainState !== lastSimulationResultRef.current ? { state: mainState } : {}),
+          kind: "advance",
+          ...(command ? { command } : {}),
           simulationSeconds,
           wallSeconds: pendingWallSeconds,
           profile: performanceMonitor.isActive(),
           registryFingerprint: registrySnapshot.fingerprint,
-          protocol: experimentalSimulationDeltaRef.current ? "delta" : "full",
+          protocol,
           multicore: multicoreSimulationOptionsRef.current,
           approximate: currentState.timeWarp.enabled && timeWarpLimits?.computeMode === "approximate",
-          ...(experimentalSimulationDeltaRef.current ? { stateRevision: simulationStateRevisionRef.current } : {}),
+          stateRevision: simulationStateRevisionRef.current,
           ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
         };
         simulationRequestIdRef.current = request.id;
         simulationSubmissionRef.current = {
           id: request.id,
+          kind: "advance",
+          baseState: confirmedState,
           state: mainState,
+          command,
           simulationSeconds,
           wallSeconds: pendingWallSeconds,
           registryFingerprint: registrySnapshot.fingerprint,
-          baseStateRevision: mainState === lastSimulationResultRef.current && experimentalSimulationDeltaRef.current ? simulationStateRevisionRef.current : null,
+          registry: registrySnapshot,
+          baseStateRevision: simulationStateRevisionRef.current,
           submittedAt: performance.now(),
           requestBytes: performanceMonitor.isActive() ? serializedPayloadBytes(request) : 0,
+          multicore: request.multicore,
+          approximate: request.approximate === true,
         };
         try {
           worker.postMessage(request);
@@ -2891,19 +3373,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             abortPureIdleForWorkerFailure("模拟 Worker 无法接收任务，纯挂机已安全停止；未完成预算没有计入收益");
             return;
           }
-          simulationSubmissionRef.current = null;
-          simulationWorkerDisabledRef.current = true;
-          simulationWorkerRef.current = null;
-          setSimulationWorkerActive(false);
-          worker.terminate();
-          setGame((current) => {
-            const profiler = performanceMonitor.isActive() ? createSimulationProfiler() : undefined;
-            const startedAt = profiler ? performance.now() : 0;
-            const next = advanceSimulationBudget(current, simulationSeconds, pendingWallSeconds, profiler);
-            if (profiler) performanceMonitor.recordWorker({ durationMs: performance.now() - startedAt, latencyMs: 0, pendingTaskMs: 0, profiler });
-            lastSimulationResultRef.current = next;
-            return next;
-          });
+          // Reuse the exact checkpoint+journal recovery path. Falling back to
+          // the projected UI mirror would overwrite stale off-planet fields.
+          worker.dispatchEvent(new ErrorEvent("error", { message: "模拟 Worker 无法接收任务" }));
         }
         return;
       }
@@ -2941,7 +3413,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const saveBeforeUnload = () => {
       if (lifecycleSaveStarted) return;
       lifecycleSaveStarted = true;
-      saveGame(stateWithSimulationDebt(gameRef.current), { emergencyMirror: true });
+      // A synchronous lifecycle hook cannot wait for a Worker barrier. Keep
+      // the emergency mirror internally exact by using the latest completed
+      // checkpoint; the normal hidden/native handlers above request a fresh
+      // authoritative checkpoint asynchronously.
+      saveGame(stateWithSimulationDebt(latestAuthoritativeCheckpointRef.current), { emergencyMirror: true });
     };
     const saveWhenHidden = () => { if (document.visibilityState === "hidden") saveNow(); };
     const saveWhenNativeInactive = (event: Event) => {
@@ -2963,7 +3439,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       // that mirror stale and manufacture a conflict on reload.
       const controlledCommit = controlledReturnCommitRef.current;
       if (!lifecycleSaveStarted && (!controlledCommit || !isCurrentPrimarySaveSource(controlledCommit))) {
-        saveGame(stateWithSimulationDebt(gameRef.current));
+        saveGame(stateWithSimulationDebt(latestAuthoritativeCheckpointRef.current));
       }
     };
   }, [game.settings.autosaveIntervalSeconds, isCurrentPrimarySaveSource, persistPrimarySave, stateWithSimulationDebt]);
@@ -2983,8 +3459,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         if (session.status !== "authenticated" || !session.user) return;
         syncUserId = session.user.id;
         syncRevision = session.cloudSave?.revision ?? null;
+        const authoritativeState = await requestAuthoritativeSimulationCheckpoint();
         const prepared = await serializeEnvelopeInWorker(
-          stateWithSimulationDebt(gameRef.current),
+          authoritativeState,
           Date.now(),
           "primary",
           undefined,
@@ -3032,7 +3509,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       active = false;
       window.clearInterval(timer);
     };
-  }, [stateWithSimulationDebt]);
+  }, [requestAuthoritativeSimulationCheckpoint]);
 
   useEffect(() => {
     const syncAccount = () => {
@@ -3774,6 +4251,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const restoreGame = useCallback((state: GameState, report: OfflineReport | null = null) => {
     onMiningStop();
+    simulationWorkerRef.current?.terminate();
+    simulationWorkerRef.current = null;
+    simulationWorkerDisabledRef.current = false;
+    simulationSubmissionRef.current = null;
+    lastSimulationResultRef.current = null;
+    simulationStateRevisionRef.current = 0;
+    simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(state);
+    latestAuthoritativeCheckpointRef.current = state;
+    simulationReplayJournalRef.current = [];
+    simulationRecoveryRef.current = null;
+    setSimulationWorkerActive(false);
+    setSimulationWorkerGeneration((generation) => generation + 1);
     simulationPendingSecondsRef.current = state.timeWarp.pendingSimulationSeconds;
     simulationPendingWallSecondsRef.current = state.timeWarp.pendingWallSeconds;
     gameRef.current = state;
@@ -4220,26 +4709,25 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     // waits for the durable exact read-back. Running the synchronous save first
     // duplicated serialization, migration, and IndexedDB writes for large
     // factories and could replace the true previous backup with the new state.
-    const state = stateWithSimulationDebt(gameRef.current);
-    const result = await persistPrimarySave(state);
+    const result = await persistPrimarySave();
     void refreshSaveData();
     setNotice(result.message);
     playTone(result.success ? "confirm" : "alert");
-  }, [persistPrimarySave, playTone, refreshSaveData, stateWithSimulationDebt]);
+  }, [persistPrimarySave, playTone, refreshSaveData]);
 
   const downloadSave = useCallback(() => {
-    void exportTextFile({
-      contents: exportGame(gameRef.current),
+    void requestAuthoritativeSimulationCheckpoint().then((state) => exportTextFile({
+      contents: exportGame(state),
       fileName: `dsp-idle-save-${new Date().toISOString().slice(0, 10)}.json`,
       title: "导出当前游戏存档",
-    }).then(() => {
+    })).then(() => {
       setNotice("存档 JSON 已导出");
       playTone("confirm");
     }).catch((error) => {
       setNotice(error instanceof Error ? `存档导出失败：${error.message}` : "存档导出失败");
       playTone("alert");
     });
-  }, [playTone]);
+  }, [playTone, requestAuthoritativeSimulationCheckpoint]);
 
   const importSave = useCallback(async (raw: string) => {
     const generation = ++saveImportInspectionGenerationRef.current;
@@ -4285,7 +4773,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       playTone("alert");
       return;
     }
-    await saveGameSnapshotVerified(gameRef.current, "导入外部存档前");
+    await saveGameSnapshotVerified(await requestAuthoritativeSimulationCheckpoint(), "导入外部存档前");
     const result = await persistPrimarySave(pendingImportState);
     if (!result.success) {
       setNotice(result.message);
@@ -4300,7 +4788,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setImportRescueArmed(false);
     setNotice("存档导入完成，已自动创建回滚快照");
     playTone("complete");
-  }, [pendingImportState, persistPrimarySave, playTone, refreshSaveData, restoreGame]);
+  }, [pendingImportState, persistPrimarySave, playTone, refreshSaveData, requestAuthoritativeSimulationCheckpoint, restoreGame]);
 
   const confirmImportRescue = useCallback(() => {
     if (!importPreview?.repairable || importPreview.valid || !pendingImportRaw) return;
@@ -4325,7 +4813,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       fileName: `dsp-idle-save-rescue-backup-${new Date().toISOString().slice(0, 10)}.json`,
       title: "备份救援前的原始异常存档",
     }).then(async () => {
-      await saveGameSnapshotVerified(gameRef.current, "救援外部存档前");
+      await saveGameSnapshotVerified(await requestAuthoritativeSimulationCheckpoint(), "救援外部存档前");
       const result = await persistPrimarySave(repaired.inspection.state!);
       if (!result.success) {
         setNotice(result.message);
@@ -4344,7 +4832,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setNotice(error instanceof Error ? `原始存档备份失败：${error.message}` : "原始存档备份失败，未执行救援");
       playTone("alert");
     });
-  }, [importPreview, importRescueArmed, pendingImportRaw, persistPrimarySave, playTone, refreshSaveData, restoreGame]);
+  }, [importPreview, importRescueArmed, pendingImportRaw, persistPrimarySave, playTone, refreshSaveData, requestAuthoritativeSimulationCheckpoint, restoreGame]);
 
   const restoreCloudSave = useCallback(async (raw: string): Promise<{ success: boolean; message: string }> => {
     const inspection = await inspectSaveInWorker(raw);
@@ -4368,7 +4856,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         message: `云存档属于${inspection.mode === "speedrun" ? "速通" : "普通"}模式，不能覆盖当前${gameRef.current.mode === "speedrun" ? "速通" : "普通"}工厂`,
       };
     }
-    await saveGameSnapshotVerified(gameRef.current, "恢复云存档前");
+    await saveGameSnapshotVerified(await requestAuthoritativeSimulationCheckpoint(), "恢复云存档前");
     const result = await persistPrimarySave(inspection.state);
     if (!result.success) {
       playTone("alert");
@@ -4378,14 +4866,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     refreshSaveData();
     playTone("complete");
     return { success: true, message: "云存档已恢复，原工厂已保留为本地快照" };
-  }, [persistPrimarySave, playTone, refreshSaveData, restoreGame]);
+  }, [persistPrimarySave, playTone, refreshSaveData, requestAuthoritativeSimulationCheckpoint, restoreGame]);
 
   const saveToSlot = useCallback(async (slotId: SaveSlotId) => {
-    const result = await saveGameSlotVerified(slotId, gameRef.current);
+    const result = await saveGameSlotVerified(slotId, await requestAuthoritativeSimulationCheckpoint());
     refreshSaveData();
     setNotice(result.message);
     playTone(result.success ? "confirm" : "alert");
-  }, [playTone, refreshSaveData]);
+  }, [playTone, refreshSaveData, requestAuthoritativeSimulationCheckpoint]);
 
   const loadFromSlot = useCallback(async (slotId: SaveSlotId) => {
     const slot = loadGameSlot(slotId, gameRef.current.mode);
@@ -4412,11 +4900,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [refreshSaveData]);
 
   const createSnapshot = useCallback(async () => {
-    const snapshot = await saveGameSnapshotVerified(gameRef.current, "手动快照");
+    const snapshot = await saveGameSnapshotVerified(await requestAuthoritativeSimulationCheckpoint(), "手动快照");
     refreshSaveData();
     setNotice(snapshot ? "手动快照已创建" : "快照创建失败：本地存储空间不足");
     playTone(snapshot ? "confirm" : "alert");
-  }, [playTone, refreshSaveData]);
+  }, [playTone, refreshSaveData, requestAuthoritativeSimulationCheckpoint]);
 
   const addSecondUnipolarVein = useCallback(async () => {
     if (unipolarExpansionBusy) return;
@@ -4520,7 +5008,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     saveContentPackRegistry(registry);
     contentPackRuntimeSnapshotRef.current = createContentPackRuntimeSnapshot(registry);
     simulationWorkerRegistryFingerprintRef.current = null;
-    lastSimulationResultRef.current = null;
     setContentPackRegistry(registry);
     // Re-render catalog-driven panels after the live registry changes.
     const contentPacks = getActiveContentPackReferences(registry);

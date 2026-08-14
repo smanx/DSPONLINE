@@ -106,9 +106,14 @@ test("running simulation that advances during return receives one final cleanup 
       revision: store.getPrimaryLocalSaveRevision(),
       primaryElapsed: JSON.parse(raw).state.elapsedSeconds as number,
       backupElapsed: JSON.parse(backup).state.elapsedSeconds as number,
+      primaryPending: JSON.parse(raw).state.timeWarp.pendingSimulationSeconds as number,
+      backupPending: JSON.parse(backup).state.timeWarp.pendingSimulationSeconds as number,
     };
   }, { saveKey: SAVE_KEY, backupKey: BACKUP_KEY });
 
   expect(after.revision).toBe(before.revision + 2);
-  expect(after.primaryElapsed).toBeGreaterThan(after.backupElapsed);
+  // 1.0.44 holds a Worker checkpoint barrier during the verified write.
+  // Wall time accumulated behind that barrier is persisted as exact scheduler
+  // debt instead of synchronously advancing a large state on the main thread.
+  expect(after.primaryElapsed + after.primaryPending).toBeGreaterThan(after.backupElapsed + after.backupPending);
 });
