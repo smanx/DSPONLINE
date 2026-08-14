@@ -10,6 +10,7 @@ export const CONNECTION_HIT_AREA_PREFERENCE_KEY = "dsp-idle-network.ui.connectio
 export const SPEEDRUN_PANEL_COLLAPSED_PREFERENCE_KEY = "dsp-idle-network.ui.speedrun-panel-collapsed.v1";
 export const DEFAULT_BELT_LANES_PREFERENCE_KEY = "dsp-idle-network.ui.default-belt-lanes.v1";
 export const CONNECT_EXPAND_ALL_PREFERENCE_KEY = "dsp-idle-network.ui.connect-expand-all.v1";
+export const FULL_REALTIME_SIMULATION_PREFERENCE_KEY = "dsp-idle-network.full-realtime-simulation.v1";
 
 export type SettingsCategory = "all" | "visual" | "performance" | "interaction" | "storage" | "statistics" | "other";
 export type ConnectionPointSize = "default" | "large25" | "large50";
@@ -169,6 +170,23 @@ export function writeConnectExpandAllPreference(enabled: boolean): void {
   const storage = localStorageOrNull();
   if (!storage) return;
   try { storage.setItem(CONNECT_EXPAND_ALL_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
+}
+
+/** Include history and all planning payloads in every live Worker projection. */
+export function readFullRealtimeSimulationPreference(): boolean {
+  const storage = localStorageOrNull();
+  if (!storage) return false;
+  try {
+    return storage.getItem(FULL_REALTIME_SIMULATION_PREFERENCE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeFullRealtimeSimulationPreference(enabled: boolean): void {
+  const storage = localStorageOrNull();
+  if (!storage) return;
+  try { storage.setItem(FULL_REALTIME_SIMULATION_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
 }
 
 /** The speedrun panel is expanded by default and is never part of a save. */

@@ -387,7 +387,7 @@ import {
   setCanvasPointerEdgeVelocity,
   stopCanvasPointerMotion as stopCanvasPointerMotionSession,
 } from "./hooks/canvasPointerMotion";
-import { readConnectExpandAllPreference, readConnectionHitArea, readConnectionPointSize, readDefaultBeltLanesPreference, readShowItemHoverPreference, readShowRunLogPreference, readThemePreference, writeConnectExpandAllPreference, writeConnectionHitArea, writeConnectionPointSize, writeDefaultBeltLanesPreference, writeShowItemHoverPreference, writeShowRunLogPreference, writeThemePreference, type ConnectionHitArea, type ConnectionPointSize } from "./game/uiPreferences";
+import { readConnectExpandAllPreference, readConnectionHitArea, readConnectionPointSize, readDefaultBeltLanesPreference, readFullRealtimeSimulationPreference, readShowItemHoverPreference, readShowRunLogPreference, readThemePreference, writeConnectExpandAllPreference, writeConnectionHitArea, writeConnectionPointSize, writeDefaultBeltLanesPreference, writeFullRealtimeSimulationPreference, writeShowItemHoverPreference, writeShowRunLogPreference, writeThemePreference, type ConnectionHitArea, type ConnectionPointSize } from "./game/uiPreferences";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -817,6 +817,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
   const [connectExpandAll, setConnectExpandAll] = useState(readConnectExpandAllPreference);
   useEffect(() => { writeConnectExpandAllPreference(connectExpandAll); }, [connectExpandAll]);
+  const [fullRealtimeSimulation, setFullRealtimeSimulation] = useState(readFullRealtimeSimulationPreference);
+  useEffect(() => { writeFullRealtimeSimulationPreference(fullRealtimeSimulation); }, [fullRealtimeSimulation]);
   const [showRunLog, setShowRunLog] = useState(readShowRunLogPreference);
   const [showItemHover, setShowItemHover] = useState(readShowItemHoverPreference);
   useEffect(() => { writeShowItemHoverPreference(showItemHover); }, [showItemHover]);
@@ -1040,7 +1042,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const simulationStateRevisionRef = useRef(0);
   const simulationProjectionIndexRef = useRef<SimulationProjectionStateIndex>(createSimulationProjectionStateIndex(loaded.state));
   const simulationProjectionScopeRef = useRef<"default" | "full-top-level">("default");
-  simulationProjectionScopeRef.current = statisticsOpen || dysonPlannerOpen ? "full-top-level" : "default";
+  simulationProjectionScopeRef.current = fullRealtimeSimulation || statisticsOpen || dysonPlannerOpen ? "full-top-level" : "default";
   const simulationCheckpointBarrierRef = useRef(false);
   const simulationSaveBarrierDepthRef = useRef(0);
   const simulationCheckpointRequestRef = useRef<{
@@ -7387,6 +7389,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-connection-hit-area={connectionHitArea}
       data-connection-hit-diameter={connectionHitDiameter}
       data-connect-expand-all={connectExpandAll ? "true" : "false"}
+      data-full-realtime-simulation={fullRealtimeSimulation ? "true" : "false"}
       data-connection-active={connectionDraft ? "true" : "false"}
       data-connection-candidate-node={connectionCandidateNodeId ?? "none"}
       data-connection-full-logical-count={connectionFullLogicalCount}
@@ -8704,6 +8707,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             productionRefreshIntervalMs={productionRefreshIntervalMs}
             endgameExtremeMode={endgameExtremeMode}
             connectExpandAll={connectExpandAll}
+            fullRealtimeSimulation={fullRealtimeSimulation}
             canvasPerformanceFeatures={canvasPerformanceFeatures}
             lineFindMode={lineFindMode}
             connectionPointSize={connectionPointSize}
@@ -8713,6 +8717,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             showItemHover={showItemHover}
             onEndgameExtremeModeChange={toggleEndgameExtremeMode}
             onConnectExpandAllChange={setConnectExpandAll}
+            onFullRealtimeSimulationChange={setFullRealtimeSimulation}
             onCanvasPerformanceFeatureChange={updateCanvasPerformanceFeature}
             onLineFindModeChange={setLineFindMode}
             onConnectionPointSizeChange={setConnectionPointSize}

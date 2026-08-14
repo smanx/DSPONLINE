@@ -3,6 +3,7 @@ import { createInitialState, placeBuilding } from "../../src/game/engine";
 import { selectSettingsCategory } from "./settings-helpers";
 
 const CONNECT_EXPAND_ALL_KEY = "dsp-idle-network.ui.connect-expand-all.v1";
+const FULL_REALTIME_SIMULATION_KEY = "dsp-idle-network.full-realtime-simulation.v1";
 
 async function seedAnonymousCanvas(page: Page, storageCount: number, preference?: string, extreme = false) {
   let state = createInitialState(44_144, false);
@@ -205,9 +206,36 @@ for (const scenario of [
 }
 
 test("device-only expand-all preference is strict, persistent, accessible, and active-planet-only", async ({ page }) => {
+  await page.addInitScript((fullRealtimeKey) => {
+    if (window.sessionStorage.getItem("dsp-idle-network.v144-full-realtime-seeded") !== "1") {
+      window.localStorage.setItem(fullRealtimeKey, "damaged-value");
+      window.sessionStorage.setItem("dsp-idle-network.v144-full-realtime-seeded", "1");
+    }
+    const tracker: { scopes: string[] } = { scopes: [] };
+    (window as typeof window & { __v144ProjectionScopes?: typeof tracker }).__v144ProjectionScopes = tracker;
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args) as Worker;
+        if (!String(args[0]).includes("simulation.worker")) return worker;
+        const nativePostMessage = worker.postMessage.bind(worker);
+        worker.postMessage = ((message: Record<string, unknown>, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
+          if (message.kind === "advance") tracker.scopes.push(String(message.projectionScope ?? "default"));
+          if (transferOrOptions === undefined) nativePostMessage(message);
+          else nativePostMessage(message, transferOrOptions);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+  }, FULL_REALTIME_SIMULATION_KEY);
   await seedAnonymousCanvas(page, 24, "damaged-value");
   const shell = page.locator(".game-shell");
   await expect(shell).toHaveAttribute("data-connect-expand-all", "false");
+  await expect(shell).toHaveAttribute("data-full-realtime-simulation", "false");
+  await expect.poll(() => page.evaluate(() => (
+    window as typeof window & { __v144ProjectionScopes?: { scopes: string[] } }
+  ).__v144ProjectionScopes?.scopes.includes("default") ?? false)).toBe(true);
 
   await page.getByLabel("打开设置").click();
   const operations = page.locator(".operations-workspace");
@@ -219,17 +247,30 @@ test("device-only expand-all preference is strict, persistent, accessible, and a
   await expect(operations.getByRole("alert").filter({ hasText: "超大工厂连线时可能" })).toBeVisible();
   await expect(shell).toHaveAttribute("data-connect-expand-all", "true");
   expect(await page.evaluate((key) => window.localStorage.getItem(key), CONNECT_EXPAND_ALL_KEY)).toBe("true");
+  const realtimeToggle = operations.locator("label.setting-row").filter({ hasText: "完整实时刷新" });
+  await expect(realtimeToggle.getByRole("checkbox")).not.toBeChecked();
+  await realtimeToggle.getByRole("checkbox").evaluate((input: HTMLInputElement) => input.click());
+  await expect(realtimeToggle.getByRole("checkbox")).toBeChecked();
+  await expect(shell).toHaveAttribute("data-full-realtime-simulation", "true");
+  await page.getByLabel("继续模拟").click();
+  await expect.poll(() => page.evaluate(() => (
+    window as typeof window & { __v144ProjectionScopes?: { scopes: string[] } }
+  ).__v144ProjectionScopes?.scopes.includes("full-top-level") ?? false), { timeout: 5_000 }).toBe(true);
+  await page.getByLabel("暂停模拟").click();
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), FULL_REALTIME_SIMULATION_KEY)).toBe("true");
 
   await selectSettingsCategory(operations, "画面与主题", "visual");
   await operations.getByRole("button", { name: "English", exact: true }).click();
   await operations.locator(".settings-category-tabs").getByRole("button", { name: "Endgame Performance", exact: true }).click();
   const englishToggle = operations.locator("label.setting-row").filter({ hasText: "Expand every building while connecting" });
   await expect(englishToggle.getByRole("checkbox")).toBeChecked();
+  await expect(operations.locator("label.setting-row").filter({ hasText: "Full realtime refresh" }).getByRole("checkbox")).toBeChecked();
   await expect(operations.getByRole("alert").filter({ hasText: "very large factories may pause or stutter" })).toBeVisible();
 
   await page.locator(".header-settings-command").click();
   await page.reload();
   await expect(shell).toHaveAttribute("data-connect-expand-all", "true");
+  await expect(shell).toHaveAttribute("data-full-realtime-simulation", "true");
   const ids = await storageIds(page);
   await page.locator(`.react-flow__node[data-id="${ids[0]}"] .factory-handle--output`).first().click({ force: true });
   await expect(shell).toHaveAttribute("data-connection-active", "true");
@@ -256,6 +297,8 @@ test("device-only expand-all preference is strict, persistent, accessible, and a
       primaryBytes: new TextEncoder().encode(primaryValue).byteLength,
       hasGameStateField: primaryValue.includes("connectExpandAll"),
       serializedStateMentionsPreference: primaryValue.includes("connect-expand-all"),
+      hasFullRealtimeStateField: primaryValue.includes("fullRealtimeSimulation"),
+      serializedStateMentionsFullRealtimePreference: primaryValue.includes("full-realtime-simulation"),
     };
   });
   expect(counts.total).toBeGreaterThan(counts.active);
@@ -263,6 +306,8 @@ test("device-only expand-all preference is strict, persistent, accessible, and a
   expect(Number(await shell.getAttribute("data-connection-full-logical-count"))).toBe(counts.active);
   expect(counts.hasGameStateField).toBe(false);
   expect(counts.serializedStateMentionsPreference).toBe(false);
+  expect(counts.hasFullRealtimeStateField).toBe(false);
+  expect(counts.serializedStateMentionsFullRealtimePreference).toBe(false);
   await page.keyboard.press("Escape");
 });
 
