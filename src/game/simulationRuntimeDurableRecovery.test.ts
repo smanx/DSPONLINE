@@ -11,6 +11,7 @@ import {
   getSimulationRuntimeDurableJournalStats,
   iterateSimulationRuntimeDurablePassiveReplay,
   validateSimulationRuntimeDurableCheckpointCadence,
+  validateSimulationRuntimeDurableJournalEntryDigests,
   validateSimulationRuntimeDurableRecoveryRecord,
   type SimulationRuntimeDurableCheckpoint,
   type SimulationRuntimeDurableOperationIntent,
@@ -115,6 +116,23 @@ describe("durable simulation runtime recovery contract", () => {
         ],
       },
     });
+    expect(await validateSimulationRuntimeDurableJournalEntryDigests(entries)).toBeNull();
+
+    const aggregate = structuredClone(entries) as unknown as SimulationRuntimeDurableRecoveryRecord["entries"];
+    if (aggregate[0]?.kind === "passive-segment") {
+      aggregate[0].replay = { kind: "aggregate", simulationSeconds: 16, wallSeconds: 16 } as never;
+    }
+    expect(validateSimulationRuntimeDurableRecoveryRecord({ checkpoint: primaryCheckpoint(), entries: aggregate }))
+      .toBe("invalid-passive-segment");
+  });
+
+  it("cryptographically rejects a one-field RLE segment mutation", async () => {
+    const entries = await finalizeSimulationRuntimeDurableRecoveryIntent([], await intent(1), 1);
+    expect(await validateSimulationRuntimeDurableJournalEntryDigests(entries)).toBeNull();
+    const corrupted = structuredClone(entries);
+    if (corrupted[0]?.kind === "passive-segment") corrupted[0].replay.steps[0].wallSeconds += 0.001;
+    expect(validateSimulationRuntimeDurableRecoveryRecord({ checkpoint: primaryCheckpoint(), entries: corrupted })).toBeNull();
+    expect(await validateSimulationRuntimeDurableJournalEntryDigests(corrupted)).toBe("passive-segment-digest-mismatch");
   });
 
   it("keeps commands atomic, exposes the soft barrier, and enforces the hard entry bound", async () => {
@@ -187,14 +205,37 @@ describe("durable simulation runtime recovery contract", () => {
       lastTransferEncoding: "gzip",
     });
     expect(validateSimulationRuntimeDurableCheckpointCadence(cadence, first, startedAt + 60_000)).toBe("transfer-checkpoint-too-frequent");
-    const secondCadence = advanceSimulationRuntimeDurableCheckpointCadence(cadence, first, startedAt + 5 * 60_000);
+    expect(validateSimulationRuntimeDurableCheckpointCadence(cadence, first, startedAt + 29 * 60_000 + 59_000))
+      .toBe("transfer-checkpoint-too-frequent");
+    const secondCadence = advanceSimulationRuntimeDurableCheckpointCadence(cadence, first, startedAt + 30 * 60_000);
     expect(secondCadence.gzipBytesInWindow).toBe(SIMULATION_RUNTIME_DURABLE_RECOVERY_GZIP_BYTES_PER_HOUR);
-    expect(validateSimulationRuntimeDurableCheckpointCadence(secondCadence, metadataCheckpoint("gzip", 1), startedAt + 10 * 60_000))
+    expect(validateSimulationRuntimeDurableCheckpointCadence(secondCadence, metadataCheckpoint("gzip", 1), startedAt + 35 * 60_000))
       .toBe("gzip-hourly-byte-budget-exceeded");
 
     const raw = metadataCheckpoint("raw", SIMULATION_RUNTIME_DURABLE_RECOVERY_RAW_BYTES_PER_HOUR);
     const rawCadence = advanceSimulationRuntimeDurableCheckpointCadence(null, raw, startedAt);
     expect(validateSimulationRuntimeDurableCheckpointCadence(rawCadence, metadataCheckpoint("raw", 1), startedAt + 5 * 60_000))
       .toBe("raw-hourly-byte-budget-exceeded");
+
+    const boundaryStart = startedAt + 59 * 60_000 + 59_000;
+    const boundaryCadence = advanceSimulationRuntimeDurableCheckpointCadence(null,
+      metadataCheckpoint("gzip", SIMULATION_RUNTIME_DURABLE_RECOVERY_GZIP_BYTES_PER_HOUR), boundaryStart);
+    expect(validateSimulationRuntimeDurableCheckpointCadence(
+      boundaryCadence,
+      metadataCheckpoint("gzip", SIMULATION_RUNTIME_DURABLE_RECOVERY_GZIP_BYTES_PER_HOUR),
+      boundaryStart + 2_000,
+    )).toBe("transfer-checkpoint-too-frequent");
+
+    const afterPrimaryRebase = advanceSimulationRuntimeDurableCheckpointCadence(
+      boundaryCadence,
+      primaryCheckpoint(),
+      boundaryStart + 1_000,
+    );
+    expect(afterPrimaryRebase.lastTransferAtMs).toBe(boundaryStart);
+    expect(validateSimulationRuntimeDurableCheckpointCadence(
+      afterPrimaryRebase,
+      metadataCheckpoint("gzip", SIMULATION_RUNTIME_DURABLE_RECOVERY_GZIP_BYTES_PER_HOUR),
+      boundaryStart + 2_000,
+    )).toBe("transfer-checkpoint-too-frequent");
   });
 });

@@ -114,6 +114,8 @@ export interface SimulationRuntimeDurablePassiveSegment {
   digestChainSha256: string;
   tailIntentSha256: string;
   committedAtMs: number;
+  /** SHA-256 of every canonical segment field except this digest itself. */
+  segmentSha256: string;
 }
 
 export type SimulationRuntimeDurableJournalEntry =
@@ -142,6 +144,8 @@ export interface SimulationRuntimeDurableJournalStats {
 export interface SimulationRuntimeDurableCheckpointCadence {
   windowStartedAtMs: number;
   lastTransferAtMs: number;
+  transferEvents: Array<{ committedAtMs: number; encoding: "raw" | "gzip"; bytes: number }>;
+  primaryRebaseEventsMs: number[];
   transferCountInWindow: number;
   primaryRebaseCountInWindow: number;
   gzipBytesInWindow: number;
@@ -205,6 +209,44 @@ export async function extendSimulationRuntimeDurableDigestChain(
   if (!subtle) throw new Error("当前环境不支持 durable recovery SHA-256 校验");
   const payload = textEncoder.encode(`${previousDigestChain ?? ""}:${intentSha256}`);
   return bytesToHex(new Uint8Array(await subtle.digest("SHA-256", payload)));
+}
+
+export async function computeSimulationRuntimeDurablePassiveSegmentSha256(
+  segment: Omit<SimulationRuntimeDurablePassiveSegment, "segmentSha256">,
+): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error("当前环境不支持 durable recovery SHA-256 校验");
+  return bytesToHex(new Uint8Array(await subtle.digest("SHA-256", textEncoder.encode(stableComparable(segment)))));
+}
+
+export async function verifySimulationRuntimeDurablePassiveSegmentSha256(
+  segment: SimulationRuntimeDurablePassiveSegment,
+): Promise<boolean> {
+  if (!SHA256_PATTERN.test(segment.segmentSha256)) return false;
+  const { segmentSha256: _segmentSha256, ...unsigned } = segment;
+  return await computeSimulationRuntimeDurablePassiveSegmentSha256(unsigned) === segment.segmentSha256;
+}
+
+/**
+ * Cryptographically validate journal entries after transport/storage and
+ * before replay. The synchronous schema validator intentionally cannot
+ * substitute for this digest pass.
+ */
+export async function validateSimulationRuntimeDurableJournalEntryDigests(
+  entries: readonly SimulationRuntimeDurableJournalEntry[],
+): Promise<string | null> {
+  for (const entry of entries) {
+    if (entry.kind === "atomic") {
+      const { intentSha256: _intentSha256, ...unsigned } = entry.intent;
+      if (validateSimulationRuntimeDurableOperationIntent(entry.intent) !== null ||
+        await computeSimulationRuntimeDurableIntentSha256(unsigned) !== entry.intent.intentSha256) {
+        return "atomic-intent-digest-mismatch";
+      }
+    } else if (!await verifySimulationRuntimeDurablePassiveSegmentSha256(entry)) {
+      return "passive-segment-digest-mismatch";
+    }
+  }
+  return null;
 }
 
 export function getSimulationRuntimeDurableJournalSerializedBytes(
@@ -339,7 +381,7 @@ export function validateSimulationRuntimeDurableRecoveryRecord(
       entry.lastSequence - entry.firstSequence + 1 !== entry.operationCount ||
       !replayOperationCount(entry.replay, entry.operationCount) || !validateContentPackRuntimeSnapshot(entry.registry) ||
       !SHA256_PATTERN.test(entry.digestChainSha256) || !SHA256_PATTERN.test(entry.tailIntentSha256) ||
-      !finiteNonNegative(entry.committedAtMs)) return "invalid-passive-segment";
+      !SHA256_PATTERN.test(entry.segmentSha256) || !finiteNonNegative(entry.committedAtMs)) return "invalid-passive-segment";
     sequence = entry.lastSequence;
     revision = entry.nextStateRevision;
   }
@@ -391,9 +433,9 @@ export async function finalizeSimulationRuntimeDurableRecoveryIntent(
   intent: SimulationRuntimeDurableOperationIntent,
   resultStateRevision: number,
 ): Promise<SimulationRuntimeDurableJournalEntry[]> {
-  const { intentSha256: _intentSha256, ...unsigned } = intent;
+  const { intentSha256: _intentSha256, ...unsignedIntent } = intent;
   if (validateSimulationRuntimeDurableOperationIntent(intent) !== null ||
-    await computeSimulationRuntimeDurableIntentSha256(unsigned) !== intent.intentSha256) throw new Error("durable intent digest mismatch");
+    await computeSimulationRuntimeDurableIntentSha256(unsignedIntent) !== intent.intentSha256) throw new Error("durable intent digest mismatch");
   const previous = entries.at(-1);
   const expectedSequence = previous ? entryLastSequence(previous) + 1 : intent.sequence;
   const expectedRevision = previous ? entryNextRevision(previous) : intent.baseStateRevision;
@@ -401,47 +443,60 @@ export async function finalizeSimulationRuntimeDurableRecoveryIntent(
     !Number.isSafeInteger(resultStateRevision) || resultStateRevision < intent.baseStateRevision) {
     throw new Error("durable intent finalize CAS mismatch");
   }
+  if (await validateSimulationRuntimeDurableJournalEntryDigests(entries) !== null) {
+    throw new Error("durable journal digest mismatch");
+  }
   if (intent.command) return [...entries, { kind: "atomic", intent: structuredClone(intent), resultStateRevision }];
   if (previous?.kind === "passive-segment" && passiveCompatible(previous, intent)) {
+    const { segmentSha256: _previousSegmentSha256, ...previousUnsigned } = previous;
+    const unsignedSegment: Omit<SimulationRuntimeDurablePassiveSegment, "segmentSha256"> = {
+      ...previousUnsigned,
+      lastSequence: intent.sequence,
+      nextStateRevision: resultStateRevision,
+      operationCount: previous.operationCount + 1,
+      replay: {
+        kind: "rle",
+        steps: appendReplayStep(previous.replay.steps, intent),
+      },
+      digestChainSha256: await extendSimulationRuntimeDurableDigestChain(previous.digestChainSha256, intent.intentSha256),
+      tailIntentSha256: intent.intentSha256,
+      committedAtMs: intent.committedAtMs,
+    };
     return [
       ...entries.slice(0, -1),
       {
-        ...previous,
-        lastSequence: intent.sequence,
-        nextStateRevision: resultStateRevision,
-        operationCount: previous.operationCount + 1,
-        replay: {
-          kind: "rle",
-          steps: appendReplayStep(previous.replay.steps, intent),
-        },
-        digestChainSha256: await extendSimulationRuntimeDurableDigestChain(previous.digestChainSha256, intent.intentSha256),
-        tailIntentSha256: intent.intentSha256,
-        committedAtMs: intent.committedAtMs,
+        ...unsignedSegment,
+        segmentSha256: await computeSimulationRuntimeDurablePassiveSegmentSha256(unsignedSegment),
       },
     ];
   }
+  const digestChainSha256 = await extendSimulationRuntimeDurableDigestChain(null, intent.intentSha256);
+  const unsignedSegment: Omit<SimulationRuntimeDurablePassiveSegment, "segmentSha256"> = {
+    kind: "passive-segment",
+    schemaVersion: 1,
+    sessionId: intent.sessionId,
+    generation: intent.generation,
+    firstSequence: intent.sequence,
+    lastSequence: intent.sequence,
+    baseStateRevision: intent.baseStateRevision,
+    nextStateRevision: resultStateRevision,
+    operationCount: 1,
+    replay: {
+      kind: "rle",
+      steps: [{ simulationSeconds: intent.simulationSeconds, wallSeconds: intent.wallSeconds, count: 1 }],
+    },
+    multicore: intent.multicore,
+    approximate: intent.approximate,
+    registry: structuredClone(intent.registry),
+    digestChainSha256,
+    tailIntentSha256: intent.intentSha256,
+    committedAtMs: intent.committedAtMs,
+  };
   return [
     ...entries,
     {
-      kind: "passive-segment",
-      schemaVersion: 1,
-      sessionId: intent.sessionId,
-      generation: intent.generation,
-      firstSequence: intent.sequence,
-      lastSequence: intent.sequence,
-      baseStateRevision: intent.baseStateRevision,
-      nextStateRevision: resultStateRevision,
-      operationCount: 1,
-      replay: {
-        kind: "rle",
-        steps: [{ simulationSeconds: intent.simulationSeconds, wallSeconds: intent.wallSeconds, count: 1 }],
-      },
-      multicore: intent.multicore,
-      approximate: intent.approximate,
-      registry: structuredClone(intent.registry),
-      digestChainSha256: await extendSimulationRuntimeDurableDigestChain(null, intent.intentSha256),
-      tailIntentSha256: intent.intentSha256,
-      committedAtMs: intent.committedAtMs,
+      ...unsignedSegment,
+      segmentSha256: await computeSimulationRuntimeDurablePassiveSegmentSha256(unsignedSegment),
     },
   ];
 }
@@ -451,27 +506,36 @@ export function advanceSimulationRuntimeDurableCheckpointCadence(
   checkpoint: SimulationRuntimeDurableCheckpoint,
   now = Date.now(),
 ): SimulationRuntimeDurableCheckpointCadence {
-  const reset = !previous || now - previous.windowStartedAtMs >= SIMULATION_RUNTIME_DURABLE_RECOVERY_TRANSFER_WINDOW_MS;
-  const base = reset
-    ? {
-        windowStartedAtMs: now,
-        lastTransferAtMs: 0,
-        transferCountInWindow: 0,
-        primaryRebaseCountInWindow: 0,
-        gzipBytesInWindow: 0,
-        rawBytesInWindow: 0,
-        lastCheckpointSource: null,
-        lastTransferEncoding: null,
-      } satisfies SimulationRuntimeDurableCheckpointCadence
-    : previous;
+  const cutoff = now - SIMULATION_RUNTIME_DURABLE_RECOVERY_TRANSFER_WINDOW_MS;
+  const transferEvents = (previous?.transferEvents ?? []).filter((event) => event.committedAtMs > cutoff && event.committedAtMs <= now);
+  const primaryRebaseEventsMs = (previous?.primaryRebaseEventsMs ?? []).filter((committedAtMs) => committedAtMs > cutoff && committedAtMs <= now);
+  const base = {
+    windowStartedAtMs: Math.max(0, cutoff),
+    lastTransferAtMs: previous?.lastTransferAtMs ?? 0,
+    transferEvents,
+    primaryRebaseEventsMs,
+    transferCountInWindow: transferEvents.length,
+    primaryRebaseCountInWindow: primaryRebaseEventsMs.length,
+    gzipBytesInWindow: transferEvents.reduce((bytes, event) => bytes + (event.encoding === "gzip" ? event.bytes : 0), 0),
+    rawBytesInWindow: transferEvents.reduce((bytes, event) => bytes + (event.encoding === "raw" ? event.bytes : 0), 0),
+    lastCheckpointSource: previous?.lastCheckpointSource ?? null,
+    lastTransferEncoding: previous?.lastTransferEncoding ?? null,
+  } satisfies SimulationRuntimeDurableCheckpointCadence;
   if (checkpoint.source === "primary") return {
     ...base,
+    primaryRebaseEventsMs: [...base.primaryRebaseEventsMs, now],
     primaryRebaseCountInWindow: base.primaryRebaseCountInWindow + 1,
     lastCheckpointSource: "primary",
   };
+  const nextTransferEvents = [...base.transferEvents, {
+    committedAtMs: now,
+    encoding: checkpoint.transfer.encoding,
+    bytes: checkpoint.transfer.storedByteLength,
+  }];
   return {
     ...base,
     lastTransferAtMs: now,
+    transferEvents: nextTransferEvents,
     transferCountInWindow: base.transferCountInWindow + 1,
     gzipBytesInWindow: base.gzipBytesInWindow + (checkpoint.transfer.encoding === "gzip" ? checkpoint.transfer.storedByteLength : 0),
     rawBytesInWindow: base.rawBytesInWindow + (checkpoint.transfer.encoding === "raw" ? checkpoint.transfer.storedByteLength : 0),
@@ -493,8 +557,7 @@ export function validateSimulationRuntimeDurableCheckpointCadence(
     SIMULATION_RUNTIME_DURABLE_RECOVERY_TRANSFER_WINDOW_MS * checkpoint.transfer.storedByteLength / hourlyBudget,
   );
   const minimumInterval = Math.max(SIMULATION_RUNTIME_DURABLE_RECOVERY_MIN_TRANSFER_INTERVAL_MS, proportionalInterval);
-  if (previous && now - previous.windowStartedAtMs < SIMULATION_RUNTIME_DURABLE_RECOVERY_TRANSFER_WINDOW_MS &&
-    previous.lastTransferAtMs > 0 && now - previous.lastTransferAtMs < minimumInterval) {
+  if (previous?.lastTransferAtMs && now - previous.lastTransferAtMs < minimumInterval) {
     return "transfer-checkpoint-too-frequent";
   }
   const next = advanceSimulationRuntimeDurableCheckpointCadence(previous, checkpoint, now);
