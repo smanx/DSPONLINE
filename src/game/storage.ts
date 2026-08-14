@@ -66,7 +66,10 @@ import type { OfflineApproximationReport } from "./offlineApproximation";
 import type { OfflineComplexityReport } from "./offlineComplexityTypes";
 import type { OfflineSettlementFailureKind } from "./offlineSettlementStrategy";
 import type { CloudSaveSummary } from "./cloud";
-import type { SimulationRuntimeStartupRecoveryBinding } from "./simulationRuntimeStartupRecovery";
+import type {
+  SimulationRuntimeStartupRecoveryBinding,
+  SimulationRuntimeStartupRecoveryCandidate,
+} from "./simulationRuntimeStartupRecovery";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -202,6 +205,8 @@ export interface LoadedGame {
   recovery?: SaveRecovery;
   /** Set only after a verified T1 primary and a durable recovery initialize. */
   runtimeRecovery?: SimulationRuntimeStartupRecoveryBinding;
+  /** T0 candidate carried through deferred offline settlement until T1 saves. */
+  runtimeRecoveryCandidate?: SimulationRuntimeStartupRecoveryCandidate;
 }
 
 export interface DeferredLoadedGame extends LoadedGame {
@@ -2694,7 +2699,13 @@ export function finalizeDeferredOfflineGame(
   details: { approximation?: OfflineApproximationReport; complexity?: OfflineComplexityReport } = {},
 ): LoadedGame {
   if (loaded.offlineSeconds < 1) {
-    return { state: loaded.state, offlineSeconds: 0, offlineReport: null, recovery: loaded.recovery };
+    return {
+      state: loaded.state,
+      offlineSeconds: 0,
+      offlineReport: null,
+      recovery: loaded.recovery,
+      ...(loaded.runtimeRecoveryCandidate ? { runtimeRecoveryCandidate: loaded.runtimeRecoveryCandidate } : {}),
+    };
   }
   const returning = applyReturningReward(advancedState, loaded.savedAt, loaded.offlineSeconds);
   const report = buildOfflineReport(loaded.state, returning.state, loaded.offlineSeconds);
@@ -2708,7 +2719,13 @@ export function finalizeDeferredOfflineGame(
     submittedSeconds: loaded.offlineSeconds,
   };
   if (returning.reward.length > 0) report.returningReward = returning.reward;
-  return { state: returning.state, offlineSeconds: loaded.offlineSeconds, offlineReport: report, recovery: loaded.recovery };
+  return {
+    state: returning.state,
+    offlineSeconds: loaded.offlineSeconds,
+    offlineReport: report,
+    recovery: loaded.recovery,
+    ...(loaded.runtimeRecoveryCandidate ? { runtimeRecoveryCandidate: loaded.runtimeRecoveryCandidate } : {}),
+  };
 }
 
 export function skipDeferredOfflineGame(
@@ -2740,7 +2757,13 @@ export function skipDeferredOfflineGame(
   };
   if (preview) report.approximation = { ...preview, settlementStatus: "conservative-skipped" };
   if (complexity) report.complexity = complexity;
-  return { state: skippedState, offlineSeconds: loaded.offlineSeconds, offlineReport: report, recovery: loaded.recovery };
+  return {
+    state: skippedState,
+    offlineSeconds: loaded.offlineSeconds,
+    offlineReport: report,
+    recovery: loaded.recovery,
+    ...(loaded.runtimeRecoveryCandidate ? { runtimeRecoveryCandidate: loaded.runtimeRecoveryCandidate } : {}),
+  };
 }
 
 /**

@@ -331,6 +331,12 @@ import {
   serializeSimulationStateForTransfer,
   type SimulationCommandPatch,
 } from "./game/simulationRuntimeProtocol";
+import type {
+  SimulationRuntimeDurableAppHead,
+} from "./game/simulationRuntimeDurableAppState";
+import type { SimulationRuntimeDurableOperationIntent } from "./game/simulationRuntimeDurableRecovery";
+import type { SimulationRuntimeStartupRecoveryBinding } from "./game/simulationRuntimeStartupRecovery";
+import { getLocalSaveWriterStatus } from "./game/localSaveStore";
 import { readMulticoreSimulationOptions, type MulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
 import { accumulateSimulationBudget, NORMAL_SIMULATION_SLICE_SECONDS, takeSimulationBudgetSlice } from "./game/simulationBudget";
@@ -1125,8 +1131,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     requestBytes: number;
     multicore: MulticoreSimulationOptions | undefined;
     approximate: boolean;
+    durableIntent?: SimulationRuntimeDurableOperationIntent;
   } | null>(null);
-  const simulationStateRevisionRef = useRef(0);
+  const durableRecoveryHeadRef = useRef<SimulationRuntimeDurableAppHead | null>(loaded.runtimeRecovery ? {
+    baseIdentity: loaded.runtimeRecovery.baseIdentity,
+    sessionId: loaded.runtimeRecovery.sessionId,
+    generation: loaded.runtimeRecovery.generation,
+    sequence: loaded.runtimeRecovery.sequence,
+    stateRevision: loaded.runtimeRecovery.stateRevision,
+    registryFingerprint: loaded.runtimeRecovery.registryFingerprint,
+  } : null);
+  const durableRecoveryLifecycleRef = useRef<"active" | "degraded" | "unavailable">(loaded.runtimeRecovery ? "active" : "unavailable");
+  const durableRecoveryFinalizeInFlightRef = useRef<number | null>(null);
+  const durableRecoveryFinalizeReadyRef = useRef<number | null>(null);
+  const simulationStateRevisionRef = useRef(loaded.runtimeRecovery?.stateRevision ?? 0);
   const simulationProjectionIndexRef = useRef<SimulationProjectionStateIndex>(createSimulationProjectionStateIndex(loaded.state));
   const simulationProjectionScopeRef = useRef<"default" | "full-top-level">("default");
   simulationProjectionScopeRef.current = fullRealtimeSimulation || statisticsOpen || dysonPlannerOpen ? "full-top-level" : "default";
@@ -3262,7 +3280,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         registryFingerprint: registrySnapshot.fingerprint,
         registry: registrySnapshot,
         protocol: "projection",
-        stateRevision: 0,
+        stateRevision: simulationStateRevisionRef.current,
       };
       simulationRequestIdRef.current = request.id;
       lastSimulationResultRef.current = null;
@@ -3697,13 +3715,29 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   useEffect(() => {
     const timer = game.settings.autosaveIntervalSeconds > 0
-      ? window.setInterval(() => void persistPrimarySave(undefined, "autosave"), game.settings.autosaveIntervalSeconds * 1000)
+      ? window.setInterval(() => {
+        // A durable T0/T1 session must not fall back to the legacy primary
+        // mirror before its ordered WAL barrier is wired. Keeping the old
+        // primary authoritative is safer than writing a newer state that can
+        // strand a staged intent.
+        if (durableRecoveryLifecycleRef.current === "active") return;
+        void persistPrimarySave(undefined, "autosave");
+      }, game.settings.autosaveIntervalSeconds * 1000)
       : null;
     let lifecycleSaveStarted = false;
-    const saveNow = () => { void persistPrimarySave(undefined, "lifecycle"); };
+    const saveNow = () => {
+      if (durableRecoveryLifecycleRef.current === "active") return;
+      void persistPrimarySave(undefined, "lifecycle");
+    };
     const saveBeforeUnload = () => {
       if (lifecycleSaveStarted) return;
       lifecycleSaveStarted = true;
+      if (durableRecoveryLifecycleRef.current === "active") {
+        // beforeunload/pagehide are synchronous and cannot await a checkpoint
+        // or WAL finalize. Never overwrite the T0 primary with an emergency
+        // mirror while durable recovery owns the timeline.
+        return;
+      }
       // A synchronous lifecycle hook cannot wait for a Worker barrier. Keep
       // the emergency mirror internally exact by using the latest completed
       // checkpoint; the normal hidden/native handlers above request a fresh
@@ -3729,7 +3763,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       // emergency candidate, so a second, newer cleanup save must not leave
       // that mirror stale and manufacture a conflict on reload.
       const controlledCommit = controlledReturnCommitRef.current;
-      if (!lifecycleSaveStarted && (!controlledCommit || !isCurrentPrimarySaveSource(controlledCommit))) {
+      if (!lifecycleSaveStarted && durableRecoveryLifecycleRef.current !== "active" &&
+        (!controlledCommit || !isCurrentPrimarySaveSource(controlledCommit))) {
         saveGame(stateWithSimulationDebt(latestAuthoritativeCheckpointRef.current));
       }
     };

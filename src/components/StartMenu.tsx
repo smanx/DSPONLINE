@@ -96,6 +96,12 @@ import {
 } from "../game/offlineSettlementStrategy";
 import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreference, writeThemePreference } from "../game/uiPreferences";
 import { retainLocalSavePayload, subscribeLocalSaveStorageStatus } from "../game/localSaveStore";
+import { createContentPackRuntimeSnapshot, loadContentPackRegistry } from "../game/contentPacks";
+import {
+  finalizeSimulationRuntimeStartupRecovery,
+  prepareSimulationRuntimeStartupRecovery,
+  type SimulationRuntimeStartupRecoveryProgress,
+} from "../game/simulationRuntimeStartupRecovery";
 
 const resolveMenuContinueSave = (mode: SaveMode) => import("../game/savePreviewPayload").then((module) => module.resolveMenuContinueSave(mode));
 const readMenuSavePayload = (key: string) => import("../game/savePreviewPayload").then((module) => module.readMenuSavePayload(key));
@@ -529,10 +535,30 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     const activeStorage = storage ?? await loadStorageModule();
     if (preserveReason) await preserveCurrentSave(preserveReason, activeStorage, loaded.state.mode);
     const state = { ...loaded.state, settings: mergeMenuRuntimeSettings(loaded.state.settings, settings) };
-    const saveResult = await activeStorage.saveGameVerified(state);
-    if (!saveResult.success) throw new Error(saveResult.message);
+    let runtimeRecovery = loaded.runtimeRecovery;
+    if (loaded.runtimeRecoveryCandidate) {
+      const registry = createContentPackRuntimeSnapshot(loadContentPackRegistry());
+      const onRecoveryProgress = (progress: SimulationRuntimeStartupRecoveryProgress) => {
+        const count = progress.completedOperations !== undefined && progress.totalOperations !== undefined
+          ? `（${progress.completedOperations}/${progress.totalOperations}）`
+          : "";
+        setMessage({ tone: "busy", text: `${progress.message}${count}` });
+      };
+      runtimeRecovery = await finalizeSimulationRuntimeStartupRecovery({
+        state,
+        candidate: loaded.runtimeRecoveryCandidate,
+        mode: state.mode === "speedrun" ? "speedrun" : "normal",
+        registry,
+        saveGameVerified: (nextState) => activeStorage.saveGameVerified(nextState),
+        onProgress: onRecoveryProgress,
+      });
+    } else {
+      const saveResult = await activeStorage.saveGameVerified(state);
+      if (!saveResult.success) throw new Error(saveResult.message);
+    }
+    const { runtimeRecoveryCandidate: _runtimeRecoveryCandidate, ...loadedWithoutCandidate } = loaded;
     trackAnalyticsEvent("game_enter");
-    onEnterGame({ ...loaded, state });
+    onEnterGame({ ...loadedWithoutCandidate, state, ...(runtimeRecovery ? { runtimeRecovery } : {}) });
   };
 
   const completeDeferredLoad = async (
@@ -816,12 +842,35 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const storage = await loadStorageModule();
       trackAnalyticsEvent("continue_game");
       const resolved = await resolveMenuContinueSave(mode);
-      const loaded = resolved
+      let loaded = resolved
         ? storage.loadInspectedGameDeferredOffline(resolved.inspection, mode, resolved.save.source)
         : null;
       if (!loaded) throw new Error("本地存档不可用");
       if (resolved) retainLocalSavePayload(resolved.save.key, resolved.raw);
       if (resolved) mode === "normal" ? setContinueSave(resolved.save) : setSpeedrunContinueSave(resolved.save);
+      if (resolved?.save.source === "primary") {
+        const registry = createContentPackRuntimeSnapshot(loadContentPackRegistry());
+        const startup = await prepareSimulationRuntimeStartupRecovery({
+          state: loaded.state,
+          savedAtMs: loaded.savedAt,
+          inspection: resolved.inspection,
+          source: resolved.save.source,
+          mode,
+          registry,
+          onProgress: (progress) => {
+            const count = progress.completedOperations !== undefined && progress.totalOperations !== undefined
+              ? `（${progress.completedOperations}/${progress.totalOperations}）`
+              : "";
+            setMessage({ tone: "busy", text: `${progress.message}${count}` });
+          },
+        });
+        loaded = {
+          ...loaded,
+          state: startup.state,
+          offlineSeconds: startup.offlineSeconds,
+          ...(startup.candidate ? { runtimeRecoveryCandidate: startup.candidate } : {}),
+        };
+      }
       const label = mode === "speedrun" ? "恢复速通工厂" : "恢复最近工厂";
       const prepared = await prepareTimeWarpDeferredLoad(loaded, label, undefined, mode === "normal");
       if (!prepared) return;
