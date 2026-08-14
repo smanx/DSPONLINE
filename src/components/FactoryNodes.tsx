@@ -74,6 +74,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
   onInteractionLockChange: (entityId: string, locked: boolean) => void;
+  onStackActivate: (entityId: string, memberIds: readonly string[], mode: "select" | "cycle") => void;
   researchLabel: string | null;
   researchCosts: ItemAmount[];
   connectedInputItemIds: readonly ItemId[];
@@ -103,6 +104,17 @@ export interface FactoryNodeData extends Record<string, unknown> {
   acceptedInputItemIds: readonly ItemId[];
   producedOutputItemIds: readonly ItemId[];
   connectionViewportFull: boolean;
+  dynamicEffects: boolean;
+  presentationVisible: boolean;
+  alertActive: boolean;
+  stackHidden: boolean;
+  stackHalo: boolean;
+  stackCount: number;
+  stackGroupId: string | null;
+  stackMemberIds: readonly string[];
+  stackAlertCount: number;
+  stackCriticalAlertCount: number;
+  stackGeometryHandlesRequired: boolean;
 }
 
 export type FactoryFlowNode = Node<FactoryNodeData, EntityKind>;
@@ -168,6 +180,7 @@ function WorkCycle({
   mode = "cycle",
   semanticKey = label,
   effectiveSimulationMultiplier = 1,
+  animate = true,
 }: {
   label: string;
   progress: number;
@@ -177,19 +190,21 @@ function WorkCycle({
   mode?: WorkProgressMode;
   semanticKey?: string;
   effectiveSimulationMultiplier?: number;
+  animate?: boolean;
 }) {
   const normalized = Math.max(0, Math.min(1, progress));
+  const visualActive = active && animate;
   const displayProgress = useWorkDisplayProgress({
     mode,
     semanticKey,
     snapshotProgress: normalized,
     cyclesPerSecond,
     effectiveSimulationMultiplier,
-    active,
+    active: visualActive,
   });
   const percent = Math.round(displayProgress * 100);
   if (mode === "indeterminate") {
-    return <div className={`work-cycle work-cycle--indeterminate${active ? " work-cycle--active" : ""}`} aria-label={`${label} ${active ? "运行中" : "待机"}`}>
+    return <div className={`work-cycle work-cycle--indeterminate${visualActive ? " work-cycle--active" : ""}`} aria-label={`${label} ${active ? "运行中" : "待机"}`}>
       <i aria-hidden="true" />
       <span>{label}</span>
       <strong>{active ? "运行中" : "待机"}</strong>
@@ -197,7 +212,7 @@ function WorkCycle({
   }
   return (
     <div
-      className={`work-cycle work-cycle--${mode}${active ? " work-cycle--active" : ""}${active && cyclesPerSecond > 0 ? " work-cycle--interpolated" : ""}`}
+      className={`work-cycle work-cycle--${mode}${visualActive ? " work-cycle--active" : ""}${visualActive && cyclesPerSecond > 0 ? " work-cycle--interpolated" : ""}`}
       role="progressbar"
       aria-label={label}
       aria-valuemin={0}
@@ -394,6 +409,45 @@ function LightweightNodeHandles({ data }: { data: FactoryNodeData }) {
   </>;
 }
 
+function FactoryNodeStackProxy({ data }: NodeProps<FactoryFlowNode>) {
+  const wide = data.entity.buildingId === "micro_black_hole_connector" || data.entity.buildingId === "time_warp_device" ||
+    data.entity.buildingId === "construction_center" || data.entity.buildingId === "galactic_material_exporter";
+  const retainsEdgeGeometry = data.stackGeometryHandlesRequired;
+  return <article
+    className={`factory-node factory-node-stack-proxy factory-node--status-${data.status.tone}${wide ? " factory-node-stack-proxy--wide" : ""}`}
+    data-node-stack-proxy="true"
+    data-heavy-card="false"
+    aria-hidden="true"
+    tabIndex={-1}
+    data-retains-edge-geometry={retainsEdgeGeometry ? "true" : "false"}
+  >
+    {retainsEdgeGeometry ? <LightweightNodeHandles data={data} /> : null}
+  </article>;
+}
+
+function FactoryNodeStackOverlay({ data }: { data: FactoryNodeData }) {
+  if (data.stackCount < 2 || data.stackHidden) return null;
+  const alertLabel = data.stackAlertCount > 0
+    ? `；其中 ${data.stackAlertCount} 个有告警${data.stackCriticalAlertCount > 0 ? `，${data.stackCriticalAlertCount} 个严重` : ""}`
+    : "";
+  return <>
+    {data.stackHalo ? <i className={`factory-node-stack-halo${data.stackAlertCount > 0 ? " factory-node-stack-halo--alert" : ""}`} data-stack-glow="true" aria-hidden="true" /> : null}
+    <button
+      className={`factory-node-stack-badge nodrag nopan${data.stackAlertCount > 0 ? " factory-node-stack-badge--alert" : ""}`}
+      type="button"
+      data-stack-alert-count={data.stackAlertCount}
+      title={`重叠建筑 ${data.stackCount} 个${alertLabel}；点击切换`}
+      aria-label={`重叠建筑 ${data.stackCount} 个${alertLabel}，点击切换下一个`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        data.onStackActivate(data.entity.id, data.stackMemberIds, "cycle");
+      }}
+    >×{data.stackCount}{data.stackAlertCount > 0 ? <span aria-hidden="true"> · ⚠{data.stackAlertCount}</span> : null}</button>
+  </>;
+}
+
 function FactoryNodeLodView({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, lod } = data;
   const resource = entity.resourceId ? getItem(entity.resourceId) : null;
@@ -412,7 +466,7 @@ function FactoryNodeLodView({ data, selected }: NodeProps<FactoryFlowNode>) {
   const outputItems = entity.kind === "machine"
     ? uniqueItemIds(data.producedOutputItemIds)
     : uniqueItemIds(data.producedOutputItemIds, Object.keys(data.outputBeltCounts) as ItemId[]);
-  return <article className={`factory-node factory-node-lod factory-node-lod--${lod} factory-node--status-${data.status.tone}${selected ? " factory-node--selected" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}`} data-node-lod={lod}>
+  return <article className={`factory-node factory-node-lod factory-node-lod--${lod} factory-node--status-${data.status.tone}${selected ? " factory-node--selected" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}`} data-node-lod={lod} data-heavy-card="false">
     <LightweightNodeHandles data={data} />
     <header className="factory-node__header">
       <div className="node-icon" style={resource ? { color: resource.color } : undefined}>{icon}</div>
@@ -428,6 +482,26 @@ function FactoryNodeLodView({ data, selected }: NodeProps<FactoryFlowNode>) {
         <span>出 {outputItems.slice(0, 3).map((itemId) => ITEMS[itemId]?.symbol ?? "?").join(" ") || "--"}</span>
       </div>
     </div> : null}
+  </article>;
+}
+
+function FactoryNodeCompactView({ data, selected }: NodeProps<FactoryFlowNode>) {
+  const { entity } = data;
+  const resource = entity.resourceId ? getItem(entity.resourceId) : null;
+  const building = entity.buildingId ? getBuilding(entity.buildingId) : null;
+  const recipe = entity.recipeId ? getRecipe(entity.recipeId) : null;
+  const label = resource?.symbol ?? building?.shortName ?? recipe?.name ?? "节点";
+  const name = resource?.name ?? building?.name ?? recipe?.name ?? "工厂节点";
+  const count = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
+  return <article
+    className={`factory-node factory-node-compact factory-node--status-${data.status.tone}${selected ? " factory-node--selected" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}`}
+    data-node-lod="compact"
+    data-heavy-card="false"
+    title={`${name} ×${count}`}
+    aria-label={`${name}，数量 ${count}${data.alertActive ? "，有生产告警" : ""}`}
+  >
+    <LightweightNodeHandles data={data} />
+    <span aria-hidden="true"><strong>{label}</strong><small>×{count}</small></span>
   </article>;
 }
 
@@ -455,6 +529,7 @@ function VeinFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
+      data-heavy-card="true"
       className={`factory-node vein-node factory-node--status-${data.status.tone}${reserve?.exhausted ? " vein-node--depleted" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}${selected ? " factory-node--selected" : ""}${installing ? " factory-node--placement" : ""}`}
       onClick={install}
       onDragOver={(event) => {
@@ -483,7 +558,7 @@ function VeinFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         <span className={reserve?.exhausted ? "vein-reserve vein-reserve--depleted" : "vein-reserve"}>{reserve?.infinite ? "无限储量" : `储量 ${formatQuantityCompact(reserve?.remaining ?? 0)} / ${formatQuantityCompact(reserve?.capacity ?? 0)} · ${reserve?.remainingPercent ?? 0}%`}</span>
       </div>
       {entity.minerCount > 0 ? (
-        <WorkCycle label="采矿周期" progress={entity.progress} active={!data.paused && entity.utilization > 0.001} efficiency={data.powerFactor} cyclesPerSecond={data.cycleRatePerSecond} semanticKey={`${entity.id}:${entity.resourceId}`} effectiveSimulationMultiplier={data.simulationMultiplier} />
+        <WorkCycle label="采矿周期" progress={entity.progress} active={!data.paused && entity.utilization > 0.001} efficiency={data.powerFactor} cyclesPerSecond={data.cycleRatePerSecond} semanticKey={`${entity.id}:${entity.resourceId}`} effectiveSimulationMultiplier={data.simulationMultiplier} animate={data.dynamicEffects} />
       ) : null}
       {fluid ? (
         <div className="manual-mine manual-mine--locked"><Droplets size={16} /><span>{entity.minerCount > 0 ? `由${extractor.shortName}自动抽取` : `需要${extractor.name}`}</span></div>
@@ -566,6 +641,7 @@ function MachineFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
+      data-heavy-card="true"
       className={`factory-node machine-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${constructionCenter || galacticExporter || blackHoleConnector || timeWarpDevice ? " factory-node--megastructure" : ""}${galacticExporter ? " factory-node--galactic-exporter" : ""}${blackHoleConnector ? " factory-node--black-hole" : ""}${timeWarpDevice ? " factory-node--time-warp" : ""}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
       onClick={add}
       onDragOver={(event) => {
@@ -661,6 +737,7 @@ function MachineFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           cyclesPerSecond={data.cycleRatePerSecond}
           semanticKey={`${entity.id}:${recipe?.id ?? "idle"}`}
           effectiveSimulationMultiplier={data.simulationMultiplier}
+          animate={data.dynamicEffects}
         />
       )}
       {railEjector || launchSilo ? (
@@ -771,6 +848,7 @@ function LogisticsFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
+      data-heavy-card="true"
       ref={nodeRef}
       className={`factory-node logistics-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${isStation ? " station-node" : ""}${deliveryHub ? " delivery-hub-node" : ""}${warehouseStorage ? " storage-buffer-node" : ""}${entity.buildingId === "storage_tank" ? " storage-buffer-node--fluid" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
       onClick={(event) => {
@@ -812,6 +890,7 @@ function LogisticsFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         mode={orbitalCollector ? "cycle" : isStation ? "route" : "indeterminate"}
         semanticKey={`${entity.id}:${isStation ? (entity.stationRoutes ?? []).map((route) => route.id).join(",") || "idle" : configuredItems.join(",") || "empty"}`}
         effectiveSimulationMultiplier={data.simulationMultiplier}
+        animate={data.dynamicEffects}
       />
       {elevatorStation ? (
         <div className="node-io logistics-io elevator-logistics-io">
@@ -878,6 +957,7 @@ function PowerFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const category = accumulator ? "电网缓冲储能" : exchanger ? "可运输储能" : fuelGenerator ? "可调度能源" : solar ? "恒星辐射发电" : geothermal ? "熔岩地热发电" : "行星电网";
   return (
     <article
+      data-heavy-card="true"
       className={`factory-node power-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${fuelGenerator ? " thermal-node" : ""}${accumulator || exchanger ? " storage-power-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}`}
       onClick={(event) => {
         if (!adding) return;
@@ -944,6 +1024,7 @@ function PowerFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           mode={accumulator ? "level" : "cycle"}
           semanticKey={`${entity.id}:${accumulator ? "stored-energy" : entity.energyMode ?? "charge"}`}
           effectiveSimulationMultiplier={data.simulationMultiplier}
+          animate={data.dynamicEffects}
         />
       ) : null}
       <div className="power-output">
@@ -978,19 +1059,23 @@ function PowerFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 }
 
 export function VeinNode(props: NodeProps<FactoryFlowNode>) {
-  return props.data.lod === "full" ? <VeinFullNode {...props} /> : <FactoryNodeLodView {...props} />;
+  if (props.data.stackHidden) return <FactoryNodeStackProxy {...props} />;
+  return <>{props.data.lod === "full" ? <VeinFullNode {...props} /> : props.data.lod === "compact" ? <FactoryNodeCompactView {...props} /> : <FactoryNodeLodView {...props} />}<FactoryNodeStackOverlay data={props.data} /></>;
 }
 
 export function MachineNode(props: NodeProps<FactoryFlowNode>) {
-  return props.data.lod === "full" ? <MachineFullNode {...props} /> : <FactoryNodeLodView {...props} />;
+  if (props.data.stackHidden) return <FactoryNodeStackProxy {...props} />;
+  return <>{props.data.lod === "full" ? <MachineFullNode {...props} /> : props.data.lod === "compact" ? <FactoryNodeCompactView {...props} /> : <FactoryNodeLodView {...props} />}<FactoryNodeStackOverlay data={props.data} /></>;
 }
 
 export function LogisticsNode(props: NodeProps<FactoryFlowNode>) {
-  return props.data.lod === "full" ? <LogisticsFullNode {...props} /> : <FactoryNodeLodView {...props} />;
+  if (props.data.stackHidden) return <FactoryNodeStackProxy {...props} />;
+  return <>{props.data.lod === "full" ? <LogisticsFullNode {...props} /> : props.data.lod === "compact" ? <FactoryNodeCompactView {...props} /> : <FactoryNodeLodView {...props} />}<FactoryNodeStackOverlay data={props.data} /></>;
 }
 
 export function PowerNode(props: NodeProps<FactoryFlowNode>) {
-  return props.data.lod === "full" ? <PowerFullNode {...props} /> : <FactoryNodeLodView {...props} />;
+  if (props.data.stackHidden) return <FactoryNodeStackProxy {...props} />;
+  return <>{props.data.lod === "full" ? <PowerFullNode {...props} /> : props.data.lod === "compact" ? <FactoryNodeCompactView {...props} /> : <FactoryNodeLodView {...props} />}<FactoryNodeStackOverlay data={props.data} /></>;
 }
 
 function areNodeVisualPropsEqual(previous: NodeProps<FactoryFlowNode>, next: NodeProps<FactoryFlowNode>): boolean {
