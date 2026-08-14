@@ -26,6 +26,17 @@ export interface SimulationRuntimeStartupRecoveryState {
   phase: SimulationRuntimeStartupRecoveryPhase;
 }
 
+/** Verified T1 identity handed to FactoryGame only after recovery is ready. */
+export interface SimulationRuntimeStartupRecoveryBinding {
+  status: "active";
+  baseIdentity: SimulationRuntimeRecoveryBaseIdentity;
+  sessionId: string;
+  generation: number;
+  sequence: number;
+  stateRevision: number;
+  registryFingerprint: string;
+}
+
 const EXPECTED_EVENT: Partial<Record<SimulationRuntimeStartupRecoveryPhase, SimulationRuntimeStartupRecoveryEvent>> = {
   "selected-primary": "read-recovery",
   "recovery-read": "replay-recovery",
@@ -131,3 +142,4 @@ export function computeSimulationRuntimeStartupOfflineWindow(
     offlineSeconds: input.paused ? 0 : Math.min(maxOfflineSeconds, remainingWallSeconds),
   };
 }
+import type { SimulationRuntimeRecoveryBaseIdentity } from "./simulationRuntimeRecovery";

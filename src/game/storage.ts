@@ -66,6 +66,7 @@ import type { OfflineApproximationReport } from "./offlineApproximation";
 import type { OfflineComplexityReport } from "./offlineComplexityTypes";
 import type { OfflineSettlementFailureKind } from "./offlineSettlementStrategy";
 import type { CloudSaveSummary } from "./cloud";
+import type { SimulationRuntimeStartupRecoveryBinding } from "./simulationRuntimeStartupRecovery";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -199,6 +200,8 @@ export interface LoadedGame {
   offlineSeconds: number;
   offlineReport: OfflineReport | null;
   recovery?: SaveRecovery;
+  /** Set only after a verified T1 primary and a durable recovery initialize. */
+  runtimeRecovery?: SimulationRuntimeStartupRecoveryBinding;
 }
 
 export interface DeferredLoadedGame extends LoadedGame {
