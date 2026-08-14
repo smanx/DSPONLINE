@@ -72,4 +72,46 @@ describe("simulation projection", () => {
     expect(projection.entityColumns.progress).toEqual([[0, 0.375]]);
     expect(applySimulationProjectionToState(previous, projection).state).toEqual(current);
   });
+
+  it("publishes every unchanged record after an active-planet switch", () => {
+    const previous = createInitialState();
+    const frostEntity = { ...structuredClone(previous.entities[0]), id: "frost-static-node", planetId: "frost" as const };
+    previous.entities.push(frostEntity);
+    const current = structuredClone(previous);
+    current.activePlanetId = "frost";
+    const projection = createSimulationProjection(previous, current, { compact: true });
+    const frostEntityIds = current.entities
+      .filter((entity) => entity.planetId === "frost")
+      .map((entity) => entity.id);
+    expect(projection.requiresFullSnapshot).toBe(true);
+    expect(projection.changedEntityIds).toEqual(frostEntityIds);
+    expect(projection.changedEntities.map((entity) => entity.id)).toEqual(frostEntityIds);
+    expect(projection.changedEntityIds).toContain(frostEntity.id);
+    const applied = applySimulationProjectionToState(previous, projection).state;
+    expect(applied.activePlanetId).toBe("frost");
+    expect(applied.entities.find((entity) => entity.id === frostEntity.id)).toEqual(frostEntity);
+  });
+
+  it("includes deferred history and Dyson plans only for an explicit live workspace scope", () => {
+    const previous = createInitialState();
+    const current = structuredClone(previous);
+    current.productionHistory = [{
+      elapsedSeconds: 10,
+      productionPerMinute: { iron_ore: 6 },
+      consumptionPerMinute: {},
+      inventory: {},
+      generationKw: 0,
+      demandKw: 0,
+    }];
+    current.dysonPlans.helios.structurePoints = 123;
+    const defaultProjection = createSimulationProjection(previous, current, { compact: true });
+    const workspaceProjection = createSimulationProjection(previous, current, {
+      compact: true,
+      includeDeferredTopLevel: true,
+    });
+    expect(defaultProjection.topLevel).not.toHaveProperty("productionHistory");
+    expect(defaultProjection.topLevel).not.toHaveProperty("dysonPlans");
+    expect(workspaceProjection.topLevel.productionHistory).toEqual(current.productionHistory);
+    expect(workspaceProjection.topLevel.dysonPlans?.helios.structurePoints).toBe(123);
+  });
 });

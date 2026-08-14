@@ -127,6 +127,8 @@ describe("1.0.44 simulation runtime transport probe", () => {
       for (const [, fields] of entityPatches) for (const field of Object.keys(fields)) entityFieldCounts[field] = (entityFieldCounts[field] ?? 0) + 1;
       for (const [, fields] of beltPatches) for (const field of Object.keys(fields)) beltFieldCounts[field] = (beltFieldCounts[field] ?? 0) + 1;
       const report = {
+        fixtureChecksum: inspection.checksum,
+        fixtureIntegrity: inspection.integrity,
         durationMs,
         fullStateBytes: utf8Bytes(result.state),
         topLevelPatchBytes: utf8Bytes(topLevel),

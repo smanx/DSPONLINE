@@ -1024,6 +1024,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   } | null>(null);
   const simulationStateRevisionRef = useRef(0);
   const simulationProjectionIndexRef = useRef<SimulationProjectionStateIndex>(createSimulationProjectionStateIndex(loaded.state));
+  const simulationProjectionScopeRef = useRef<"default" | "full-top-level">("default");
+  simulationProjectionScopeRef.current = statisticsOpen || dysonPlannerOpen ? "full-top-level" : "default";
   const simulationCheckpointBarrierRef = useRef(false);
   const simulationSaveBarrierDepthRef = useRef(0);
   const simulationCheckpointRequestRef = useRef<{
@@ -1052,6 +1054,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const lastSimulationResultRef = useRef<GameState | null>(null);
   const simulationPendingSecondsRef = useRef(game.timeWarp.pendingSimulationSeconds);
   const simulationPendingWallSecondsRef = useRef(game.timeWarp.pendingWallSeconds);
+  const simulationRetrySecondsRef = useRef(0);
+  const simulationRetryWallSecondsRef = useRef(0);
   const timeWarpComputeStateRef = useRef(timeWarpComputeState);
   const simulationRequestIdRef = useRef(0);
   const pureIdleActiveRef = useRef(loaded.state.timeWarp.enabled);
@@ -1560,8 +1564,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       if (planetViewports !== state.planetViewports) current = { ...state, planetViewports };
     }
     const submitted = simulationSubmissionRef.current;
-    const pendingSimulationSeconds = simulationPendingSecondsRef.current + (submitted?.simulationSeconds ?? 0);
-    const pendingWallSeconds = simulationPendingWallSecondsRef.current + (submitted?.wallSeconds ?? 0);
+    const pendingSimulationSeconds = simulationPendingSecondsRef.current + simulationRetrySecondsRef.current + (submitted?.simulationSeconds ?? 0);
+    const pendingWallSeconds = simulationPendingWallSecondsRef.current + simulationRetryWallSecondsRef.current + (submitted?.wallSeconds ?? 0);
     if (pendingSimulationSeconds === current.timeWarp.pendingSimulationSeconds && pendingWallSeconds === current.timeWarp.pendingWallSeconds) return current;
     return {
       ...current,
@@ -1638,6 +1642,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     queueMicrotask(() => dispatchSimulationCheckpointRef.current());
     return promise;
   }, [stateWithSimulationDebt]);
+
+  const refreshAuthoritativeUiMirror = useCallback(async (): Promise<void> => {
+    const checkpointWithDebt = await requestAuthoritativeSimulationCheckpoint();
+    const authoritative = simulationWorkerRef.current && !simulationWorkerDisabledRef.current
+      ? latestAuthoritativeCheckpointRef.current
+      : checkpointWithDebt;
+    const confirmedView = lastSimulationResultRef.current ?? authoritative;
+    const current = gameRef.current;
+    const pending = current === confirmedView
+      ? null
+      : createSimulationCommandPatch(confirmedView, current, simulationStateRevisionRef.current);
+    const next = pending ? applySimulationCommandPatch(authoritative, pending) : authoritative;
+    lastSimulationResultRef.current = authoritative;
+    simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(authoritative);
+    gameRef.current = next;
+    setGame(next);
+  }, [requestAuthoritativeSimulationCheckpoint]);
 
   const dispatchSimulationRecovery = useCallback(() => {
     const recovery = simulationRecoveryRef.current;
@@ -1719,8 +1740,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     ]));
     return {
       game: gameRef.current,
-      pendingSimulationSeconds: simulationPendingSecondsRef.current + (submitted?.simulationSeconds ?? 0),
-      pendingWallSeconds: simulationPendingWallSecondsRef.current + (submitted?.wallSeconds ?? 0),
+      pendingSimulationSeconds: simulationPendingSecondsRef.current + simulationRetrySecondsRef.current + (submitted?.simulationSeconds ?? 0),
+      pendingWallSeconds: simulationPendingWallSecondsRef.current + simulationRetryWallSecondsRef.current + (submitted?.wallSeconds ?? 0),
       submissionId: submitted?.id ?? null,
       pendingViewportSignature,
     };
@@ -2808,9 +2829,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         return;
       }
       if (event.data.needsResync) {
+        // The Worker rejected the command before running this slice. Keep it
+        // in a dedicated retry bucket so Pause cannot erase it and so it is
+        // neither lost nor submitted twice.
+        simulationRetrySecondsRef.current += submission.simulationSeconds;
+        simulationRetryWallSecondsRef.current += submission.wallSeconds;
         if (!event.data.checkpoint || typeof event.data.stateRevision !== "number") {
-          simulationPendingSecondsRef.current += submission.simulationSeconds;
-          simulationPendingWallSecondsRef.current += submission.wallSeconds;
           lastSimulationResultRef.current = null;
           setSimulationWorkerGeneration((generation) => generation + 1);
           return;
@@ -3272,6 +3296,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         setTimeWarpPendingUi(0);
         return;
       }
+      if (simulationRetrySecondsRef.current > 0 || simulationRetryWallSecondsRef.current > 0) {
+        simulationPendingSecondsRef.current += simulationRetrySecondsRef.current;
+        simulationPendingWallSecondsRef.current += simulationRetryWallSecondsRef.current;
+        simulationRetrySecondsRef.current = 0;
+        simulationRetryWallSecondsRef.current = 0;
+      }
       const wallSeconds = Math.max(0, (now - previous) / 1000);
       const baseMultiplier = currentState.settings.simulationSpeed;
       const powerLimitedMultiplier = getEffectiveSimulationMultiplier(currentState);
@@ -3347,6 +3377,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           multicore: multicoreSimulationOptionsRef.current,
           approximate: currentState.timeWarp.enabled && timeWarpLimits?.computeMode === "approximate",
           stateRevision: simulationStateRevisionRef.current,
+          projectionScope: simulationProjectionScopeRef.current,
           ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
         };
         simulationRequestIdRef.current = request.id;
@@ -4101,8 +4132,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setAccountState(next);
   }, []);
 
-  const openCommandWorkspace = useCallback((workspace: CommandWorkspace) => {
+  const openCommandWorkspace = useCallback(async (workspace: CommandWorkspace) => {
     setCommandPaletteOpen(false);
+    if (workspace === "statistics" || workspace === "dyson") {
+      setNotice("正在同步完整实时数据…");
+      await refreshAuthoritativeUiMirror();
+    }
     closeAllWorkspaces();
     setMobilePanel(null);
     if (workspace === "inspector" || workspace === "resources") {
@@ -4148,7 +4183,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("galaxy");
       else mobileNavigation.openWorkspace("galaxy");
     }
-  }, [closeAllWorkspaces, mobileNavigation.openSheet, mobileNavigation.openWorkspace, mobileNavigation.replaceModalWithSheet, mobileNavigation.replaceModalWithWorkspace, nextMobileShell]);
+  }, [closeAllWorkspaces, mobileNavigation.openSheet, mobileNavigation.openWorkspace, mobileNavigation.replaceModalWithSheet, mobileNavigation.replaceModalWithWorkspace, nextMobileShell, refreshAuthoritativeUiMirror]);
 
   const openSystemSpaceStation = useCallback((systemId: StarSystemId) => {
     closeAllWorkspaces();
@@ -4265,6 +4300,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setSimulationWorkerGeneration((generation) => generation + 1);
     simulationPendingSecondsRef.current = state.timeWarp.pendingSimulationSeconds;
     simulationPendingWallSecondsRef.current = state.timeWarp.pendingWallSeconds;
+    simulationRetrySecondsRef.current = 0;
+    simulationRetryWallSecondsRef.current = 0;
     gameRef.current = state;
     completedTechCountRef.current = state.research.completedTechIds.length;
     achievementCountRef.current = state.achievements.unlockedIds.length;
@@ -4566,13 +4603,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return;
     }
     if (navigation.kind === "dyson") {
-      setDysonPlannerOpen(true);
+      void openCommandWorkspace("dyson");
       setNotice("已打开戴森球规划");
       return;
     }
     if (navigation.kind === "galactic") {
       setStatisticsFocusTab("galaxy");
-      setStatisticsOpen(true);
+      void openCommandWorkspace("statistics");
       setNotice("已打开银河工业控制台");
       return;
     }
@@ -4597,7 +4634,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setInspectorTab("fabricate");
     setMobilePanel("inspector");
     setNotice(`施工托盘已切换到${getBuilding(navigation.buildingId).name}`);
-  }, [closeAllWorkspaces, focusEntityIds, onPlanetChange]);
+  }, [closeAllWorkspaces, focusEntityIds, onPlanetChange, openCommandWorkspace]);
 
   const runOnboardingAction = useCallback((stepId: OnboardingActionId) => {
     closeAllWorkspaces();

@@ -33,6 +33,7 @@ export interface SimulationWorkerRequest {
   multicore?: MulticoreSimulationOptions;
   /** Use the guarded short-calibration macro path for pure-idle time warp. */
   approximate?: boolean;
+  projectionScope?: "default" | "full-top-level";
 }
 
 export interface SimulationWorkerResponse {
@@ -144,6 +145,13 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
     } satisfies SimulationWorkerResponse);
     return;
   }
+  const includeDeferredTopLevel = event.data.projectionScope === "full-top-level";
+  // Capture the old active planet before an ordered command. A planet switch
+  // must publish every record on the new planet, including records whose
+  // runtime fields did not change during this slice.
+  const commandProjectionBaseline = event.data.command
+    ? captureSimulationProjectionBaseline(runtime.state, { includeDeferredTopLevel })
+    : null;
   let commandApplied = false;
   if (event.data.command) {
     if (event.data.command.baseRevision !== runtimeRevision) {
@@ -184,7 +192,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   // oracle because the persistent engine mutates runtime records in place.
   // This expensive clone remains isolated behind its opt-in device switch.
   const deltaBaseline = event.data.protocol === "delta" && !suppliedState ? structuredClone(previousState) : null;
-  const projectionBaseline = captureSimulationProjectionBaseline(previousState);
+  const projectionBaseline = commandProjectionBaseline ?? captureSimulationProjectionBaseline(previousState, { includeDeferredTopLevel });
   const previousRevision = runtimeRevision;
   const multicorePlan = requestMulticorePlan(runtime.state, event.data.multicore);
   let multicoreUsed = false;
@@ -245,7 +253,10 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
     reusedState,
     cacheRebuilt: result.cacheRebuilt,
     registryFingerprint: activeRegistryFingerprint ?? undefined,
-    ...(result.changed ? { projection: createSimulationProjection(projectionBaseline, result.state, { compact: event.data.protocol === "projection" }) } : {}),
+    ...(result.changed ? { projection: createSimulationProjection(projectionBaseline, result.state, {
+      compact: event.data.protocol === "projection",
+      includeDeferredTopLevel,
+    }) } : {}),
     ...(event.data.multicore ? { multicore: {
       enabled: multicoreUsed,
       workerCount: multicoreUsed ? multicoreExecutor?.workerCount ?? multicorePlan.workerCount : multicorePlan.workerCount,

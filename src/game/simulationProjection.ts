@@ -22,7 +22,7 @@ export interface SimulationProjection {
    * Runtime-facing top-level fields, excluding the two record arrays and
    * history/planning payloads that are not needed for the default live UI.
    */
-  topLevel: Partial<Omit<GameState, "entities" | "belts" | "productionHistory" | "dysonPlans">>;
+  topLevel: Partial<Omit<GameState, "entities" | "belts">>;
   removedEntityIds: string[];
   removedBeltIds: string[];
   topologyChangedEntityIds: string[];
@@ -43,6 +43,7 @@ export interface SimulationProjectionBaseline {
   entityTopologySignatures: ReadonlyMap<string, string>;
   beltTopologySignatures: ReadonlyMap<string, string>;
   topLevelSignatures: ReadonlyMap<string, string | undefined>;
+  includesDeferredTopLevel: boolean;
 }
 
 const EXCLUDED_TOP_LEVEL_PROJECTION_KEYS = new Set<keyof GameState>([
@@ -54,6 +55,8 @@ const EXCLUDED_TOP_LEVEL_PROJECTION_KEYS = new Set<keyof GameState>([
   "productionHistory",
   "dysonPlans",
 ]);
+
+const DEFERRED_TOP_LEVEL_PROJECTION_KEYS = new Set<keyof GameState>(["productionHistory", "dysonPlans"]);
 
 function isSimulationProjectionBaseline(value: GameState | SimulationProjectionBaseline): value is SimulationProjectionBaseline {
   return "kind" in value && value.kind === "simulation-projection-baseline";
@@ -87,13 +90,17 @@ function beltSignature(belt: GameState["belts"][number]): string {
   return JSON.stringify(belt);
 }
 
-function topLevelEntries(state: GameState): Array<[string, unknown]> {
+function topLevelEntries(state: GameState, includeDeferredTopLevel = false): Array<[string, unknown]> {
   return Object.keys(state)
-    .filter((key) => !EXCLUDED_TOP_LEVEL_PROJECTION_KEYS.has(key as keyof GameState))
+    .filter((key) => !EXCLUDED_TOP_LEVEL_PROJECTION_KEYS.has(key as keyof GameState) ||
+      (includeDeferredTopLevel && DEFERRED_TOP_LEVEL_PROJECTION_KEYS.has(key as keyof GameState)))
     .map((key) => [key, (state as unknown as Record<string, unknown>)[key]]);
 }
 
-export function captureSimulationProjectionBaseline(state: GameState): SimulationProjectionBaseline {
+export function captureSimulationProjectionBaseline(
+  state: GameState,
+  options: { includeDeferredTopLevel?: boolean } = {},
+): SimulationProjectionBaseline {
   const entities = state.entities.filter((entity) => entity.planetId === state.activePlanetId);
   const belts = state.belts.filter((belt) => belt.planetId === state.activePlanetId);
   return {
@@ -103,7 +110,8 @@ export function captureSimulationProjectionBaseline(state: GameState): Simulatio
     beltSignatures: new Map(belts.map((belt) => [belt.id, beltSignature(belt)])),
     entityTopologySignatures: new Map(entities.map((entity) => [entity.id, entityTopologySignature(entity)])),
     beltTopologySignatures: new Map(belts.map((belt) => [belt.id, beltTopologySignature(belt)])),
-    topLevelSignatures: new Map(topLevelEntries(state).map(([key, value]) => [key, JSON.stringify(value)])),
+    topLevelSignatures: new Map(topLevelEntries(state, options.includeDeferredTopLevel).map(([key, value]) => [key, JSON.stringify(value)])),
+    includesDeferredTopLevel: options.includeDeferredTopLevel === true,
   };
 }
 
@@ -130,11 +138,14 @@ function appendRecordColumns<T extends { id: string }>(
 export function createSimulationProjection(
   previous: GameState | SimulationProjectionBaseline | null,
   current: GameState,
-  options: { compact?: boolean } = {},
+  options: { compact?: boolean; includeDeferredTopLevel?: boolean } = {},
 ): SimulationProjection {
   // Projection work is bounded by the visible planet. Other planets remain in
   // the authoritative state and are rebuilt once if the player switches to them.
-  const baseline = previous ? isSimulationProjectionBaseline(previous) ? previous : captureSimulationProjectionBaseline(previous) : null;
+  const baseline = previous ? isSimulationProjectionBaseline(previous)
+    ? previous
+    : captureSimulationProjectionBaseline(previous, options)
+    : null;
   const previousEntities = baseline?.entitySignatures ?? new Map<string, string>();
   const previousBelts = baseline?.beltSignatures ?? new Map<string, string>();
   const currentPlanetEntities = current.entities.filter((entity) => entity.planetId === current.activePlanetId);
@@ -176,7 +187,7 @@ export function createSimulationProjection(
     }
   }
   const topLevel = {} as SimulationProjection["topLevel"];
-  for (const [key, value] of topLevelEntries(current)) {
+  for (const [key, value] of topLevelEntries(current, options.includeDeferredTopLevel)) {
     if (!baseline || baseline.topLevelSignatures.get(key) !== JSON.stringify(value)) {
       (topLevel as Record<string, unknown>)[key] = value;
     }
