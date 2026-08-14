@@ -482,11 +482,26 @@ test("real large save keeps running frames and steady Worker payloads bounded", 
   // Keep the attachment read-only while resetting only the envelope timestamp
   // in the in-memory browser fixture. This isolates realtime simulation from
   // the separate one-day offline-settlement path.
-  const sourceEnvelope = JSON.parse(readFileSync(LARGE_SAVE_FIXTURE!, "utf8")) as { state?: unknown };
-  const raw = JSON.stringify({ savedAt: Date.now(), state: sourceEnvelope.state ?? sourceEnvelope });
+  const sourceEnvelope = JSON.parse(readFileSync(LARGE_SAVE_FIXTURE!, "utf8")) as {
+    state?: { activePlanetId?: string; entities?: Array<{ planetId?: string }>; belts?: unknown[] };
+    activePlanetId?: string;
+    entities?: Array<{ planetId?: string }>;
+    belts?: unknown[];
+  };
+  const sourceState = sourceEnvelope.state ?? sourceEnvelope;
+  const expectedActivePlanetId = sourceState.activePlanetId ?? "home";
+  const expectedActiveEntityCount = sourceState.entities?.filter((entity) => entity.planetId === expectedActivePlanetId).length ?? 0;
+  const expectedEntityCount = sourceState.entities?.length ?? 0;
+  const expectedBeltCount = sourceState.belts?.length ?? 0;
+  const raw = JSON.stringify({ savedAt: Date.now(), state: sourceState });
 
   await page.addInitScript(() => {
-    sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
+    (window as typeof window & { __DSP_RUNTIME_TRANSITIONS__?: unknown }).__DSP_RUNTIME_TRANSITIONS__ = {
+      enabled: true,
+      events: [],
+      active: {},
+      counters: {},
+    };
     localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
     localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     localStorage.setItem("dsp-idle-network.canvas-performance-features.v1", JSON.stringify({
@@ -524,33 +539,43 @@ test("real large save keeps running frames and steady Worker payloads bounded", 
     });
     Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
   });
-  await page.goto("/version.json");
-  await page.evaluate(async (saveRaw) => {
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("dsp-idle-network.local-saves");
-      request.onupgradeneeded = () => {
-        if (!request.result.objectStoreNames.contains("records")) request.result.createObjectStore("records", { keyPath: "key" });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction("records", "readwrite");
-      transaction.objectStore("records").put({
-        key: "dsp-idle-network.save.v1",
-        value: saveRaw,
-        updatedAt: Date.now(),
-        bytes: new TextEncoder().encode(saveRaw).byteLength,
-      });
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
-    database.close();
+  await page.goto("/?storageMigration=production");
+  const seeded = await page.evaluate(async (saveRaw) => {
+    const store = await import("/src/game/localSaveStore.ts");
+    await store.initializeLocalSaveStore();
+    store.setLocalSaveValue("dsp-idle-network.save.v1", saveRaw);
+    await store.flushLocalSaveWrites();
+    const persisted = await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    if (persisted !== saveRaw) throw new Error("large runtime fixture exact read-back failed");
+    const storage = await import("/src/game/storage.ts");
+    const loaded = storage.loadGame();
+    return { entities: loaded.state.entities.length, belts: loaded.state.belts.length, source: loaded.recovery?.source ?? "primary" };
   }, raw);
-  await page.goto("/");
+  expect(seeded).toMatchObject({ entities: expectedEntityCount, belts: expectedBeltCount, source: "primary" });
+  // The menu summary is snapshotted during its initial render. Reloading this
+  // menu-only page is safe and lets startup consume the verified IDB record.
+  await page.reload();
+  const continueGame = page.getByRole("button", { name: /继续游戏/ });
+  await expect(continueGame).toBeVisible({ timeout: 30_000 });
+  await continueGame.click();
   const shell = page.locator(".game-shell");
   await expect(shell).toBeVisible({ timeout: 120_000 });
   await expect(shell).toHaveAttribute("data-simulation-worker", "active");
+  const storageProbe = await page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    const cached = store.getLocalSaveValue("dsp-idle-network.save.v1");
+    const persisted = await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    return {
+      backend: store.getLocalSaveBackend(),
+      writer: store.getLocalSaveWriterStatus(),
+      cachedBytes: cached ? new TextEncoder().encode(cached).byteLength : 0,
+      persistedBytes: persisted ? new TextEncoder().encode(persisted).byteLength : 0,
+    };
+  });
+  console.info("V144_LARGE_STORAGE", JSON.stringify(storageProbe));
+  await expect(shell).toHaveAttribute("data-active-planet-node-count", String(expectedActiveEntityCount));
+  expect(expectedEntityCount).toBeGreaterThan(0);
+  expect(expectedBeltCount).toBeGreaterThan(0);
   const continueStartedAt = Date.now();
   const continueButton = page.getByLabel("继续模拟");
   if (await continueButton.isVisible()) await continueButton.click({ timeout: 30_000 });
@@ -594,7 +619,24 @@ test("real large save keeps running frames and steady Worker payloads bounded", 
       lastProjectionBytes: new TextEncoder().encode(JSON.stringify(tracker.lastProjectionResponse)).byteLength,
     };
   });
-  console.info("V144_LARGE_RUNTIME", JSON.stringify({ continueLatencyMs, pauseLatencyMs, ...frameMetrics, ...workerMetrics }));
+  const transitionMetrics = await page.evaluate(() => {
+    const diagnostics = (window as typeof window & {
+      __DSP_RUNTIME_TRANSITIONS__?: {
+        events: Array<{ phase: string; durationMs: number; transition?: string }>;
+        counters?: Record<string, { count: number; totalMs: number; maxMs: number }>;
+      };
+    }).__DSP_RUNTIME_TRANSITIONS__;
+    const phases: Record<string, { count: number; totalMs: number; maxMs: number }> = {};
+    for (const event of diagnostics?.events ?? []) {
+      const current = phases[event.phase] ?? { count: 0, totalMs: 0, maxMs: 0 };
+      current.count += 1;
+      current.totalMs += event.durationMs;
+      current.maxMs = Math.max(current.maxMs, event.durationMs);
+      phases[event.phase] = current;
+    }
+    return { phases, counters: diagnostics?.counters ?? {} };
+  });
+  console.info("V144_LARGE_RUNTIME", JSON.stringify({ continueLatencyMs, pauseLatencyMs, ...frameMetrics, ...workerMetrics, transitionMetrics }));
   expect(continueLatencyMs).toBeLessThan(1_000);
   expect(pauseLatencyMs).toBeLessThan(1_000);
   expect(frameMetrics.p95Ms).toBeLessThanOrEqual(20);

@@ -33,6 +33,7 @@ import { formatQuantityCompact, formatQuantityExact } from "../game/quantityForm
 import { isElevatorStation } from "../game/systemHubLogistics";
 import { PowerValue } from "./PowerValue";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
+import { recordRuntimeTransitionCounter } from "../game/runtimeTransitionDiagnostics";
 import type { WorkProgressMode } from "../game/productionRefresh";
 import { useWorkDisplayProgress } from "../hooks/useProductionVisualClock";
 import type {
@@ -110,10 +111,15 @@ function useDynamicHandles(entityId: string, signature: string): RefObject<HTMLE
   const updateNodeInternals = useUpdateNodeInternals();
   const nodeRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    let frame = window.requestAnimationFrame(() => updateNodeInternals(entityId));
+    const update = () => {
+      const startedAt = performance.now();
+      updateNodeInternals(entityId);
+      recordRuntimeTransitionCounter("reactflow-updateNodeInternals", performance.now() - startedAt);
+    };
+    let frame = window.requestAnimationFrame(update);
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
       window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => updateNodeInternals(entityId));
+      frame = window.requestAnimationFrame(update);
     });
     if (nodeRef.current) observer?.observe(nodeRef.current);
     return () => {

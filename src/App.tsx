@@ -17,7 +17,7 @@ import {
   type OnConnectStartParams,
   type OnSelectionChangeParams,
 } from "@xyflow/react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Activity, AlertTriangle, ArrowUp, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Download, Focus, Map as MapIcon, PanelRightClose, Route, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
 import {
   ConstructionDock,
@@ -332,6 +332,7 @@ import {
 import { readMulticoreSimulationOptions, type MulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
 import { accumulateSimulationBudget, NORMAL_SIMULATION_SLICE_SECONDS, takeSimulationBudgetSlice } from "./game/simulationBudget";
+import { beginRuntimeTransition, completeRuntimeTransition, installRuntimeLongTaskDiagnostics, measureRuntimeTransitionPhase, recordActiveRuntimeTransitionPhase, recordRuntimeTransitionPhase } from "./game/runtimeTransitionDiagnostics";
 import {
   createTimeWarpComputeGovernor,
   forceTimeWarpApproximation,
@@ -938,6 +939,27 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [galacticActivityStatus, setGalacticActivityStatus] = useState<GalacticActivityPublicStatus | null>(null);
   const [, setHistoryRevision] = useState(0);
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
+  useEffect(() => installRuntimeLongTaskDiagnostics(), []);
+  useLayoutEffect(() => {
+    recordActiveRuntimeTransitionPhase("react-layout-commit", {
+      paused: game.paused,
+      nodes: nodes.length,
+      canvasRevision: canvasRenderSnapshot.runtimeRevision,
+    });
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        completeRuntimeTransition(game.paused ? "pause" : "resume", "second-painted-frame", {
+          nodes: nodes.length,
+          canvasRevision: canvasRenderSnapshot.runtimeRevision,
+        });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [canvasRenderSnapshot.runtimeRevision, game.paused, nodes.length]);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveFailure, setSaveFailure] = useState<SaveGameResult | null>(null);
   const [eventHistory, setEventHistory] = useState<Array<{ id: number; text: string }>>([]);
@@ -1414,16 +1436,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const publishCanvasSnapshot = useCallback((state: GameState, force = false) => {
     if (!force && lastCanvasPublishedGameRef.current === state) return;
     const startedAt = performanceMonitor.isActive() ? performance.now() : 0;
-    const result = reconcileCanvasRenderSnapshot(
+    const result = measureRuntimeTransitionPhase("canvas-snapshot-reconcile", () => reconcileCanvasRenderSnapshot(
       canvasRenderSnapshotRef.current,
       state,
       pendingCanvasProjectionRef.current,
       { force, enabled: projectionFeatureActive },
-    );
+    ), { force, entities: state.entities.length, belts: state.belts.length });
     pendingCanvasProjectionRef.current = null;
     lastCanvasPublishedGameRef.current = state;
     canvasRenderSnapshotRef.current = result.snapshot;
+    const publishStartedAt = performance.now();
     setCanvasRenderSnapshot(result.snapshot);
+    recordRuntimeTransitionPhase("canvas-snapshot-set-state", publishStartedAt, performance.now() - publishStartedAt, {
+      changedEntities: result.changedEntityCount,
+      changedBelts: result.changedBeltCount,
+      fullRebuild: result.fullRebuild,
+    });
     if (performanceMonitor.isActive()) {
       performanceMonitor.recordCanvas({
         snapshotMs: performance.now() - startedAt,
@@ -2153,6 +2181,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const togglePause = useCallback(() => {
     if (gameRef.current.timeWarp.enabled) return;
     const wasPaused = gameRef.current.paused;
+    beginRuntimeTransition(wasPaused ? "resume" : "pause");
     setGame((current) => {
       const next = setPaused(current, !current.paused);
       gameRef.current = next;
@@ -2727,6 +2756,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const submission = simulationSubmissionRef.current;
       if (!submission || event.data.id !== submission.id) return;
       const latency = Math.max(0, performance.now() - submission.submittedAt);
+      recordRuntimeTransitionPhase("worker-compute-and-response", submission.submittedAt, latency, {
+        workerDurationMs: event.data.durationMs,
+        responseBytes: event.data.transferBytes ?? 0,
+        changed: event.data.changed,
+      });
       workerLatencyMsRef.current = workerLatencyMsRef.current > 0 ? workerLatencyMsRef.current * 0.75 + latency * 0.25 : latency;
       if (typeof event.data.durationMs === "number") {
         performanceMonitor.recordWorker({
@@ -2911,6 +2945,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         publishTimeWarpComputeState(governor);
         setTimeWarpPendingUi(simulationPendingSecondsRef.current);
       }
+      const responseApplyStartedAt = performance.now();
       setGame((current) => {
         let confirmed = submission.state;
         let projectionIndex = simulationProjectionIndexRef.current;
@@ -2931,10 +2966,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
           projectionIndex = createSimulationProjectionStateIndex(confirmed);
         } else if (event.data.projection) {
-          const applied = applySimulationProjectionToState(submission.state, event.data.projection, projectionIndex);
+          const applied = measureRuntimeTransitionPhase("worker-projection-apply", () =>
+            applySimulationProjectionToState(submission.state, event.data.projection!, projectionIndex), {
+            changedEntities: event.data.projection.changedEntityIds.length,
+            changedBelts: event.data.projection.changedBeltIds.length,
+          });
           confirmed = applied.state;
           projectionIndex = applied.index;
-          const canvasProjection = hydrateSimulationProjection(event.data.projection, confirmed, projectionIndex);
+          const canvasProjection = measureRuntimeTransitionPhase("worker-projection-hydrate", () =>
+            hydrateSimulationProjection(event.data.projection!, confirmed, projectionIndex), {
+            changedEntities: event.data.projection.changedEntityIds.length,
+            changedBelts: event.data.projection.changedBeltIds.length,
+          });
           pendingCanvasProjectionRef.current = mergeSimulationProjections(pendingCanvasProjectionRef.current, canvasProjection);
           if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
         } else if (!event.data.commandApplied) {
@@ -2954,6 +2997,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         const next = pending ? applySimulationCommandPatch(confirmed, pending) : confirmed;
         gameRef.current = next;
         return next;
+      });
+      recordRuntimeTransitionPhase("worker-response-setGame", responseApplyStartedAt, performance.now() - responseApplyStartedAt, {
+        changed: event.data.changed,
+        projection: Boolean(event.data.projection),
+        responseBytes: event.data.transferBytes ?? 0,
       });
       if (simulationCheckpointBarrierRef.current) {
         queueMicrotask(() => dispatchSimulationCheckpointRef.current());
@@ -5314,11 +5362,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [canvasWorkspacePaused, game.activePlanetId, stopCanvasPointerMotion]);
 
   const activePlanetEntities = useMemo(
-    () => canvasGame.entities.filter((entity) => entity.planetId === canvasGame.activePlanetId),
+    () => measureRuntimeTransitionPhase("active-planet-entity-filter", () =>
+      canvasGame.entities.filter((entity) => entity.planetId === canvasGame.activePlanetId),
+    { entities: canvasGame.entities.length }),
     [canvasGame.activePlanetId, canvasGame.entities],
   );
   const activePlanetBelts = useMemo(
-    () => canvasGame.belts.filter((belt) => belt.planetId === canvasGame.activePlanetId),
+    () => measureRuntimeTransitionPhase("active-planet-belt-filter", () =>
+      canvasGame.belts.filter((belt) => belt.planetId === canvasGame.activePlanetId),
+    { belts: canvasGame.belts.length }),
     [canvasGame.activePlanetId, canvasGame.belts],
   );
   const automaticDenseCanvasMode = shouldAutoOptimizeDenseCanvas(activePlanetEntityCount, activePlanetBelts.length);
@@ -5511,7 +5563,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (nodeDragActiveRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       const derivationStartedAt = performanceMonitor.isActive() ? performance.now() : 0;
+      const setNodesStartedAt = performance.now();
       setNodes((current) => {
+        const nodeMapStartedAt = performance.now();
         const existing = new Map(current.map((node) => [node.id, node]));
         const next = activePlanetEntities.map((entity) => {
           const previous = existing.get(entity.id);
@@ -5658,7 +5712,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             reactFlowNodeCount: next.length,
           });
         }
+        recordRuntimeTransitionPhase("canvas-node-map-signature", nodeMapStartedAt, performance.now() - nodeMapStartedAt, {
+          entities: activePlanetEntities.length,
+          previousNodes: current.length,
+          nextNodes: next.length,
+        });
         return next.length === current.length && next.every((node, index) => node === current[index]) ? current : next;
+      });
+      recordRuntimeTransitionPhase("reactflow-setNodes-dispatch", setNodesStartedAt, performance.now() - setNodesStartedAt, {
+        entities: activePlanetEntities.length,
       });
     });
     return () => window.cancelAnimationFrame(frame);
