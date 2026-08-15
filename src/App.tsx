@@ -2114,6 +2114,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         throw new Error("T1 写入后未取得 durable identity/fence，已阻止继续模拟");
       }
       if (head.baseIdentity.mode !== mode) throw new Error("durable mode 与主存档不匹配");
+      if (simulationStateRevisionRef.current !== head.stateRevision) {
+        throw new Error("模拟 revision 与 durable recovery head 不一致，已阻止滚动基线");
+      }
       const fence = { ownerId: status.writerId, fencingToken: status.fencingToken };
       // The persistence Worker performs a fenced stale-base replacement as a
       // single stage/publish/readback operation. Never clear the old head
@@ -2137,6 +2140,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         stateRevision: checkpoint.stateRevision,
         registryFingerprint: checkpoint.registryFingerprint,
       };
+      simulationStateRevisionRef.current = checkpoint.stateRevision;
       latestAuthoritativeCheckpointRef.current = saveState;
       lastSimulationResultRef.current = saveState;
       simulationReplayJournalRef.current = [];
@@ -3276,6 +3280,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           durableRecoveryHeadRef.current = advanceSimulationRuntimeDurableAppHead(
             durableRecoveryHeadRef.current!, submission.durableIntent!, result.proof,
           );
+          simulationStateRevisionRef.current = result.proof.stateRevision;
           durableRecoveryFinalizeInFlightRef.current = null;
           durableRecoveryFinalizeReadyRef.current = event.data.id;
           worker.onmessage?.(event);
