@@ -18,6 +18,9 @@ async function readRecoveryProof(page: Page) {
       stateRevision: read.proof.stateRevision,
       pending: read.proof.pending,
       finalized: read.proof.finalized,
+      commandCount: (read.recovery?.entries ?? []).reduce((count, entry) =>
+        count + (entry.kind === "atomic" && entry.intent.command ? 1 : 0), 0) +
+        (read.recovery?.pendingIntent?.command ? 1 : 0),
     };
   });
 }
@@ -29,32 +32,53 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("paused command WAL survives pagehide without promoting an emergency primary", async ({ page }) => {
+test("running and paused UI commands drain through WAL before pagehide without promoting an emergency primary", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/?menu=1");
   await page.getByRole("button", { name: /开始游戏/ }).click();
   const shell = page.locator(".game-shell");
   await expect(shell).toBeVisible({ timeout: 20_000 });
   await expect(shell).toHaveAttribute("data-runtime-recovery", "active");
-  const initialSequence = (await readRecoveryProof(page)).sequence;
-
-  const pause = page.getByLabel("暂停模拟");
-  if (await pause.isVisible()) await pause.click();
-  await expect(shell).toHaveAttribute("data-simulation-paused", "true");
-  await expect.poll(async () => (await readRecoveryProof(page)).sequence)
-    .toBeGreaterThan(initialSequence);
+  const initialProof = await readRecoveryProof(page);
 
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
   await operations.getByRole("button", { name: "教程、版本与其他", exact: true }).first().click();
   const relaxedDifficulty = operations.getByRole("button", { name: "舒缓", exact: true });
-  const afterPauseSequence = (await readRecoveryProof(page)).sequence;
   await relaxedDifficulty.click();
   await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
-  await expect.poll(async () => (await readRecoveryProof(page)).sequence)
-    .toBeGreaterThan(afterPauseSequence);
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(initialProof.commandCount);
+  const afterRunningEdit = await readRecoveryProof(page);
+
   await operations.getByLabel("关闭运营中心").click();
+  const pause = page.getByLabel("暂停模拟");
+  if (await pause.isVisible()) await pause.click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "true");
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(afterRunningEdit.commandCount);
+
+  // Two edits while the first durable command may still be in flight may be
+  // coalesced, but the last visible value must be staged/finalized and survive
+  // reload exactly once.
+  const beforeRapidEdits = await readRecoveryProof(page);
+  await page.getByLabel("打开设置").click();
+  const pausedOperations = page.getByRole("dialog", { name: "运营中心" });
+  await pausedOperations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await pausedOperations.getByRole("button", { name: "教程、版本与其他", exact: true }).first().click();
+  await pausedOperations.getByRole("button", { name: "高压", exact: true }).click();
+  await pausedOperations.getByRole("button", { name: "舒缓", exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(beforeRapidEdits.commandCount);
+  await pausedOperations.getByLabel("关闭运营中心").click();
 
   const beforeHide = await readRecoveryProof(page);
   expect(beforeHide.sequence).toBeGreaterThanOrEqual(2);

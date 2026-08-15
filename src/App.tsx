@@ -1158,7 +1158,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const durableRecoveryFinalizeReadyRef = useRef<number | null>(null);
   const durableRecoveryStageInFlightRef = useRef(false);
   const durableRecoveryStageRequestRef = useRef<{ simulationSeconds: number; wallSeconds: number } | null>(null);
-  const dispatchDurablePausedCommandRef = useRef<() => void>(() => undefined);
+  const dispatchDurableUiCommandRef = useRef<() => void>(() => undefined);
   const durablePrimarySaveInFlightRef = useRef(false);
   // A pagehide/beforeunload callback cannot await the durable checkpoint
   // barrier.  Once it starts, reject any *new* save/IDB enqueue so a queued
@@ -1527,10 +1527,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         const participantId = existing ?? (typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
           : Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join(""));
-        return synchronizeGalacticActivity(current, response.activity!, participantId);
+        const next = synchronizeGalacticActivity(current, response.activity!, participantId);
+        gameRef.current = next;
+        return next;
       });
-      if (durableRecoveryLifecycleRef.current === "active" && gameRef.current.paused) {
-        queueMicrotask(() => dispatchDurablePausedCommandRef.current());
+      if (durableRecoveryLifecycleRef.current === "active") {
+        window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
       }
     };
     void refresh();
@@ -1820,8 +1822,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return true;
   }, []);
 
-  const dispatchDurablePausedCommand = useCallback(() => {
-    if (durableRecoveryLifecycleRef.current !== "active" || !gameRef.current.paused ||
+  const dispatchDurableUiCommand = useCallback(() => {
+    if (durableRecoveryLifecycleRef.current !== "active" ||
       durableRecoveryStageInFlightRef.current || simulationSubmissionRef.current) return;
     const worker = simulationWorkerRef.current;
     const head = durableRecoveryHeadRef.current;
@@ -1867,11 +1869,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       lastSimulationResultRef.current = stopped;
       gameRef.current = stopped;
       setGame(stopped);
-      setNotice(`暂停状态的编辑尚未写入 durable WAL，已回退到精确检查点：${error instanceof Error ? error.message : "请刷新重试"}`);
+      const checkpointRequest = simulationCheckpointRequestRef.current;
+      if (checkpointRequest?.id === null) {
+        simulationCheckpointRequestRef.current = null;
+        simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+        checkpointRequest.reject(error instanceof Error ? error : new Error("玩家编辑未完成 durable stage"));
+      }
+      setNotice(`玩家编辑尚未写入 durable WAL，已回退到精确检查点：${error instanceof Error ? error.message : "请刷新重试"}`);
     };
     stageAndPostDurableSimulationRequest(request, submission, onFailure);
   }, [stageAndPostDurableSimulationRequest]);
-  dispatchDurablePausedCommandRef.current = dispatchDurablePausedCommand;
+  dispatchDurableUiCommandRef.current = dispatchDurableUiCommand;
 
   const dispatchSimulationCheckpoint = useCallback(() => {
     const pending = simulationCheckpointRequestRef.current;
@@ -1886,6 +1894,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     const state = gameRef.current;
     const command = createSimulationCommandPatch(confirmedState, state, simulationStateRevisionRef.current);
+    if (command && durableRecoveryLifecycleRef.current === "active") {
+      // Checkpoint/sync-projection requests must never smuggle an unlogged UI
+      // command directly to the authoritative Worker. Stage and finalize the
+      // zero-time command first; the response handler re-dispatches this
+      // barrier against the new durable revision.
+      dispatchDurableUiCommand();
+      return;
+    }
     const registrySnapshot = contentPackRuntimeSnapshotRef.current;
     const request: SimulationWorkerRequest = {
       id: simulationRequestIdRef.current + 1,
@@ -1910,7 +1926,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
       pending.reject(error instanceof Error ? error : new Error("模拟检查点请求失败"));
     }
-  }, [stateWithSimulationDebt]);
+  }, [dispatchDurableUiCommand, stateWithSimulationDebt]);
   dispatchSimulationCheckpointRef.current = dispatchSimulationCheckpoint;
 
   const requestAuthoritativeSimulationCheckpoint = useCallback((): Promise<GameState> => {
@@ -2599,7 +2615,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return next;
     });
     if (durableRecoveryLifecycleRef.current === "active") {
-      queueMicrotask(() => dispatchDurablePausedCommandRef.current());
+      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
     }
     setNotice(wasPaused ? "模拟已继续" : "模拟已暂停");
   }, []);
@@ -2693,6 +2709,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         gameRef.current = next;
         return next;
       });
+      if (durableRecoveryLifecycleRef.current === "active") {
+        window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+      }
       setNotice("速通工厂纯挂机已开始，工厂画布已冻结");
       return;
     }
@@ -2701,6 +2720,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       gameRef.current = next;
       return next;
     });
+    if (!pureIdleMacroActiveRef.current && durableRecoveryLifecycleRef.current === "active") {
+      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+    }
     pureIdleActiveRef.current = false;
     setPureIdleRecoveryContinueState(false);
     setPureIdleActive(false);
@@ -3055,12 +3077,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       gameRef.current = next;
       return next;
     });
-    if (durableRecoveryLifecycleRef.current === "active" && gameRef.current.paused) {
+    if (durableRecoveryLifecycleRef.current === "active") {
       // React may defer the functional updater until after the current
       // microtask checkpoint. A zero-delay task observes the committed
       // gameRef; the previous microtask could see the old state and silently
-      // leave a paused edit outside the WAL.
-      window.setTimeout(() => dispatchDurablePausedCommandRef.current(), 0);
+      // leave a player edit outside the WAL before the next simulation slice.
+      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
     }
   }, []);
 
@@ -3084,6 +3106,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         gameRef.current = next;
         return next;
       });
+      if (durableRecoveryLifecycleRef.current === "active") {
+        window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+      }
     }, 160);
     pendingPlanetViewportRef.current.set(planetId, { viewport: normalized, timer });
   }, []);
@@ -3099,8 +3124,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       redoStackRef.current.push(current);
       setHistoryRevision((revision) => revision + 1);
       setNotice("已撤销上一步工厂操作");
+      gameRef.current = previous;
       return previous;
     });
+    if (durableRecoveryLifecycleRef.current === "active") {
+      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+    }
   }, []);
 
   const redoGame = useCallback(() => {
@@ -3110,8 +3139,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       undoStackRef.current.push(current);
       setHistoryRevision((revision) => revision + 1);
       setNotice("已重做工厂操作");
+      gameRef.current = next;
       return next;
     });
+    if (durableRecoveryLifecycleRef.current === "active") {
+      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+    }
   }, []);
 
   const clearHistory = useCallback(() => {
@@ -3563,8 +3596,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       if (simulationCheckpointBarrierRef.current) {
         queueMicrotask(() => dispatchSimulationCheckpointRef.current());
       }
-      if (submission.durableIntent && gameRef.current.paused) {
-        queueMicrotask(() => dispatchDurablePausedCommandRef.current());
+      if (durableRecoveryLifecycleRef.current === "active") {
+        // React may defer the response setState updater. A task observes the
+        // rebased gameRef and drains any player edit that arrived while this
+        // Worker request or its WAL finalize was in flight.
+        window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
       }
     };
     worker.onerror = () => {
