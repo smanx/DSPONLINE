@@ -10056,12 +10056,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           <button className={`canvas-minimap-toggle nodrag nopan${minimapCollapsed ? " canvas-minimap-toggle--collapsed" : ""}`} type="button" onClick={() => setMinimapCollapsed((collapsed) => !collapsed)} title={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-label={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-expanded={!minimapCollapsed}>
             {minimapCollapsed ? <MapIcon size={16} /> : <PanelRightClose size={16} />}
           </button>
-          <output className="canvas-density-status nodrag nopan" aria-live="polite" aria-label="画布自适应细节状态">
+          <div className="canvas-density-status nodrag nopan" role="group" aria-live="polite" aria-label="画布自适应细节状态">
             <span>{canvasDetailPreference === "auto" ? "自动" : canvasDetailPreference === "full" ? "完整" : "最简"} · {canvasDetailStage === "full" ? "完整卡片" : canvasDetailStage === "medium" ? "中等细节" : "紧凑代理"}</span>
             <strong>{canvasVisibleNodeCount.toLocaleString("zh-CN")} 可见</strong>
             <i aria-hidden="true"><b style={{ transform: `scaleX(${canvasDetailProgressSnapshot.ratio})` }} /></i>
             {canvasStackGrouping.hiddenCount > 0 ? <small>{canvasStackGrouping.groupCount} 组重叠 · {canvasStackGrouping.hiddenCount} 个代理</small> : null}
-          </output>
+          </div>
           <StablePlanetNavigator game={panelGame} onPlanetChange={onPlanetChange} />
           <CanvasSelectionTools
             selectionMode={selectionMode}
