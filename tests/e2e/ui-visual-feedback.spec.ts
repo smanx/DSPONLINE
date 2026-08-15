@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 const VISUAL_FIXTURE_SESSION_KEY = "dsp-idle-network.ui-visual-fixture-seeded.v1";
 
 async function seedVisualFactory(page: Page, options: { fontScale?: number; extreme?: boolean } = {}) {
@@ -375,3 +375,4 @@ test("extreme LOD titles identify output and side panels collapse without cleari
   await expect(page.locator(".inspector-panel")).toContainText("熔炉");
   await expect(page.locator('.react-flow__node[data-id="visual-smelter"] .factory-node')).toHaveClass(/factory-node--selected/);
 });
+

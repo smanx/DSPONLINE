@@ -74,6 +74,7 @@ describe("local save catalog side records", () => {
       activePlanetId: "ashen",
       structurePoints: 42,
       integrity: "valid",
+      modeExplicit: true,
     });
     expect(new TextEncoder().encode(encoded).byteLength).toBeLessThan(LOCAL_SAVE_CATALOG_MAX_BYTES);
     expect(parseLocalSaveCatalog(encoded, key)).toEqual(catalog);
@@ -111,5 +112,11 @@ describe("local save catalog side records", () => {
     const key = "dsp-idle-network.save.v1.speedrun";
     const mismatched = envelope().replace('"mode":"normal"', '"mode":"speedrun"');
     expect(buildLocalSaveCatalog(key, mismatched, 0)).toMatchObject({ mode: "normal", integrity: "valid" });
+  });
+
+  it("marks a pre-mode envelope as migration-protected even when its normalized mode is ordinary", () => {
+    const key = "dsp-idle-network.save.v1";
+    const raw = envelope().replace(',"mode":"normal","slot"', ',"slot"').replace('"mode":"normal","elapsedSeconds"', '"elapsedSeconds"');
+    expect(buildLocalSaveCatalog(key, raw, 0)).toMatchObject({ mode: "normal", modeExplicit: false });
   });
 });

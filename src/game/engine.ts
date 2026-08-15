@@ -5223,6 +5223,12 @@ function ensureDynamicRouteLookup(state: GameState, lookup: SimulationLookupCont
   rebuildDynamicRouteLookup(state, lookup);
 }
 
+/** Hydrate only the mutable route ledger on an existing simulation index. */
+export function ensureSimulationDynamicRouteLookup(state: GameState, lookup: SimulationLookupContext): SimulationLookupContext {
+  ensureDynamicRouteLookup(state, lookup);
+  return lookup;
+}
+
 /** Builds the hydrated read-only indexes used by one P6 planet-phase batch. */
 export function createSimulationPlanetPhaseLookup(state: GameState, profiler?: SimulationProfiler): SimulationLookupContext {
   const lookup = createSimulationLookupContext(state, profiler);

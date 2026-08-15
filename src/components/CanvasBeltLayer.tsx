@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { ITEMS } from "../game/content";
 import { buildCanvasLineBatchFromGeometry, type CanvasLineNodeGeometry } from "../game/canvasLineBatch";
-import { buildCanvasBeltHitIndex, findNearestCanvasBelt, type CanvasBeltHit } from "../game/canvasBeltSpatialIndex";
+import { buildCanvasBeltHitIndex, collectCanvasBeltIndicesInBounds, findNearestCanvasBelt, type CanvasBeltHit } from "../game/canvasBeltSpatialIndex";
 import type { BeltConnection, CanvasViewport, PlanetId } from "../game/types";
 
 const CANVAS_PAN_OVERSCAN = 384;
@@ -32,6 +32,7 @@ export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayer
   const drawFrameRef = useRef<number | null>(null);
   const drawCountRef = useRef(0);
   const drawTotalMsRef = useRef(0);
+  const drawMaxMsRef = useRef(0);
   // Runtime belt observations do not change geometry. Repack only on an
   // explicit topology/geometry revision so hover and production refreshes do
   // not rebuild a multi-thousand-line spatial index.
@@ -40,21 +41,13 @@ export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayer
   // Item/color belongs to topology. Runtime flow refreshes replace the belts
   // array frequently, but must not rebuild the full visual map or hit layer.
   const beltItemById = useMemo(() => new Map(belts.map((belt) => [belt.id, belt.itemId])), [planetId, topologyRevision]);
-  const lineGroups = useMemo(() => {
-    const groups = new Map<string, { color: string; selected: boolean; indexes: number[] }>();
-    for (let index = 0; index < batch.beltIds.length; index += 1) {
-      const beltId = batch.beltIds[index];
-      const itemId = beltItemById.get(beltId);
-      if (!itemId) continue;
-      const selected = selectedBeltIds.has(beltId);
-      const color = selected ? "#f3d27b" : ITEMS[itemId]?.color ?? "#6da8a0";
-      const key = `${selected ? 1 : 0}|${color}`;
-      const group = groups.get(key) ?? { color, selected, indexes: [] };
-      group.indexes.push(index);
-      groups.set(key, group);
-    }
-    return [...groups.values()];
-  }, [batch.beltIds, beltItemById, selectedBeltIds]);
+  const lineStyleByIndex = useMemo(() => batch.beltIds.map((beltId) => {
+    const itemId = beltItemById.get(beltId);
+    if (!itemId) return null;
+    const selected = selectedBeltIds.has(beltId);
+    const color = selected ? "#f3d27b" : ITEMS[itemId]?.color ?? "#6da8a0";
+    return { key: `${selected ? 1 : 0}|${color}`, color, selected };
+  }), [batch.beltIds, beltItemById, selectedBeltIds]);
 
   const draw = useCallback(() => {
     drawFrameRef.current = null;
@@ -81,7 +74,27 @@ export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayer
     drawnViewportRef.current = currentViewport;
     canvas.style.transform = "translate3d(0, 0, 0)";
     const margin = 96;
-    for (const group of lineGroups) {
+    const zoom = Math.max(0.01, currentViewport.zoom);
+    // The hit index records the full route geometry in world coordinates.
+    // Reuse it here so zoom redraws examine only lines around this Canvas
+    // surface rather than every dense-factory belt. One cell of padding keeps
+    // the sampled bezier buckets conservative at the visible boundary.
+    const candidateIndexes = collectCanvasBeltIndicesInBounds(hitIndex, {
+      left: (-margin - CANVAS_PAN_OVERSCAN - currentViewport.x) / zoom,
+      top: (-margin - CANVAS_PAN_OVERSCAN - currentViewport.y) / zoom,
+      right: (surfaceWidth + margin - CANVAS_PAN_OVERSCAN - currentViewport.x) / zoom,
+      bottom: (surfaceHeight + margin - CANVAS_PAN_OVERSCAN - currentViewport.y) / zoom,
+    }, hitIndex.cellSize);
+    const groups = new Map<string, { color: string; selected: boolean; indexes: number[] }>();
+    for (const index of candidateIndexes) {
+      const style = lineStyleByIndex[index];
+      if (!style) continue;
+      const group = groups.get(style.key) ?? { color: style.color, selected: style.selected, indexes: [] };
+      group.indexes.push(index);
+      groups.set(style.key, group);
+    }
+    let drawnSegments = 0;
+    for (const group of groups.values()) {
       context.strokeStyle = group.color;
       context.globalAlpha = group.selected ? 0.95 : 0.68;
       context.lineWidth = group.selected ? 3 : 1.5;
@@ -100,6 +113,7 @@ export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayer
         if (Math.max(sourceX, targetX) < -margin || Math.min(sourceX, targetX) > surfaceWidth + margin ||
           Math.max(sourceY, targetY, centerY) < -margin || Math.min(sourceY, targetY, centerY) > surfaceHeight + margin) continue;
         visiblePaths += 1;
+        drawnSegments += 1;
         context.moveTo(sourceX, sourceY);
         if (batch.routeModes[index] === 0) {
           const control = Math.max(42, Math.abs(targetX - sourceX) * 0.45);
@@ -121,10 +135,14 @@ export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayer
     const durationMs = performance.now() - startedAt;
     drawCountRef.current += 1;
     drawTotalMsRef.current += durationMs;
+    drawMaxMsRef.current = Math.max(drawMaxMsRef.current, durationMs);
     canvas.dataset.drawCount = String(drawCountRef.current);
     canvas.dataset.drawTotalMs = drawTotalMsRef.current.toFixed(3);
+    canvas.dataset.drawMaxMs = drawMaxMsRef.current.toFixed(3);
     canvas.dataset.lastDrawMs = durationMs.toFixed(3);
-  }, [batch, height, lineGroups, onUnavailable, width]);
+    canvas.dataset.candidateSegments = String(candidateIndexes.length);
+    canvas.dataset.drawnSegments = String(drawnSegments);
+  }, [batch, height, hitIndex, lineStyleByIndex, onUnavailable, width]);
 
   const scheduleDraw = useCallback(() => {
     if (drawFrameRef.current != null) return;
@@ -180,5 +198,7 @@ export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayer
     data-first-source-y={batch.segments > 0 ? batch.positions[1] : undefined}
     data-first-target-x={batch.segments > 0 ? batch.positions[2] : undefined}
     data-first-target-y={batch.segments > 0 ? batch.positions[3] : undefined}
+    data-first-route-mode={batch.segments > 0 ? batch.routeModes[0] : undefined}
+    data-first-route-center={batch.segments > 0 && Number.isFinite(batch.routeCenters[0]) ? batch.routeCenters[0] : undefined}
   />;
 });

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { selectSettingsCategory } from "./settings-helpers";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function seedEnglishFactory(page: Page, mobileUi: "legacy" | "next" = "next") {
   await page.addInitScript(({ releaseNoteId, mobileUi }) => {
@@ -112,7 +112,7 @@ test("English light release notes are localized and persist dismissal", async ({
   await page.goto("/?menu=1&lang=en");
   const dialog = page.getByRole("dialog", { name: "Large-save Loading and Saving Hotfix" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("1.0.43");
+  await expect(dialog).toContainText("1.0.44");
   await expect(dialog).toContainText("Large belt migrations now scale linearly");
   expect(await visibleHanStrings(dialog)).toEqual([]);
   await dialog.getByRole("button", { name: "Got it" }).click();
@@ -176,3 +176,5 @@ test("English light next-mobile shell keeps navigation and settings reachable", 
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/v102-english-light-mobile-390x844.png", fullPage: true });
 });
+
+

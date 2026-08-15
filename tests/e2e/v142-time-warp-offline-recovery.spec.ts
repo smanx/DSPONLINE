@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function openMenu(page: Page): Promise<void> {
   await page.addInitScript((releaseNoteId) => {
@@ -115,3 +115,4 @@ test("an unavailable recovery journal offers explicit checkpoint recovery and pr
   expect(settled.elapsedSeconds).toBeGreaterThanOrEqual(75);
   expect(settled.elapsedSeconds).toBeLessThan(200);
 });
+

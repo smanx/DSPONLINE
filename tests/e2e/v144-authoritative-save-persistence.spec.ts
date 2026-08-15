@@ -74,9 +74,13 @@ test("bytes-only save Worker and persistence Worker atomically commit primary/ca
     const protocol: any = await import(/* @vite-ignore */ "/src/game/simulationRuntimeProtocol.ts");
     const transferApi: any = await import(/* @vite-ignore */ "/src/game/saveTransfer.ts");
     const storage: any = await import(/* @vite-ignore */ "/src/game/storage.ts");
+    const localStore: any = await import(/* @vite-ignore */ "/src/game/localSaveStore.ts");
     const coordination: any = await import(/* @vite-ignore */ "/src/game/localSaveCoordination.ts");
     const catalogKeys: any = await import(/* @vite-ignore */ "/src/game/localSaveCatalog.ts");
     const state = engine.createInitialState();
+    state.planetViewports.home = { x: 24, y: -16, zoom: 0.9 };
+    state.timeWarp.pendingSimulationSeconds = 2;
+    state.timeWarp.pendingWallSeconds = 2;
     const sourceTransfer = protocol.serializeSimulationStateForTransfer(state);
     const mainLargeCalls = { parse: 0, stringify: 0, textEncoder: 0 };
     const originalParse = JSON.parse;
@@ -98,20 +102,24 @@ test("bytes-only save Worker and persistence Worker atomically commit primary/ca
     const longTaskEntries: PerformanceEntry[] = [];
     const observer = new PerformanceObserver((list) => longTaskEntries.push(...list.getEntries()));
     try { observer.observe({ type: "longtask", buffered: false }); } catch { /* unsupported */ }
-    const firstCommit = storage.saveGameVerified(state, sourceTransfer);
-    const sourceDetachedAfterSend = await new Promise<boolean>((resolve) => {
-      const started = performance.now();
-      const poll = () => {
-        if (sourceTransfer.buffer.byteLength === 0) resolve(true);
-        else if (performance.now() - started > 2_000) resolve(false);
-        else setTimeout(poll, 0);
-      };
-      poll();
-    });
+    const overlay = {
+      planetViewports: [{ planetId: "home", viewport: { x: 240, y: -160, zoom: 1.25 } }],
+      timeWarp: { pendingSimulationSeconds: 17, pendingWallSeconds: 11 },
+    };
+    const savedState = {
+      ...state,
+      planetViewports: { ...state.planetViewports, home: overlay.planetViewports[0].viewport },
+      timeWarp: { ...state.timeWarp, ...overlay.timeWarp },
+    };
+    const firstCommit = storage.saveGameVerified(savedState, sourceTransfer, overlay);
+    const sourceDetachedAfterSend = sourceTransfer.buffer.byteLength === 0;
+    const duplicateCommit = storage.saveGameVerified(savedState);
     const firstResult = await firstCommit;
-    const sourceRestored = sourceTransfer.buffer.byteLength > 0;
-    const payloadDetachedAfterSend = true;
-    const payloadRestored = true;
+    const duplicateResult = await duplicateCommit;
+    const repeatedResult = await storage.saveGameVerified(savedState);
+    const sourceMovedToDeferredSnapshot = sourceTransfer.buffer.byteLength === 0;
+    const automaticSnapshotCountAtPrimaryCompletion = localStore.listLocalSaveKeys().filter((key: string) =>
+      key.startsWith("dsp-idle-network.save.v1.snapshot.") && key !== "dsp-idle-network.save.v1.snapshot.sequence").length;
 
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open("dsp-idle-network.local-saves", 2);
@@ -126,6 +134,20 @@ test("bytes-only save Worker and persistence Worker atomically commit primary/ca
     const firstPrimary = await read("dsp-idle-network.save.v1");
     const firstBackup = await read("dsp-idle-network.save.v1.backup");
     const firstRevision = await read(coordination.localSaveRevisionKey("dsp-idle-network.save.v1"));
+    const firstEnvelope = JSON.parse(firstPrimary.value);
+    const readSnapshotKeys = () => new Promise<string[]>((resolve, reject) => {
+        const transaction = db.transaction("records", "readonly");
+        const request = transaction.objectStore("records").getAllKeys();
+        request.onsuccess = () => resolve((request.result as string[]).filter((key) =>
+          key.startsWith("dsp-idle-network.save.v1.snapshot.") && key !== "dsp-idle-network.save.v1.snapshot.sequence"));
+        request.onerror = () => reject(request.error);
+      });
+    let snapshotKeys = await readSnapshotKeys();
+    const snapshotDeadline = performance.now() + 5_000;
+    while (snapshotKeys.length === 0 && performance.now() < snapshotDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      snapshotKeys = await readSnapshotKeys();
+    }
 
     // Corrupt only the old primary envelope while keeping its catalog FNV and
     // revision metadata internally bound. Full envelope verification must then
@@ -156,13 +178,17 @@ test("bytes-only save Worker and persistence Worker atomically commit primary/ca
     TextEncoder.prototype.encode = originalEncode;
     return {
       sourceDetachedAfterSend,
-      sourceRestored,
-      payloadDetachedAfterSend,
-      payloadRestored,
+      sourceMovedToDeferredSnapshot,
+      automaticSnapshotCountAtPrimaryCompletion,
       firstCommit: firstResult,
+      duplicateCommit: duplicateResult,
+      repeatedCommit: repeatedResult,
       firstPrimaryBytes: firstPrimary?.bytes,
       firstBackupEqualsOld: firstBackup?.value === oldPrimaryRaw,
       firstRevision: JSON.parse(firstRevision.value).revision,
+      primaryViewport: firstEnvelope.state.planetViewports.home,
+      primaryDebt: firstEnvelope.state.timeWarp,
+      automaticSnapshotCount: snapshotKeys.length,
       secondCommit,
       backupPreservedAfterCorrupt: backupAfterCorrupt?.value === oldPrimaryRaw,
       largeLongTasks: longTaskEntries.filter((entry) => entry.duration > 50).length,
@@ -171,13 +197,17 @@ test("bytes-only save Worker and persistence Worker atomically commit primary/ca
   }, { oldPrimaryRaw: primary.raw });
 
   expect(result.sourceDetachedAfterSend).toBe(true);
-  expect(result.sourceRestored).toBe(true);
-  expect(result.payloadDetachedAfterSend).toBe(true);
-  expect(result.payloadRestored).toBe(true);
+  expect(result.sourceMovedToDeferredSnapshot).toBe(true);
+  expect(result.automaticSnapshotCountAtPrimaryCompletion).toBe(0);
   expect(result.firstCommit).toMatchObject({ success: true, backupSaved: true });
+  expect(result.duplicateCommit).toMatchObject({ success: true, backupSaved: true });
+  expect(result.repeatedCommit).toMatchObject({ success: true, skippedUnchanged: true, backupSaved: true });
   expect(result.firstPrimaryBytes).toBeGreaterThan(0);
   expect(result.firstBackupEqualsOld).toBe(true);
   expect(result.firstRevision).toBe(2);
+  expect(result.primaryViewport).toEqual({ x: 240, y: -160, zoom: 1.25 });
+  expect(result.primaryDebt).toMatchObject({ pendingSimulationSeconds: 17, pendingWallSeconds: 11 });
+  expect(result.automaticSnapshotCount).toBe(1);
   expect(result.secondCommit).toMatchObject({ success: true, backupSaved: false });
   expect(result.backupPreservedAfterCorrupt).toBe(true);
   expect(result.largeLongTasks).toBe(0);
@@ -220,4 +250,45 @@ test("proof-bound persistence rejects cross-seed and stale-fence writes without 
   });
   expect(result.tampered.result).toMatchObject({ ok: false, reason: "invalid" });
   expect(result.crossPayload.result).toMatchObject({ ok: false, reason: "invalid" });
+});
+
+test("checkpoint overlays are proof-bound and invalid overlay input never creates a primary revision", async ({ page }) => {
+  await openBarePage(page);
+  const primary = primaryFixture(1_786_377_702_000, 1, "overlay-base");
+  await seedPrimary(page, primary);
+  const result = await page.evaluate(async () => {
+    const engine: any = await import(/* @vite-ignore */ "/src/game/engine.ts");
+    const protocol: any = await import(/* @vite-ignore */ "/src/game/simulationRuntimeProtocol.ts");
+    const storage: any = await import(/* @vite-ignore */ "/src/game/storage.ts");
+    const store: any = await import(/* @vite-ignore */ "/src/game/localSaveStore.ts");
+    const state = engine.createInitialState();
+    const invalidTransfer = protocol.serializeSimulationStateForTransfer(state);
+    const invalid = await storage.saveGameVerified(state, invalidTransfer, {
+      planetViewports: [{ planetId: "missing-planet", viewport: { x: 0, y: 0, zoom: 1 } }],
+    });
+    const afterInvalid = await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    const validTransfer = protocol.serializeSimulationStateForTransfer(state);
+    const saved = await storage.saveGameVerified({
+      ...state,
+      planetViewports: { ...state.planetViewports, home: { x: -77, y: 33, zoom: 1.4 } },
+      timeWarp: { ...state.timeWarp, pendingSimulationSeconds: 9, pendingWallSeconds: 7 },
+    }, validTransfer, {
+      planetViewports: [{ planetId: "home", viewport: { x: -77, y: 33, zoom: 1.4 } }],
+      timeWarp: { pendingSimulationSeconds: 9, pendingWallSeconds: 7 },
+    });
+    const afterValid = await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    return {
+      invalid,
+      unchangedAfterInvalid: afterInvalid?.includes("overlay-base") === true,
+      saved,
+      persisted: afterValid ? JSON.parse(afterValid).state : null,
+    };
+  });
+  expect(result.invalid).toMatchObject({ success: false });
+  expect(result.unchangedAfterInvalid).toBe(true);
+  expect(result.saved).toMatchObject({ success: true });
+  expect(result.persisted).toMatchObject({
+    planetViewports: { home: { x: -77, y: 33, zoom: 1.4 } },
+    timeWarp: { pendingSimulationSeconds: 9, pendingWallSeconds: 7 },
+  });
 });

@@ -61,6 +61,8 @@ export interface SimulationRuntimeStartupRecoveryCandidate {
   replayedWallSeconds: number;
   replayedSimulationSeconds: number;
   registryFingerprint: string;
+  /** Runtime-only identity used to skip a byte-identical T0→T1 rewrite. */
+  preparedState: GameState;
 }
 
 export type SimulationRuntimeStartupRecoveryProgressPhase =
@@ -94,7 +96,7 @@ function verifySelectedPrimaryIdentity(
 ): SimulationRuntimeRecoveryBaseIdentity {
   const identity = getPrimaryLocalSaveRecoveryIdentity(mode);
   if (!identity || !inspection.valid || inspection.integrity !== "valid" || inspection.mode !== mode ||
-    inspection.savedAt !== identity.savedAt || inspection.computedChecksum !== identity.checksum || identity.revision < 1) {
+    inspection.savedAt !== identity.savedAt || inspection.computedChecksum !== identity.checksum) {
     throw new Error("主存档校验身份未完成，已阻止启动恢复；请重试以保留原存档");
   }
   return identity;
@@ -114,6 +116,22 @@ export async function prepareSimulationRuntimeStartupRecovery(input: {
   input.onProgress?.({ phase: "identity", message: "正在核对主存档与 durable recovery 基线…" });
   await initializeLocalSaveStore();
   const baseIdentity = verifySelectedPrimaryIdentity(input.inspection, input.mode);
+  // A payload migrated from the pre-coordination localStorage backend has an
+  // exact catalog/checksum identity but no durable revision yet.  Versions
+  // before 1.0.44 could not have a runtime WAL, so revision 0 must not be
+  // treated as a corrupt/missing recovery head.  Let the ordinary entry path
+  // settle offline time, then its verified primary write creates revision 1
+  // before initializing the first durable session.
+  if (baseIdentity.revision === 0) {
+    const offlineWindow = computeSimulationRuntimeStartupOfflineWindow({
+      savedAtMs: input.savedAtMs,
+      nowMs: Date.now(),
+      paused: input.state.paused,
+      replayedWallSeconds: 0,
+      maxOfflineSeconds: getOfflineSimulationLimitSeconds(input.state),
+    });
+    return { state: input.state, offlineSeconds: offlineWindow.offlineSeconds, candidate: null };
+  }
   const fence = writerFenceOrThrow();
   input.onProgress?.({ phase: "read", message: "正在读取崩溃恢复日志（主存档保持不变）…" });
   const read = await readSimulationRuntimeRecoveryInPersistenceWorker(baseIdentity, fence);
@@ -161,6 +179,7 @@ export async function prepareSimulationRuntimeStartupRecovery(input: {
       replayedWallSeconds,
       replayedSimulationSeconds,
       registryFingerprint: input.registry.fingerprint,
+      preparedState: state,
     },
   };
 }
@@ -178,13 +197,29 @@ export async function finalizeSimulationRuntimeStartupRecovery(input: {
   saveGameVerified: (state: GameState) => Promise<SaveGameResult>;
   onProgress?: (progress: SimulationRuntimeStartupRecoveryProgress) => void;
 }): Promise<SimulationRuntimeStartupRecoveryBinding> {
-  input.onProgress?.({ phase: "save", message: "正在验证 T1 主存档；旧 recovery 尚未清理…" });
-  const saved = await input.saveGameVerified(input.state);
-  if (!saved.success) throw new Error(`${saved.message}；原恢复基线仍保留`);
+  const canReuseVerifiedPrimary = input.candidate.sourceRecovery === null &&
+    input.candidate.replayedSequence === 0 && input.candidate.replayedStateRevision === 0 &&
+    input.candidate.replayedWallSeconds === 0 && input.candidate.replayedSimulationSeconds === 0 &&
+    input.state === input.candidate.preparedState;
+  if (canReuseVerifiedPrimary) {
+    input.onProgress?.({ phase: "save", message: "主存档未变化，正在复用已验证身份…" });
+  } else {
+    input.onProgress?.({ phase: "save", message: "正在验证 T1 主存档；旧 recovery 尚未清理…" });
+    const saved = await input.saveGameVerified(input.state);
+    if (!saved.success) throw new Error(`${saved.message}；原恢复基线仍保留`);
+  }
   await initializeLocalSaveStore();
   const t1Identity = getPrimaryLocalSaveRecoveryIdentity(input.mode);
   if (!t1Identity || t1Identity.savedAt <= 0 || t1Identity.revision < 1) {
     throw new Error("T1 主存档已写入但未取得逐字校验身份；已阻止进入游戏");
+  }
+  if (canReuseVerifiedPrimary && (
+    t1Identity.mode !== input.candidate.sourceBaseIdentity.mode ||
+    t1Identity.savedAt !== input.candidate.sourceBaseIdentity.savedAt ||
+    t1Identity.checksum !== input.candidate.sourceBaseIdentity.checksum ||
+    t1Identity.revision !== input.candidate.sourceBaseIdentity.revision
+  )) {
+    throw new Error("未变化主存档的 durable 身份已漂移；已阻止进入游戏");
   }
   const fence = writerFenceOrThrow();
   // `initializeSimulationRuntimeRecovery` performs a fenced stale-base

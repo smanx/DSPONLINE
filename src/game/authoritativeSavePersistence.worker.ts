@@ -142,6 +142,12 @@ function validNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+function catalogInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null;
+}
+
 function validSettings(value: unknown): boolean {
   if (value === null) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -176,7 +182,7 @@ function validSeed(seed: AuthoritativeSaveCatalogSeed, key: string, proof: Autho
     validNonNegativeInteger(seed.elapsedSeconds) && validNonNegativeInteger(seed.completedTechCount) &&
     validNonNegativeInteger(seed.structurePoints) && typeof seed.activePlanetId === "string" &&
     seed.activePlanetId.length <= 128 && (seed.reason === null || typeof seed.reason === "string" && seed.reason.length <= 256) &&
-    validSettings(seed.settings) && STATE_CHECKSUM_PATTERN.test(seed.stateChecksum) && proof.stateChecksum === seed.stateChecksum &&
+    seed.modeExplicit === true && validSettings(seed.settings) && STATE_CHECKSUM_PATTERN.test(seed.stateChecksum) && proof.stateChecksum === seed.stateChecksum &&
     proof.integrity === "valid" && SHA256_PATTERN.test(proof.payloadSha256) && SHA256_PATTERN.test(proof.bindingSha256) &&
     /^[0-9a-f]{8}$/.test(proof.payloadChecksum) && validNonNegativeInteger(proof.byteLength));
 }
@@ -184,34 +190,35 @@ function validSeed(seed: AuthoritativeSaveCatalogSeed, key: string, proof: Autho
 /** Re-parse and bind the new envelope in the persistence Worker.  The save
  * Worker proof is necessary but not trusted by itself: a tampered payload and
  * an independently supplied catalog seed must never be committed together. */
-function verifyNewEnvelope(raw: string, request: AuthoritativeSavePersistenceRequest): boolean {
+function newEnvelopeMismatch(raw: string, request: AuthoritativeSavePersistenceRequest): string | null {
   const inspection = inspectSaveEnvelopeChecksum(raw);
-  if (inspection.status !== "valid" || !inspection.parsed || !inspection.state ||
-    inspection.recordedChecksum !== request.seed.stateChecksum ||
-    inspection.computedChecksum !== request.seed.stateChecksum) return false;
+  if (inspection.status !== "valid" || !inspection.parsed || !inspection.state) return "integrity";
+  if (inspection.recordedChecksum !== request.seed.stateChecksum) return "recordedChecksum";
+  if (inspection.computedChecksum !== request.seed.stateChecksum) return "computedChecksum";
   const envelope = inspection.parsed;
   const state = inspection.state;
-  return envelope.formatVersion === 2 && envelope.kind === request.seed.kind && envelope.mode === request.seed.mode &&
-    envelope.slot === request.seed.slot && envelope.savedAt === request.seed.savedAt &&
-    state.mode === request.seed.mode && state.version === request.seed.stateVersion &&
-    state.activePlanetId === request.seed.activePlanetId &&
-    Array.isArray(state.entities) && state.entities.length === request.seed.entityCount &&
-    Array.isArray(state.belts) && state.belts.length === request.seed.beltCount &&
-    state.elapsedSeconds === request.seed.elapsedSeconds &&
-    (() => {
-      const research = state.research;
-      const dysonSphere = state.dysonSphere;
-      const completedTechIds = research && typeof research === "object"
-        ? (research as Record<string, unknown>).completedTechIds
-        : undefined;
-      const structurePoints = dysonSphere && typeof dysonSphere === "object"
-        ? (dysonSphere as Record<string, unknown>).structurePoints
-        : undefined;
-      return Boolean(research && typeof research === "object" &&
-        Array.isArray(completedTechIds) && completedTechIds.length === request.seed.completedTechCount &&
-        dysonSphere && typeof dysonSphere === "object" &&
-        structurePoints === request.seed.structurePoints);
-    })();
+  if (envelope.formatVersion !== 2) return "formatVersion";
+  if (envelope.kind !== request.seed.kind) return "kind";
+  if (envelope.mode !== request.seed.mode) return "envelope.mode";
+  if (envelope.slot !== request.seed.slot) return "slot";
+  if (envelope.savedAt !== request.seed.savedAt) return "savedAt";
+  if (state.mode !== request.seed.mode) return "state.mode";
+  if (state.version !== request.seed.stateVersion) return "state.version";
+  if (state.activePlanetId !== request.seed.activePlanetId) return "activePlanetId";
+  if (!Array.isArray(state.entities) || state.entities.length !== request.seed.entityCount) return "entityCount";
+  if (!Array.isArray(state.belts) || state.belts.length !== request.seed.beltCount) return "beltCount";
+  if (catalogInteger(state.elapsedSeconds) !== request.seed.elapsedSeconds) return "elapsedSeconds";
+  const research = state.research;
+  const completedTechIds = research && typeof research === "object"
+    ? (research as Record<string, unknown>).completedTechIds
+    : undefined;
+  if (!Array.isArray(completedTechIds) || completedTechIds.length !== request.seed.completedTechCount) return "completedTechCount";
+  const dysonSphere = state.dysonSphere;
+  const structurePoints = dysonSphere && typeof dysonSphere === "object"
+    ? (dysonSphere as Record<string, unknown>).structurePoints
+    : undefined;
+  if (structurePoints !== request.seed.structurePoints) return "structurePoints";
+  return null;
 }
 
 function catalogFromSeed(
@@ -239,6 +246,7 @@ function catalogFromSeed(
     structurePoints: seed.structurePoints,
     integrity: "valid",
     stateChecksum: seed.stateChecksum,
+    modeExplicit: true,
     reason: seed.reason,
     settings: seed.settings,
   };
@@ -478,8 +486,9 @@ async function commitPayload(
   // valid proof/seed with a different, structurally valid envelope. Reinspect
   // the exact bytes in this Worker and bind the envelope header and state
   // checksum to the same seed that will become the catalog record.
-  if (!verifyNewEnvelope(raw, request)) {
-    return failure("invalid", "authoritative payload envelope header/state 与 catalog seed 不一致");
+  const envelopeMismatch = newEnvelopeMismatch(raw, request);
+  if (envelopeMismatch) {
+    return failure("invalid", `authoritative payload envelope header/state 与 catalog seed 不一致（${envelopeMismatch}）`);
   }
   const decodeMs = Math.max(0, performance.now() - decodeStarted);
   const db = await openDatabase();

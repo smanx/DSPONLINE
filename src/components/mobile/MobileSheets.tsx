@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { PLANET_LIST, getPlanet } from "../../game/content";
 import { getPlanetMetrics, isPlanetColonized, type PlanetTrayDiscardRequest } from "../../game/engine";
 import { getPlanetDisplayName } from "../../game/galaxy";
-import type { FactoryAlert } from "../../game/alerts";
 import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, MaterialDeliverySlotMode, PlanetId, RecipeId } from "../../game/types";
 import type { MobileOverlay, MobileSheetSnap } from "../../hooks/useMobileNavigation";
 import { MobileBuildSheet, MobileInspectorSheet, MobileInventorySheet, type MobileCanvasMode } from "./MobileFactoryPanels";
@@ -76,9 +75,9 @@ export interface MobileFactorySheetActions {
   onEjectorOrbitChange: (entityId: string, orbitId: string) => void;
 }
 
-function PlanetSheet({ game, alerts, snap, onSnap, onPlanetChange, onOpenStarMap, onClose }: {
+function PlanetSheet({ game, planetAlertCounts, snap, onSnap, onPlanetChange, onOpenStarMap, onClose }: {
   game: GameState;
-  alerts: FactoryAlert[];
+  planetAlertCounts: Partial<Record<PlanetId, number>>;
   snap: MobileSheetSnap;
   onSnap: (snap: MobileSheetSnap) => void;
   onPlanetChange: (planetId: PlanetId) => void;
@@ -94,7 +93,7 @@ function PlanetSheet({ game, alerts, snap, onSnap, onPlanetChange, onOpenStarMap
           const active = game.activePlanetId === planet.id;
           const metrics = getPlanetMetrics(game, planet.id);
           const devices = game.entities.reduce((sum, entity) => entity.planetId === planet.id ? sum + entity.machineCount + entity.minerCount : sum, 0);
-          const issues = alerts.filter((alert) => alert.planetId === planet.id).length;
+          const issues = planetAlertCounts[planet.id] ?? 0;
           return <button className={active ? "active" : ""} type="button" aria-pressed={active} key={planet.id} onClick={() => { onPlanetChange(planet.id); onClose(); }}>
             <i style={{ color: planet.color }}><Orbit size={21} /></i>
             <span><strong>{getPlanetDisplayName(game, planet.id)}</strong><small>{planet.code} · {planet.environment}</small></span>
@@ -139,9 +138,9 @@ function ToolsSheet({ state, actions, snap, onSnap, onClose }: { state: MobileCa
   );
 }
 
-export function MobileSheets({ game, alerts, overlay, tools, toolActions, factory, factoryActions, onSheetSnap, onClose, onPlanetChange, onOpenStarMap, onConfirmExit, onDismissExit }: {
+export function MobileSheets({ game, planetAlertCounts, overlay, tools, toolActions, factory, factoryActions, onSheetSnap, onClose, onPlanetChange, onOpenStarMap, onConfirmExit, onDismissExit }: {
   game: GameState;
-  alerts: FactoryAlert[];
+  planetAlertCounts: Partial<Record<PlanetId, number>>;
   overlay: MobileOverlay;
   tools: MobileCanvasToolState;
   toolActions: MobileCanvasToolActions;
@@ -167,7 +166,7 @@ export function MobileSheets({ game, alerts, overlay, tools, toolActions, factor
     if (overlay.id === "command") return null;
     return <div className="mobile-next-confirm-backdrop" role="presentation"><section className="mobile-next-confirm" role="alertdialog" aria-modal="true" aria-label="保存并返回主菜单"><i><LockKeyhole size={24} /></i><span><strong>保存并返回主菜单？</strong><small>系统会先校验主存档，保存失败时不会离开当前工厂。</small></span><footer><button type="button" onClick={onDismissExit}>继续游戏</button><button className="primary" type="button" onClick={onConfirmExit}>保存并返回</button></footer></section></div>;
   }
-  if (overlay.id === "planet") return <PlanetSheet game={game} alerts={alerts} snap={overlay.snap} onSnap={onSheetSnap} onPlanetChange={onPlanetChange} onOpenStarMap={onOpenStarMap} onClose={onClose} />;
+  if (overlay.id === "planet") return <PlanetSheet game={game} planetAlertCounts={planetAlertCounts} snap={overlay.snap} onSnap={onSheetSnap} onPlanetChange={onPlanetChange} onOpenStarMap={onOpenStarMap} onClose={onClose} />;
   if (overlay.id === "tools") return <ToolsSheet state={tools} actions={toolActions} snap={overlay.snap} onSnap={onSheetSnap} onClose={onClose} />;
   if (overlay.id === "build") return <MobileBuildSheet game={game} snap={overlay.snap} placement={factory.placement} beltTier={factory.beltTier} beltTierMode={factory.beltTierMode} query={buildQuery} onQueryChange={setBuildQuery} onSnap={onSheetSnap} onClose={onClose} onPlacement={factoryActions.onPlacement} onBelt={factoryActions.onBelt} onCraft={factoryActions.onCraft} onCraftFleet={factoryActions.onCraftFleet} onMissingCraft={factoryActions.onMissingCraft} onDeleteConstruction={factoryActions.onDeleteConstruction} />;
   if (overlay.id === "inventory") return <MobileInventorySheet game={game} snap={overlay.snap} onSnap={onSheetSnap} onClose={onClose} onPickTray={factoryActions.onPickTray} onDropCargo={factoryActions.onDropCargo} onDiscardTrayItems={factoryActions.onDiscardTrayItems} onSetTrayItemLimit={factoryActions.onSetTrayItemLimit} />;

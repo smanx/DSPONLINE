@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("web main menu exposes the Shanghai client download entry", async ({ page }) => {
-  await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43"));
+  await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44"));
   await page.goto("/");
   const download = page.getByRole("link", { name: /客户端下载/ });
   await expect(download).toBeVisible();
@@ -13,3 +13,4 @@ test("web main menu exposes the Shanghai client download entry", async ({ page }
   await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/download-entry-390x844.png", fullPage: true });
 });
+

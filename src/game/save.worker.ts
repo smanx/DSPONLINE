@@ -1,8 +1,9 @@
 /// <reference lib="webworker" />
 
-import { serializeSaveEnvelopeToTransfer } from "./saveTransfer";
+import { decodeVerifiedSaveTransfer, serializeSaveEnvelopeToTransfer } from "./saveTransfer";
 import { projectPersistentSaveState } from "./saveProjection";
-import { deserializeSimulationStateTransfer } from "./simulationRuntimeProtocol";
+import { deserializeSimulationStateTransfer, serializeSimulationStateForTransfer } from "./simulationRuntimeProtocol";
+import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
 import { sha256Bytes } from "./payloadDigest";
 import {
   canonicalAuthoritativeSaveJson,
@@ -14,6 +15,7 @@ import type {
   AuthoritativeSavePayloadProof,
 } from "./authoritativeSavePersistenceProtocol";
 import type {
+  AuthoritativeSaveCheckpointOverlay,
   AuthoritativeSaveSerializationRequest,
   AuthoritativeSaveSerializationResponse,
   AuthoritativeSaveSerializationSummary,
@@ -22,6 +24,9 @@ import type { SaveWorkerRequest, SaveWorkerResponse } from "./saveWorkerProtocol
 import type { GameState } from "./types";
 
 const SETTINGS_MAX_BYTES = 2 * 1024;
+const MIN_CANVAS_ZOOM = 0.25;
+const MAX_CANVAS_ZOOM = 1.8;
+const MAX_PENDING_TIME_WARP_SECONDS = 30 * 24 * 60 * 60;
 
 type SaveSerializationRequest = SaveWorkerRequest | AuthoritativeSaveSerializationRequest;
 
@@ -46,7 +51,85 @@ function catalogSettings(value: unknown): AuthoritativeSaveCatalogSeed["settings
 }
 
 function sourceTransferables(request: SaveSerializationRequest): Transferable[] {
-  return request.stateTransfer ? [request.stateTransfer.buffer] : [];
+  if (request.stateTransfer) return [request.stateTransfer.buffer];
+  if ("envelopeTransfer" in request && request.envelopeTransfer) return [request.envelopeTransfer.buffer];
+  return [];
+}
+
+function deserializeAuthoritativeEnvelopeTransfer(
+  source: Extract<AuthoritativeSaveSerializationRequest, { envelopeTransfer: unknown }>["envelopeTransfer"],
+): GameState {
+  const raw = decodeVerifiedSaveTransfer(source.buffer, source);
+  const inspection = inspectSaveEnvelopeChecksum(raw);
+  if (inspection.status !== "valid" || inspection.formatVersion !== 2 ||
+    !inspection.parsed || !inspection.state ||
+    inspection.recordedChecksum !== source.stateChecksum ||
+    inspection.computedChecksum !== source.stateChecksum) {
+    throw new Error("authoritative envelope transfer 完整性校验失败");
+  }
+  const state = inspection.state as Partial<GameState>;
+  const envelopeMode = inspection.parsed.mode;
+  if (!Array.isArray(state.entities) || !Array.isArray(state.belts) ||
+    (state.mode !== "normal" && state.mode !== "speedrun") ||
+    envelopeMode !== state.mode ||
+    inspection.parsed.kind !== "primary" || inspection.parsed.slot !== "main" ||
+    !Number.isSafeInteger(inspection.parsed.savedAt) || (inspection.parsed.savedAt as number) < 0) {
+    throw new Error("authoritative envelope transfer 状态身份无效");
+  }
+  return state as GameState;
+}
+
+function applyCheckpointOverlay(
+  state: GameState,
+  overlay: AuthoritativeSaveCheckpointOverlay | undefined,
+): GameState {
+  if (!overlay) return state;
+  let next = state;
+  if (overlay.planetViewports !== undefined) {
+    if (!Array.isArray(overlay.planetViewports) || overlay.planetViewports.length > Object.keys(state.planetViewports).length) {
+      throw new Error("save checkpoint viewport overlay 不合法");
+    }
+    let planetViewports = state.planetViewports;
+    const seenPlanetIds = new Set<string>();
+    for (const entry of overlay.planetViewports) {
+      const viewport = entry?.viewport;
+      if (!entry || !viewport ||
+        typeof entry.planetId !== "string" || !Object.hasOwn(state.planetViewports, entry.planetId) ||
+        seenPlanetIds.has(entry.planetId) ||
+        !Number.isFinite(viewport.x) || !Number.isFinite(viewport.y) ||
+        !Number.isFinite(viewport.zoom) || viewport.zoom < MIN_CANVAS_ZOOM || viewport.zoom > MAX_CANVAS_ZOOM) {
+        throw new Error("save checkpoint viewport overlay 不合法");
+      }
+      seenPlanetIds.add(entry.planetId);
+      const previous = planetViewports[entry.planetId];
+      if (previous?.x === viewport.x && previous.y === viewport.y && previous.zoom === viewport.zoom) continue;
+      if (planetViewports === state.planetViewports) planetViewports = { ...state.planetViewports };
+      planetViewports[entry.planetId] = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
+    }
+    if (planetViewports !== state.planetViewports) next = { ...next, planetViewports };
+  }
+  if (overlay.timeWarp !== undefined && (
+    !Number.isFinite(overlay.timeWarp.pendingSimulationSeconds) || !Number.isFinite(overlay.timeWarp.pendingWallSeconds) ||
+    overlay.timeWarp.pendingSimulationSeconds < 0 || overlay.timeWarp.pendingWallSeconds < 0 ||
+    overlay.timeWarp.pendingSimulationSeconds > MAX_PENDING_TIME_WARP_SECONDS ||
+    overlay.timeWarp.pendingWallSeconds > MAX_PENDING_TIME_WARP_SECONDS
+  )) {
+    throw new Error("save checkpoint time warp overlay 不合法");
+  }
+  const pendingSimulationSeconds = overlay.timeWarp?.pendingSimulationSeconds;
+  const pendingWallSeconds = overlay.timeWarp?.pendingWallSeconds;
+  if (pendingSimulationSeconds !== undefined && pendingWallSeconds !== undefined &&
+    (next.timeWarp.pendingSimulationSeconds !== pendingSimulationSeconds || next.timeWarp.pendingWallSeconds !== pendingWallSeconds)) {
+    next = {
+      ...next,
+      timeWarp: {
+        ...next.timeWarp,
+        pendingSimulationSeconds,
+        pendingWallSeconds,
+      },
+    };
+  }
+  return next;
 }
 
 self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
@@ -54,14 +137,28 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
   const request = event.data;
   const authoritativeProof = isAuthoritativeProofRequest(request);
   try {
-    if ((request.state === undefined) === (request.stateTransfer === undefined)) {
+    const envelopeTransfer = "envelopeTransfer" in request ? request.envelopeTransfer : undefined;
+    const sourceCount = Number(request.state !== undefined) + Number(request.stateTransfer !== undefined) + Number(envelopeTransfer !== undefined);
+    if (sourceCount !== 1) {
       throw new Error("后台存档必须且只能提供一个权威状态来源");
     }
     const sourceTransfer = request.stateTransfer;
     const sourceState = sourceTransfer
       ? deserializeSimulationStateTransfer(sourceTransfer)
-      : request.state as GameState;
-    const persistent = projectPersistentSaveState(sourceState, request.contentPackRegistry);
+      : envelopeTransfer
+        ? deserializeAuthoritativeEnvelopeTransfer(envelopeTransfer)
+        : request.state as GameState;
+    const state = authoritativeProof
+      ? applyCheckpointOverlay(sourceState, request.checkpointOverlay)
+      : sourceState;
+    // Envelope sources are converted to the runtime transfer used to rebase
+    // the normal simulation Worker after the proof-bound primary commit. It is
+    // serialized from the exact post-overlay state that produces the save
+    // proof, so persistence and runtime authority cannot diverge.
+    const returnedStateTransfer = envelopeTransfer
+      ? serializeSimulationStateForTransfer(state)
+      : sourceTransfer;
+    const persistent = projectPersistentSaveState(state, request.contentPackRegistry);
     const mode = persistent.mode === "speedrun" ? "speedrun" : "normal";
     if (authoritativeProof) {
       const expected = request.expectedStateIdentity;
@@ -113,7 +210,7 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
         byteLength: serialized.byteLength,
         durationMs: Math.max(0, performance.now() - startedAt),
         ...(Number.isSafeInteger(request.sourceStateRevision) ? { sourceStateRevision: request.sourceStateRevision } : {}),
-        ...(sourceTransfer ? { sourceStateTransfer: sourceTransfer } : {}),
+        ...(returnedStateTransfer ? { sourceStateTransfer: returnedStateTransfer } : {}),
         summary,
       };
       self.postMessage(response, [serialized.bytes, ...sourceTransferables(request)]);
@@ -133,6 +230,7 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
       activePlanetId: summary.activePlanetId,
       structurePoints: summary.structurePoints,
       stateChecksum: serialized.stateChecksum,
+      modeExplicit: true,
       reason: summary.reason,
       settings: catalogSettings(persistent.settings),
     };
@@ -150,7 +248,8 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
     const response: AuthoritativeSaveSerializationResponse = {
       id: request.id,
       bytes: serialized.bytes,
-      ...(sourceTransfer ? { sourceStateTransfer: sourceTransfer.buffer } : {}),
+      ...(returnedStateTransfer ? { sourceStateTransfer: returnedStateTransfer.buffer } : {}),
+      ...(envelopeTransfer ? { sourceEnvelopeTransfer: envelopeTransfer.buffer } : {}),
       payloadChecksum: serialized.payloadChecksum,
       ...(payloadSha256 ? { payloadSha256 } : {}),
       byteLength: serialized.byteLength,
@@ -159,7 +258,10 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
       catalogSeed,
       proof,
     };
-    self.postMessage(response, [serialized.bytes, ...sourceTransferables(request)]);
+    const responseTransfers: Transferable[] = [serialized.bytes];
+    if (returnedStateTransfer && returnedStateTransfer !== sourceTransfer) responseTransfers.push(returnedStateTransfer.buffer);
+    responseTransfers.push(...sourceTransferables(request));
+    self.postMessage(response, responseTransfers);
   } catch (error) {
     const message = error instanceof Error ? error.message : "后台生成存档失败";
     if (authoritativeProof) {
@@ -167,6 +269,9 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
         id: request.id,
         error: message,
         ...(request.stateTransfer ? { sourceStateTransfer: request.stateTransfer.buffer } : {}),
+        ...("envelopeTransfer" in request && request.envelopeTransfer
+          ? { sourceEnvelopeTransfer: request.envelopeTransfer.buffer }
+          : {}),
       };
       self.postMessage(response, sourceTransferables(request));
       return;

@@ -1428,6 +1428,49 @@ describe("game storage", () => {
     expect(loadGame().state.elapsedSeconds).toBe(20);
   });
 
+  it("coalesces identical active saves without rotating the backup", async () => {
+    const state = createInitialState();
+    state.elapsedSeconds = 15;
+    const results = await Promise.all([
+      saveGameVerified(state),
+      saveGameVerified(state),
+      saveGameVerified(state),
+    ]);
+    expect(results.every((result) => result.success)).toBe(true);
+    expect(window.localStorage.getItem(`${SAVE_KEY}.backup`)).toBeNull();
+    expect(loadGame().state.elapsedSeconds).toBe(15);
+  });
+
+  it("keeps the actual previous primary as backup for identical overlapping updates", async () => {
+    const previous = createInitialState();
+    previous.elapsedSeconds = 10;
+    expect((await saveGameVerified(previous)).success).toBe(true);
+
+    const next = createInitialState();
+    next.elapsedSeconds = 20;
+    const results = await Promise.all([saveGameVerified(next), saveGameVerified(next)]);
+    expect(results.every((result) => result.success)).toBe(true);
+    expect(loadGame().state.elapsedSeconds).toBe(20);
+    expect(importGame(window.localStorage.getItem(`${SAVE_KEY}.backup`)!)?.elapsedSeconds).toBe(10);
+  });
+
+  it("commits only the active and newest pending primary states", async () => {
+    const active = createInitialState();
+    active.elapsedSeconds = 10;
+    const replaced = createInitialState();
+    replaced.elapsedSeconds = 20;
+    const newest = createInitialState();
+    newest.elapsedSeconds = 30;
+    const results = await Promise.all([
+      saveGameVerified(active),
+      saveGameVerified(replaced),
+      saveGameVerified(newest),
+    ]);
+    expect(results.every((result) => result.success)).toBe(true);
+    expect(loadGame().state.elapsedSeconds).toBe(30);
+    expect(importGame(window.localStorage.getItem(`${SAVE_KEY}.backup`)!)?.elapsedSeconds).toBe(10);
+  });
+
   it("skips a repeated verified save for the same immutable state", async () => {
     const state = createInitialState();
     const first = await saveGameVerified(state);

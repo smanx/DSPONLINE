@@ -1,6 +1,7 @@
 import type { ContentPackRegistry } from "./contentPacks";
-import type { GameState, SaveMode } from "./types";
+import type { CanvasViewport, GameState, PlanetId, SaveMode } from "./types";
 import type { SimulationStateTransfer } from "./simulationRuntimeProtocol";
+import type { SaveTransferVerification } from "./saveTransfer";
 import type {
   AuthoritativeSaveCatalogSeed,
   AuthoritativeSavePayloadProof,
@@ -18,6 +19,27 @@ export interface AuthoritativeSaveExpectedStateIdentity {
   elapsedSeconds: number;
 }
 
+/**
+ * Small state changes that can arrive after the simulation Worker created its
+ * exact checkpoint. They are applied by the save Worker after it decodes the
+ * transferred checkpoint, so saving an active large factory does not require
+ * the UI thread to serialize that checkpoint again.
+ */
+export interface AuthoritativeSaveCheckpointOverlay {
+  planetViewports?: Array<{ planetId: PlanetId; viewport: CanvasViewport }>;
+  timeWarp?: {
+    pendingSimulationSeconds: number;
+    pendingWallSeconds: number;
+  };
+}
+
+/** A checksum-verified full save envelope produced by another trusted Worker.
+ * The save Worker revalidates and parses it before deriving the persistent
+ * projection; callers transfer exclusive ownership of `buffer`. */
+export interface AuthoritativeSaveEnvelopeTransfer extends SaveTransferVerification {
+  buffer: ArrayBuffer;
+}
+
 interface AuthoritativeSaveSerializationRequestCommon {
   id: number;
   formatVersion: number;
@@ -29,11 +51,13 @@ interface AuthoritativeSaveSerializationRequestCommon {
   includePayloadSha256?: boolean;
   includeAuthoritativeProof?: boolean;
   expectedStateIdentity?: AuthoritativeSaveExpectedStateIdentity;
+  checkpointOverlay?: AuthoritativeSaveCheckpointOverlay;
 }
 
 export type AuthoritativeSaveSerializationRequest = AuthoritativeSaveSerializationRequestCommon & (
-  | { state: GameState; stateTransfer?: never }
-  | { state?: never; stateTransfer: SimulationStateTransfer }
+  | { state: GameState; stateTransfer?: never; envelopeTransfer?: never }
+  | { state?: never; stateTransfer: SimulationStateTransfer; envelopeTransfer?: never }
+  | { state?: never; stateTransfer?: never; envelopeTransfer: AuthoritativeSaveEnvelopeTransfer }
 );
 
 export interface AuthoritativeSaveSerializationSummary {
@@ -59,6 +83,7 @@ export interface AuthoritativeSaveSerializationResponse {
   id: number;
   bytes?: ArrayBuffer;
   sourceStateTransfer?: ArrayBuffer;
+  sourceEnvelopeTransfer?: ArrayBuffer;
   payloadChecksum?: string;
   payloadSha256?: string;
   byteLength?: number;

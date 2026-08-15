@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { selectSettingsCategory } from "./settings-helpers";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 const BELT_LANES_KEY = "dsp-idle-network.ui.default-belt-lanes.v1";
 
 test.beforeEach(async ({ page }) => {
@@ -199,3 +199,4 @@ test("automatic dense mode falls back to complete React Flow edges when Canvas i
   expect(await page.locator(".react-flow__edge").count()).toBeGreaterThan(100);
   expect(await page.locator(".factory-edge-visual-layer").count()).toBe(await page.locator(".react-flow__edge").count());
 });
+

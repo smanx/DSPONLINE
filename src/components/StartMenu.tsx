@@ -95,14 +95,8 @@ import {
   type OfflineSettlementPreference,
 } from "../game/offlineSettlementStrategy";
 import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreference, writeThemePreference } from "../game/uiPreferences";
-import { retainLocalSavePayload, subscribeLocalSaveStorageStatus } from "../game/localSaveStore";
-import { createContentPackRuntimeSnapshot, loadContentPackRegistry } from "../game/contentPacks";
-import {
-  finalizeSimulationRuntimeStartupRecovery,
-  initializeSimulationRuntimeAfterVerifiedPrimary,
-  prepareSimulationRuntimeStartupRecovery,
-  type SimulationRuntimeStartupRecoveryProgress,
-} from "../game/simulationRuntimeStartupRecovery";
+import { reloadLocalSaveCache, retainLocalSavePayload, subscribeLocalSaveStorageStatus } from "../game/localSaveStore";
+import type { SimulationRuntimeStartupRecoveryProgress } from "../game/simulationRuntimeStartupRecovery";
 
 const resolveMenuContinueSave = (mode: SaveMode) => import("../game/savePreviewPayload").then((module) => module.resolveMenuContinueSave(mode));
 const readMenuSavePayload = (key: string) => import("../game/savePreviewPayload").then((module) => module.readMenuSavePayload(key));
@@ -209,8 +203,20 @@ const DEFAULT_MENU_SETTINGS: GameSettings = {
   resourceMode: "finite",
   difficulty: "standard",
 };
+const loadContentPackRuntimeModule = () => importWithRecovery(() => import("../game/contentPacks"), "内容包注册表");
+const loadSimulationRuntimeStartupRecoveryModule = () => importWithRecovery(
+  () => import("../game/simulationRuntimeStartupRecovery"),
+  "模拟运行时恢复模块",
+);
+const loadFactoryStartupModules = async () => {
+  const [contentPacks, runtimeRecovery] = await Promise.all([
+    loadContentPackRuntimeModule(),
+    loadSimulationRuntimeStartupRecoveryModule(),
+  ]);
+  return { contentPacks, runtimeRecovery };
+};
 const loadStorageModule = async () => {
-  const contentPacks = await importWithRecovery(() => import("../game/contentPacks"), "内容包注册表");
+  const contentPacks = await loadContentPackRuntimeModule();
   contentPacks.applyContentPackRegistry(contentPacks.loadContentPackRegistry());
   return importWithRecovery(() => import("../game/storage"), "本地存档模块");
 };
@@ -274,7 +280,7 @@ function saveMenuSettings(settings: GameSettings): void {
 }
 
 function mergeMenuRuntimeSettings(saved: GameSettings, menu: GameSettings): GameSettings {
-  return {
+  const merged = {
     ...saved,
     ...menu,
     // These settings alter deterministic gameplay and follow the selected
@@ -288,6 +294,9 @@ function mergeMenuRuntimeSettings(saved: GameSettings, menu: GameSettings): Game
     resourceMode: saved.resourceMode,
     difficulty: saved.difficulty,
   };
+  return (Object.keys(merged) as Array<keyof GameSettings>).every((key) => Object.is(merged[key], saved[key]))
+    ? saved
+    : merged;
 }
 
 function sourceLabel(source: MenuSaveSource): string {
@@ -533,19 +542,27 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   };
 
   const enterLoadedGame = async (loaded: LoadedGame, preserveReason?: string, storage?: StorageModule) => {
-    const activeStorage = storage ?? await loadStorageModule();
+    const [activeStorage, startupModules] = await Promise.all([
+      storage ? Promise.resolve(storage) : loadStorageModule(),
+      loadFactoryStartupModules(),
+    ]);
     if (preserveReason) await preserveCurrentSave(preserveReason, activeStorage, loaded.state.mode);
-    const state = { ...loaded.state, settings: mergeMenuRuntimeSettings(loaded.state.settings, settings) };
+    const mergedSettings = mergeMenuRuntimeSettings(loaded.state.settings, settings);
+    const state = mergedSettings === loaded.state.settings
+      ? loaded.state
+      : { ...loaded.state, settings: mergedSettings };
     let runtimeRecovery = loaded.runtimeRecovery;
     if (loaded.runtimeRecoveryCandidate) {
-      const registry = createContentPackRuntimeSnapshot(loadContentPackRegistry());
+      const registry = startupModules.contentPacks.createContentPackRuntimeSnapshot(
+        startupModules.contentPacks.loadContentPackRegistry(),
+      );
       const onRecoveryProgress = (progress: SimulationRuntimeStartupRecoveryProgress) => {
         const count = progress.completedOperations !== undefined && progress.totalOperations !== undefined
           ? `（${progress.completedOperations}/${progress.totalOperations}）`
           : "";
         setMessage({ tone: "busy", text: `${progress.message}${count}` });
       };
-      runtimeRecovery = await finalizeSimulationRuntimeStartupRecovery({
+      runtimeRecovery = await startupModules.runtimeRecovery.finalizeSimulationRuntimeStartupRecovery({
         state,
         candidate: loaded.runtimeRecoveryCandidate,
         mode: state.mode === "speedrun" ? "speedrun" : "normal",
@@ -556,20 +573,23 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     } else {
       const saveResult = await activeStorage.saveGameVerified(state);
       if (!saveResult.success) throw new Error(saveResult.message);
-      const registry = createContentPackRuntimeSnapshot(loadContentPackRegistry());
+      const registry = startupModules.contentPacks.createContentPackRuntimeSnapshot(
+        startupModules.contentPacks.loadContentPackRegistry(),
+      );
       const onRecoveryProgress = (progress: SimulationRuntimeStartupRecoveryProgress) => {
         const count = progress.completedOperations !== undefined && progress.totalOperations !== undefined
           ? `（${progress.completedOperations}/${progress.totalOperations}）`
           : "";
         setMessage({ tone: "busy", text: `${progress.message}${count}` });
       };
-      runtimeRecovery = await initializeSimulationRuntimeAfterVerifiedPrimary({
+      runtimeRecovery = await startupModules.runtimeRecovery.initializeSimulationRuntimeAfterVerifiedPrimary({
         mode: state.mode === "speedrun" ? "speedrun" : "normal",
         registry,
         onProgress: onRecoveryProgress,
       });
     }
     const { runtimeRecoveryCandidate: _runtimeRecoveryCandidate, ...loadedWithoutCandidate } = loaded;
+    try { await reloadLocalSaveCache(); } catch { /* durable identity is already verified */ }
     trackAnalyticsEvent("game_enter");
     onEnterGame({ ...loadedWithoutCandidate, state, ...(runtimeRecovery ? { runtimeRecovery } : {}) });
   };
@@ -862,8 +882,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       if (resolved) retainLocalSavePayload(resolved.save.key, resolved.raw);
       if (resolved) mode === "normal" ? setContinueSave(resolved.save) : setSpeedrunContinueSave(resolved.save);
       if (resolved?.save.source === "primary") {
-        const registry = createContentPackRuntimeSnapshot(loadContentPackRegistry());
-        const startup = await prepareSimulationRuntimeStartupRecovery({
+        const startupModules = await loadFactoryStartupModules();
+        const registry = startupModules.contentPacks.createContentPackRuntimeSnapshot(
+          startupModules.contentPacks.loadContentPackRegistry(),
+        );
+        const startup = await startupModules.runtimeRecovery.prepareSimulationRuntimeStartupRecovery({
           state: loaded.state,
           savedAtMs: loaded.savedAt,
           inspection: resolved.inspection,
@@ -900,15 +923,21 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const startNewGame = async () => {
     setBusy(true);
     try {
-      const [storage, { createPlayerInitialState, createSpeedrunInitialState }] = await Promise.all([loadStorageModule(), importWithRecovery(() => import("../game/engine"), "模拟核心模块")]);
+      const [storage, { createPlayerInitialState, createSpeedrunInitialState }, startupModules] = await Promise.all([
+        loadStorageModule(),
+        importWithRecovery(() => import("../game/engine"), "模拟核心模块"),
+        loadFactoryStartupModules(),
+      ]);
       await preserveCurrentSave("开始新工厂前", storage, newFactoryMode);
       const state = newFactoryMode === "speedrun" ? createSpeedrunInitialState() : createPlayerInitialState();
       state.settings = mergeMenuRuntimeSettings(state.settings, settings);
       const saveResult = await storage.saveGameVerified(state);
       if (!saveResult.success) throw new Error(saveResult.message);
-      const runtimeRecovery = await initializeSimulationRuntimeAfterVerifiedPrimary({
+      const runtimeRecovery = await startupModules.runtimeRecovery.initializeSimulationRuntimeAfterVerifiedPrimary({
         mode: newFactoryMode,
-        registry: createContentPackRuntimeSnapshot(loadContentPackRegistry()),
+        registry: startupModules.contentPacks.createContentPackRuntimeSnapshot(
+          startupModules.contentPacks.loadContentPackRegistry(),
+        ),
         onProgress: (progress) => setMessage({ tone: "busy", text: progress.message }),
       });
       trackAnalyticsEvent("new_game");

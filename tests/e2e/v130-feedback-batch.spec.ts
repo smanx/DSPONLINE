@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function seedBatchSave(page: Page, options: { offlineSeconds?: number; paused?: boolean; topology?: boolean; bypassMenu?: boolean } = {}) {
   await page.addInitScript(({ offlineSeconds, paused, topology, bypassMenu, releaseNoteId }) => {
@@ -229,3 +229,4 @@ test("item hover details can be disabled and stay disabled after reload", async 
   await page.locator(".tray-row .item-reference").first().hover();
   await expect(page.locator(".item-hover-card")).toHaveCount(0);
 });
+

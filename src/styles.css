@@ -7842,6 +7842,16 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   background: #0f1412;
 }
 
+/* Dense factories keep the side panels mounted while their authoritative
+   state is projected at a lower cadence. Isolate layout/paint work here so a
+   large tray or construction list cannot invalidate the canvas on every
+   projection frame. */
+.game-shell[data-large-factory="true"] .resource-rail,
+.game-shell[data-large-factory="true"] .inspector-panel,
+.game-shell[data-large-factory="true"] .construction-dock {
+  contain: layout paint style;
+}
+
 .dock-label {
   display: flex;
   align-items: center;

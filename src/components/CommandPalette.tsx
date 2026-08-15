@@ -23,6 +23,8 @@ interface CommandPaletteProps {
   onToggleReducedMotion: () => void;
 }
 
+type OpenCommandPaletteProps = Omit<CommandPaletteProps, "open">;
+
 interface PaletteCommand {
   id: string;
   label: string;
@@ -31,7 +33,11 @@ interface PaletteCommand {
   run: () => void;
 }
 
-export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRecipe, onFocusEntity, onAutoLayout, onPauseToggle, onTogglePerformance, onToggleReducedMotion }: CommandPaletteProps) {
+export function CommandPalette({ open, ...props }: CommandPaletteProps) {
+  return open ? <OpenCommandPalette {...props} /> : null;
+}
+
+function OpenCommandPalette({ game, onClose, onOpenWorkspace, onFocusRecipe, onFocusEntity, onAutoLayout, onPauseToggle, onTogglePerformance, onToggleReducedMotion }: OpenCommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -76,19 +82,47 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
       icon: <span className="command-item-swatch" style={{ backgroundColor: item.color }}>{item.symbol.slice(0, 3)}</span>,
       run: () => run(() => onFocusRecipe(item.id)),
     }));
-    const entityCommands: PaletteCommand[] = game.entities.map((entity) => {
-      const name = entity.buildingId ? getBuilding(entity.buildingId).name : entity.resourceId ? ITEMS[entity.resourceId].name : "生产节点";
-      const recipe = entity.recipeId ? ` · ${entity.recipeId}` : "";
-      return {
-        id: `entity:${entity.id}`,
-        label: `定位：${name}`,
-        detail: `${getPlanet(entity.planetId).name} · ${entity.id}${recipe}`,
-        icon: <Focus size={16} />,
-        run: () => run(() => onFocusEntity(entity.id)),
-      };
-    });
+    // Do not materialize tens of thousands of entity commands just to show the
+    // empty palette. A large factory can publish a new runtime state while the
+    // palette is open; deferring this map until there is an actual search term
+    // prevents every steady publication from rebuilding the full command list.
+    const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+    const entityCommands: PaletteCommand[] = [];
+    if (normalizedQuery.length >= 2) {
+      // Filter the raw scalar identity first and only create React command
+      // objects for the first visible matches. Mapping every entity into JSX
+      // before filtering is particularly expensive for a 27k-entity save.
+      const buildingNames = new globalThis.Map<string, string>();
+      const planetNames = new globalThis.Map<string, string>();
+      for (const entity of game.entities) {
+        const name = entity.buildingId
+          ? (buildingNames.get(entity.buildingId) ?? (() => {
+            const value = getBuilding(entity.buildingId!).name;
+            buildingNames.set(entity.buildingId!, value);
+            return value;
+          })())
+          : entity.resourceId ? ITEMS[entity.resourceId].name : "生产节点";
+        const planetName = planetNames.get(entity.planetId) ?? (() => {
+          const value = getPlanet(entity.planetId).name;
+          planetNames.set(entity.planetId, value);
+          return value;
+        })();
+        const recipe = entity.recipeId ? ` · ${entity.recipeId}` : "";
+        const label = `定位：${name}`;
+        const detail = `${planetName} · ${entity.id}${recipe}`;
+        if (!`${label} ${detail}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery)) continue;
+        entityCommands.push({
+          id: `entity:${entity.id}`,
+          label,
+          detail,
+          icon: <Focus size={16} />,
+          run: () => run(() => onFocusEntity(entity.id)),
+        });
+        if (entityCommands.length >= 16) break;
+      }
+    }
     return [...base, ...itemCommands, ...entityCommands];
-  }, [game.entities, game.paused, game.settings.performanceMode, game.settings.reducedMotion, onAutoLayout, onFocusEntity, onFocusRecipe, onOpenWorkspace, onPauseToggle, onTogglePerformance, onToggleReducedMotion]);
+  }, [game.entities, game.paused, game.settings.performanceMode, game.settings.reducedMotion, onAutoLayout, onFocusEntity, onFocusRecipe, onOpenWorkspace, onPauseToggle, onTogglePerformance, onToggleReducedMotion, query]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("zh-CN");
     if (!normalized) return commands.slice(0, 12);
@@ -96,16 +130,9 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
   }, [commands, query]);
 
   useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setActiveIndex(0);
-  }, [open]);
-
-  useEffect(() => {
     setActiveIndex((index) => Math.min(index, Math.max(0, filtered.length - 1)));
   }, [filtered.length]);
 
-  if (!open) return null;
   const activeCommand = filtered[activeIndex];
   return (
     <AccessibleDialog

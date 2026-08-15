@@ -12,6 +12,10 @@ async function readRecoveryProof(page: Page) {
       fencingToken: writer.fencingToken,
     });
     if (!read.ok || !read.proof) throw new Error(read.ok ? "recovery proof missing" : read.message);
+    const intents = [
+      ...(read.recovery?.entries ?? []).flatMap((entry) => entry.kind === "atomic" ? [entry.intent] : []),
+      ...(read.recovery?.pendingIntent ? [read.recovery.pendingIntent] : []),
+    ];
     return {
       identity,
       sequence: read.proof.sequence,
@@ -21,13 +25,53 @@ async function readRecoveryProof(page: Page) {
       commandCount: (read.recovery?.entries ?? []).reduce((count, entry) =>
         count + (entry.kind === "atomic" && entry.intent.command ? 1 : 0), 0) +
         (read.recovery?.pendingIntent?.command ? 1 : 0),
+      viewportCommandCount: intents.filter((intent) => intent.command?.topLevelChanges.some((change) =>
+        change.path[0] === "planetViewports")).length,
     };
+  });
+}
+
+async function readStoredState(page: Page) {
+  return page.evaluate(async () => {
+    const local = await import("/src/game/localSaveStore.ts");
+    await local.flushLocalSaveWrites();
+    const raw = await local.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    if (!raw) throw new Error("persisted primary missing");
+    return JSON.parse(raw).state;
+  });
+}
+
+async function sealPagehideAndContinue(page: Page) {
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }));
+    window.dispatchEvent(new CustomEvent("dsp-native-app-state", { detail: { isActive: false } }));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".start-menu")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active");
+  return shell;
+}
+
+async function findBlankCanvasPoint(page: Page) {
+  return page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>(".react-flow__pane");
+    if (!pane) return null;
+    const bounds = pane.getBoundingClientRect();
+    for (let y = bounds.top + 48; y < bounds.bottom - 48; y += 24) {
+      for (let x = bounds.left + 48; x < bounds.right - 48; x += 24) {
+        if (document.elementFromPoint(x, y) === pane) return { x, y };
+      }
+    }
+    return null;
   });
 }
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
     localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
   });
 });
@@ -113,3 +157,149 @@ test("running and paused UI commands drain through WAL before pagehide without p
   await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
   await expect(shell).toHaveAttribute("data-simulation-paused", "true");
 });
+
+test("undo, redo, viewport and galactic activity edits survive immediate pagehide/reload", async ({ page }) => {
+  test.setTimeout(90_000);
+  const activity = {
+    enabled: true,
+    status: "active",
+    serverNow: Date.now(),
+    id: "wal-pagehide-activity",
+    revision: "1",
+    startsAtMs: Date.now() - 1_000,
+    endsAtMs: Date.now() + 86_400_000,
+    openEnded: true,
+    personalTargets: { universe_matrix: 10, solar_sail: 10, small_carrier_rocket: 10, antimatter_fuel_rod: 10 },
+    globalTargets: { universe_matrix: 100, solar_sail: 100, small_carrier_rocket: 100, antimatter_fuel_rod: 100 },
+    globalDelivered: { universe_matrix: 1, solar_sail: 1, small_carrier_rocket: 1, antimatter_fuel_rod: 1 },
+  } as const;
+  let activityRequestCount = 0;
+  let activityResponse: "none" | "defer-active" | "active" = "none";
+  let releaseActiveResponse: (() => void) | null = null;
+  await page.route("**/api/public-status", async (route) => {
+    activityRequestCount += 1;
+    const shouldDefer = activityResponse === "defer-active";
+    if (shouldDefer) {
+      await new Promise<void>((resolve) => { releaseActiveResponse = resolve; });
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        timeZone: "Asia/Shanghai",
+        today: "2026-08-15",
+        uptimeSeconds: 1,
+        players: { total: 1, today: 1, online: 1, onlineWindowSeconds: 120 },
+        activity: activityResponse === "none" ? null : activity,
+      }),
+    });
+  });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  let shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active");
+  const pause = page.getByLabel("暂停模拟");
+  if (await pause.isVisible()) await pause.click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "true");
+
+  // Undo and redo are ordinary UI state replacements, not simulation internals.
+  await page.getByLabel("打开设置").click();
+  let operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.getByRole("button", { name: "教程、版本与其他", exact: true }).first().click();
+  await operations.getByRole("button", { name: "舒缓", exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+  await operations.getByLabel("关闭运营中心").click();
+  const beforeUndo = await readRecoveryProof(page);
+  await page.getByLabel("撤销", { exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "standard");
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(beforeUndo.commandCount);
+  shell = await sealPagehideAndContinue(page);
+  await expect(shell).toHaveAttribute("data-difficulty", "standard");
+
+  // A reload intentionally clears the in-memory history stack. Create a fresh
+  // edit, undo it, and exercise redo before the next seal.
+  await page.getByLabel("打开设置").click();
+  operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.getByRole("button", { name: "教程、版本与其他", exact: true }).first().click();
+  const beforeRedoSetup = await readRecoveryProof(page);
+  await operations.getByRole("button", { name: "舒缓", exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+  await operations.getByLabel("关闭运营中心").click();
+  // Let the first edit reach its finalized durable revision before undoing it.
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(beforeRedoSetup.commandCount);
+  await expect.poll(async () => {
+    const [runtimeSequence, runtimeRevision] = await Promise.all([
+      shell.getAttribute("data-runtime-recovery-sequence"),
+      shell.getAttribute("data-runtime-recovery-revision"),
+    ]);
+    return [runtimeSequence, runtimeRevision].join(":");
+  }).not.toBe("-1:-1");
+  await page.getByLabel("撤销", { exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "standard");
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(beforeRedoSetup.commandCount);
+  const beforeRedo = await readRecoveryProof(page);
+  await page.getByLabel("重做", { exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(beforeRedo.commandCount);
+  shell = await sealPagehideAndContinue(page);
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+
+  // Viewport persistence is debounced, then represented as a durable command.
+  const viewportBefore = (await readStoredState(page)).planetViewports.home;
+  const point = await findBlankCanvasPoint(page);
+  expect(point).not.toBeNull();
+  const beforeViewportProof = await readRecoveryProof(page);
+  await page.mouse.move(point!.x, point!.y);
+  await page.mouse.down();
+  await page.mouse.move(point!.x + 96, point!.y + 48, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.viewportCommandCount;
+  }, { timeout: 10_000 }).toBeGreaterThan(beforeViewportProof.viewportCommandCount);
+  shell = await sealPagehideAndContinue(page);
+  const viewportAfter = (await readStoredState(page)).planetViewports.home;
+  expect(viewportAfter).not.toEqual(viewportBefore);
+
+  // Public activity synchronization is also a GameState edit and must use the
+  // same WAL path before pagehide. Hold the fetch until this session has a
+  // known recovery head, then release a new remote state exactly once.
+  activityResponse = "defer-active";
+  activityRequestCount = 0;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".start-menu")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+  shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active");
+  await expect.poll(() => releaseActiveResponse !== null).toBe(true);
+  const beforeActivity = await readRecoveryProof(page);
+  activityResponse = "active";
+  releaseActiveResponse!();
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }, { timeout: 10_000 }).toBeGreaterThan(beforeActivity.commandCount);
+  activityResponse = "none";
+  shell = await sealPagehideAndContinue(page);
+  await expect.poll(async () => (await readStoredState(page)).endgame.constructionActivity.activityId)
+    .toBe(activity.id);
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active");
+});
+

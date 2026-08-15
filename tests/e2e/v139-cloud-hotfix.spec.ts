@@ -96,7 +96,7 @@ test("reports the 1.0.43 candidate version and a unique build id", async ({ page
     const { collectClientDiagnostics } = await import("/src/game/diagnostics.ts");
     return collectClientDiagnostics().application as { version: string; build: string };
   });
-  expect(application.version).toBe("1.0.43");
+  expect(application.version).toBe("1.0.44");
   expect(application.build).toMatch(/^1\.0\.43\+[0-9a-f]{12}(?:\.dirty)?$/);
 });
 
@@ -148,3 +148,4 @@ test("browser protocol uploads sparse v46 normal and speedrun saves without rewr
   expect(result.revisions).toEqual([1, 1, 1]);
   expect(result.payloads).toEqual([normalPayload, speedrunPayload, denseV45Payload]);
 });
+

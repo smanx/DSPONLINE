@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { createBlueprint, createInitialState, placeBuilding } from "../../src/game/engine";
+import { serializeEnvelope } from "../../src/game/storage";
 import { selectSettingsCategory } from "./settings-helpers";
 
 const CANVAS_DETAIL_KEY = "dsp-idle-network.ui.canvas-detail.v1";
@@ -44,6 +45,7 @@ function anonymousCanvasFixture(options: { count: number; exactStack?: number; b
         stackSize: 1 as const,
         progress: 0,
         priority: 0,
+        routeMode: "lower" as const,
         lastFlow: 0,
       }))
     : [];
@@ -52,7 +54,7 @@ function anonymousCanvasFixture(options: { count: number; exactStack?: number; b
   state.construction.storage_mk1 = options.blueprint ? 1 : 0;
   if (options.blueprint) state = createBlueprint(state, ["anonymous-node-0"], "匿名重叠蓝图");
   if (options.hiddenStackAlert) state.paused = false;
-  return JSON.stringify({ savedAt: Date.now(), state });
+  return serializeEnvelope(state, Date.now());
 }
 
 async function seedCanvas(page: Page, options: { count: number; exactStack?: number; blueprint?: boolean; detail?: string; hiddenStackAlert?: boolean; spacingX?: number; zoom?: number }) {
@@ -67,7 +69,7 @@ async function seedCanvas(page: Page, options: { count: number; exactStack?: num
   });
   await page.addInitScript(({ save, detail, detailKey, overlapKey }) => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     window.localStorage.setItem("dsp-idle-network.ui.show-run-log.v1", "true");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
@@ -180,14 +182,18 @@ test("an exact 50-card stack paints one leader and glow while retaining hidden e
   await expect(beltCanvas).toHaveAttribute("data-first-source-x", "96");
   await expect(beltCanvas).toHaveAttribute("data-first-source-y", "16");
   await expect(beltCanvas).toHaveAttribute("data-first-target-x", "0");
-  await expect(beltCanvas).toHaveAttribute("data-first-target-y", "16");
+  await expect(beltCanvas).toHaveAttribute("data-first-target-y", "96");
+  await expect(beltCanvas).toHaveAttribute("data-first-route-mode", "1");
+  await expect(beltCanvas).toHaveAttribute("data-first-route-center", "256");
   await expect(page.locator(".react-flow__edge")).toHaveCount(0);
   const hit = await page.evaluate(() => {
     const pane = document.querySelector<HTMLElement>(".react-flow__pane")!;
     const viewport = document.querySelector<HTMLElement>(".react-flow__viewport")!;
+    const beltCanvas = document.querySelector<HTMLElement>("canvas.canvas-belt-layer")!;
     const bounds = pane.getBoundingClientRect();
     const matrix = new DOMMatrixReadOnly(getComputedStyle(viewport).transform);
-    return { x: bounds.left + matrix.e + 48 * matrix.a, y: bounds.top + matrix.f + 16 * matrix.d };
+    const routeCenter = Number(beltCanvas.dataset.firstRouteCenter);
+    return { x: bounds.left + matrix.e + 48 * matrix.a, y: bounds.top + matrix.f + routeCenter * matrix.d };
   });
   await page.mouse.move(hit.x, hit.y);
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
@@ -291,6 +297,9 @@ test("a 4213-visible exact stack derives linearly with bounded heavy DOM", async
   await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(0);
   await expect(page.locator('.react-flow__node[data-id^="anonymous-node-"]')).toHaveCount(1);
   await expect(page.locator(".factory-node-stack-halo")).toHaveCount(1);
+  await expect(canvas).toHaveAttribute("data-batch-renderer", "true");
+  await expect(page.locator("canvas.canvas-belt-layer")).toHaveAttribute("data-segments", "3");
+  await expect(page.locator(".react-flow__edge")).toHaveCount(0);
   const pauseMs = await togglePauseAndMeasure(page, "继续模拟");
   await expect.poll(async () => Number(await canvas.getAttribute("data-changed-node-count"))).toBe(0);
   const diagnostics = await canvas.evaluate((element) => ({ ...((element as HTMLElement).dataset) }));
@@ -301,6 +310,28 @@ test("a 4213-visible exact stack derives linearly with bounded heavy DOM", async
     expect(pauseMs).toBeLessThanOrEqual(100);
     expect(Number(diagnostics.nodeDerivationMs)).toBeLessThanOrEqual(100);
   }
+});
+
+test("disabling Canvas belts restores exact-stack React Flow endpoint proxies", async ({ page }) => {
+  await seedCanvas(page, { count: 50, exactStack: 50 });
+  await expect(page.locator(".factory-canvas")).toHaveAttribute("data-batch-renderer", "true");
+  await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(0);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+
+  await page.getByLabel("打开设置").click();
+  const settings = page.locator(".operations-workspace");
+  await selectSettingsCategory(settings, "终局性能", "performance");
+  const canvasBelts = settings.locator("label.setting-row").filter({ hasText: "Canvas 批量线路" });
+  await expect(canvasBelts.getByRole("checkbox")).toBeChecked();
+  await canvasBelts.click();
+  await expect(canvasBelts.getByRole("checkbox")).not.toBeChecked();
+  await page.getByLabel("设置已打开，再次点击返回工厂").click();
+
+  await expect(page.locator(".factory-canvas")).toHaveAttribute("data-batch-renderer", "false");
+  await expect(page.locator("canvas.canvas-belt-layer")).toHaveCount(0);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(3);
+  await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(3);
+  await expect(page.locator('.factory-node-stack-proxy[data-retains-edge-geometry="true"]')).toHaveCount(3);
 });
 
 test("multi-drag shares the exact-overlap policy and preserves relative layout", async ({ page }) => {
@@ -429,7 +460,9 @@ test("blueprint exact overlap is rejected by default and explicit opt-in covers 
   await expect(page.locator(".game-shell")).toHaveAttribute("data-blueprint-allow-overlap", "true");
   await expect(option.getByRole("alert")).toContainText("不会合并存档或机器数量");
   await pane.dispatchEvent("click", { clientX: nodeBounds.x, clientY: nodeBounds.y, button: 0 });
-  await expect.poll(() => page.locator(".react-flow__node").count()).toBe(8);
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-active-planet-node-count", "8");
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-canvas-stack-hidden-count", "1");
+  await expect(page.locator(".react-flow__node")).toHaveCount(7);
   await expect(page.locator(".factory-node-stack-badge")).toContainText("×2");
 
   await pane.dispatchEvent("click", { clientX: nodeBounds.x, clientY: nodeBounds.y, button: 0 });
@@ -496,3 +529,4 @@ test("production preview records three identical pan/zoom runs for auto, full an
     expect(run.maxMs).toBeLessThanOrEqual(100);
   }
 });
+

@@ -14,7 +14,7 @@ async function prepareNewDevice(page: Page, options: NewDeviceOptions = {}): Pro
   await page.addInitScript(({ fontScale, includeNormalCloud, includeSpeedrunCloud, includeSpeedrunManual, serveNormalPayloadForSpeedrun }) => {
     window.localStorage.clear();
     window.sessionStorage.clear();
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, completedEvents: [], skipped: true }));
     window.localStorage.setItem("dsp-idle-network.menu-settings.v1", JSON.stringify({ fontScale }));
@@ -304,3 +304,4 @@ test("speedrun history and delete confirmations name their exact mode and slot",
     { method: "DELETE", path: "/api/cloud-save", mode: "speedrun", slot: "1" },
   ]);
 });
+

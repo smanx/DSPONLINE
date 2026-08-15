@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
   });
 });
 
@@ -162,3 +162,4 @@ test("light theme covers the next mobile shell and factory cards", async ({ page
   })).toBeGreaterThan(700);
   await page.screenshot({ path: "artifacts/qa/v31-light-mobile-390.png", fullPage: true });
 });
+

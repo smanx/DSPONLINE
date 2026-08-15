@@ -90,7 +90,7 @@ async function openIsolatedPage(page: Page): Promise<void> {
   await page.addInitScript(() => {
     localStorage.clear();
     sessionStorage.clear();
-    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43-cookie-test");
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44-cookie-test");
   });
   await page.goto(`${pageOrigin}/?menu=1`);
 }
@@ -210,3 +210,4 @@ test("real Chrome migrates a legacy Bearer only after Cookie confirmation", asyn
   expect((await context.cookies()).find((cookie) => cookie.name === "__Secure-dspidle_session_v1"))
     .toMatchObject({ httpOnly: true, secure: true, path: "/api" });
 });
+

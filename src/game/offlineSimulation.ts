@@ -1,4 +1,4 @@
-import type { GameSettings, GameState } from "./types";
+import type { GameSettings, GameState, IdleSettlementState, ItemId } from "./types";
 import { OFFLINE_PERFORMANCE_SESSION_KEY } from "./performanceMonitor";
 import { createContentPackRuntimeSnapshot, loadContentPackRegistry, type ContentPackRuntimeSnapshot } from "./contentPacks";
 import { advanceSimulationSession, type SimulationAdvanceSession } from "./engine";
@@ -11,7 +11,21 @@ import {
   classifyOfflineWorkload,
   type OfflineComplexityReport,
 } from "./offlineComplexity";
-import { decodeVerifiedSaveTransfer, type SaveTransferVerification } from "./saveTransfer";
+import { decodeVerifiedSaveTransfer, serializeSaveEnvelopeToTransfer, type SaveTransferVerification } from "./saveTransfer";
+import { applyPureIdleMacroFinalState } from "./pureIdleMacro";
+import type { PureIdleMacroFinalEnvelopeTransfer, PureIdleMacroFinalizedIdentity } from "./pureIdleMacroProtocol";
+
+/**
+ * Terminal-settle baseline carried into the background finalize worker. It is
+ * the same `PureIdleMacroFinalStateOptions` shape as the macro session, so the
+ * worker can apply `applyPureIdleMacroFinalState` once all offline seconds are
+ * settled without ever decoding the full save on the UI thread.
+ */
+export interface BackgroundOfflineTerminalSettleBaseline {
+  startedPaused: boolean;
+  baselineIdleSettlement: IdleSettlementState;
+  baselineTotalProduced: Partial<Record<ItemId, number>>;
+}
 
 export type OfflineSimulationWorkerRequest =
   | {
@@ -24,6 +38,20 @@ export type OfflineSimulationWorkerRequest =
     approximate?: boolean;
     conservativeOnly?: boolean;
     conservativeReason?: string;
+    deadlineMs?: number;
+  }
+  | {
+    type: "finalize-background";
+    id: number;
+    /** Macro-ready envelope settled for `highWallSeconds` (not yet terminal). */
+    sourceEnvelope: ArrayBuffer;
+    sourceVerification: SaveTransferVerification;
+    baseline: BackgroundOfflineTerminalSettleBaseline;
+    highWallSeconds: number;
+    normalOfflineSeconds: number;
+    registry: ContentPackRuntimeSnapshot;
+    savedAt?: number;
+    approximate?: boolean;
     deadlineMs?: number;
   }
   | {
@@ -62,6 +90,12 @@ export type OfflineSimulationWorkerResponse =
     approximation?: OfflineApproximationReport;
   }
   | { type: "decision-required"; id: number; totalSeconds: number; approximation: OfflineApproximationReport }
+  | {
+    type: "finalized-background";
+    id: number;
+    finalEnvelope: PureIdleMacroFinalEnvelopeTransfer;
+    durationMs: number;
+  }
   | {
     type: "upload-complete";
     id: number;
@@ -358,6 +392,161 @@ export function runOfflineSimulationInWorkerDetailed(
         "快速 Worker 无法启动，已使用一次零校准保守宏观恢复",
         "无法启动离线计算 Worker，未保存任何半成品",
       );
+    }
+  });
+}
+
+export interface BackgroundFinalEnvelopeComposeOptions {
+  baseline: BackgroundOfflineTerminalSettleBaseline;
+  highWallSeconds: number;
+  normalOfflineSeconds: number;
+  registryFingerprint: string;
+  savedAt?: number;
+}
+
+/**
+ * Apply the terminal idle/research/pause settle to the already-advanced offline
+ * state and serialize it to a fresh verified envelope. Pure and deterministic,
+ * so it is unit-testable without spawning a Worker. The returned identity is
+ * bound to the exact serialized bytes; callers must never edit `finalState`
+ * after this envelope is produced.
+ */
+export function buildBackgroundFinalEnvelope(
+  offlineState: GameState,
+  options: BackgroundFinalEnvelopeComposeOptions,
+): { finalState: GameState; finalEnvelope: PureIdleMacroFinalEnvelopeTransfer } {
+  const finalTotalWallSeconds = options.highWallSeconds + options.normalOfflineSeconds;
+  const finalState = applyPureIdleMacroFinalState(offlineState, finalTotalWallSeconds, options.baseline);
+  const serialized = serializeSaveEnvelopeToTransfer(finalState, {
+    formatVersion: 2,
+    kind: "primary",
+    mode: finalState.mode === "speedrun" ? "speedrun" : "normal",
+    slot: "main",
+    savedAt: options.savedAt ?? Date.now(),
+  });
+  const identity: PureIdleMacroFinalizedIdentity = {
+    stateChecksum: serialized.stateChecksum,
+    stateVersion: finalState.version,
+    mode: finalState.mode === "speedrun" ? "speedrun" : "normal",
+    activePlanetId: finalState.activePlanetId,
+    entityCount: finalState.entities.length,
+    beltCount: finalState.belts.length,
+    elapsedSeconds: finalState.elapsedSeconds,
+    algorithmVersion: "background-offline-v47",
+    settledWallSeconds: finalTotalWallSeconds,
+    settledSimulationSeconds: finalTotalWallSeconds,
+    registryFingerprint: options.registryFingerprint,
+  };
+  const finalEnvelope: PureIdleMacroFinalEnvelopeTransfer = {
+    payloadBytes: serialized.bytes,
+    verification: {
+      integrity: serialized.integrity,
+      stateChecksum: serialized.stateChecksum,
+      payloadChecksum: serialized.payloadChecksum,
+      byteLength: serialized.byteLength,
+    },
+    identity,
+  };
+  return { finalState, finalEnvelope };
+}
+
+export interface OfflineBackgroundTerminalFinalizeOptions {
+  /** The macro-ready envelope (settled for `highWallSeconds`, not yet terminal). */
+  sourceEnvelope: ArrayBuffer;
+  sourceVerification: SaveTransferVerification;
+  baseline: BackgroundOfflineTerminalSettleBaseline;
+  highWallSeconds: number;
+  normalOfflineSeconds: number;
+  savedAt?: number;
+  approximate?: boolean;
+  signal?: AbortSignal;
+  registry?: ContentPackRuntimeSnapshot;
+  onProgress?: (progress: OfflineSimulationProgress) => void;
+}
+
+export interface OfflineBackgroundTerminalFinalizeResult {
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer;
+  durationMs: number;
+}
+
+/**
+ * Settle the post-macro background remainder and derive the terminal envelope
+ * entirely inside a Worker. The macro envelope is handed over as bytes; the
+ * Worker decodes it, advances the offline remainder deterministically, applies
+ * the terminal idle/research/pause settle, and serializes the final state to a
+ * fresh verified envelope. The UI never parses the large save on the main
+ * thread, so the result can feed the same proof-bound persistence + simulation
+ * Worker rebase path as a normal pure-idle stop.
+ */
+export function runOfflineBackgroundTerminalFinalize(
+  options: OfflineBackgroundTerminalFinalizeOptions,
+): Promise<OfflineBackgroundTerminalFinalizeResult> {
+  if (typeof Worker === "undefined") {
+    return Promise.reject(new Error("当前浏览器不支持纯挂机后台结算 Worker"));
+  }
+  const worker = new Worker(new URL("./offlineSimulation.worker.ts", import.meta.url), {
+    type: "module",
+    name: "background-offline-finalize",
+  });
+  const id = Date.now() + Math.floor(Math.random() * 1_000_000);
+  const startedAt = performance.now();
+  const registry = options.registry ?? createContentPackRuntimeSnapshot(loadContentPackRegistry());
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", abort);
+      worker.terminate();
+      callback();
+    };
+    const abort = () => {
+      try { worker.postMessage({ type: "cancel", id } satisfies OfflineSimulationWorkerRequest); } catch { /* worker may be gone */ }
+      finish(() => reject(new DOMException("后台结算已取消", "AbortError")));
+    };
+    if (options.signal?.aborted) {
+      abort();
+      return;
+    }
+    options.signal?.addEventListener("abort", abort, { once: true });
+    worker.onmessage = (event: MessageEvent<OfflineSimulationWorkerResponse>) => {
+      const message = event.data;
+      if (message.id !== id || settled) return;
+      if (message.type === "progress") {
+        options.onProgress?.(message);
+        return;
+      }
+      if (message.type === "finalized-background") {
+        finish(() => resolve({
+          finalEnvelope: message.finalEnvelope,
+          durationMs: Math.max(0, performance.now() - startedAt),
+        }));
+        return;
+      }
+      if (message.type === "cancelled") {
+        finish(() => reject(new DOMException("后台结算已取消", "AbortError")));
+        return;
+      }
+      if (message.type === "error") {
+        finish(() => reject(new Error(message.message)));
+      }
+    };
+    worker.onerror = () => finish(() => reject(new Error("后台结算 Worker 运行失败，原主存档与恢复日志保持不变")));
+    try {
+      worker.postMessage({
+        type: "finalize-background",
+        id,
+        sourceEnvelope: options.sourceEnvelope,
+        sourceVerification: options.sourceVerification,
+        baseline: options.baseline,
+        highWallSeconds: options.highWallSeconds,
+        normalOfflineSeconds: options.normalOfflineSeconds,
+        registry,
+        savedAt: options.savedAt,
+        approximate: options.approximate === true,
+      } satisfies OfflineSimulationWorkerRequest, [options.sourceEnvelope]);
+    } catch {
+      finish(() => reject(new Error("无法把后台结算交给 Worker 处理，原主存档与恢复日志保持不变")));
     }
   });
 }

@@ -60,6 +60,7 @@ import { canSetBeltStackSize } from "../game/engine";
 import { validateBuildingBufferLimitInput, validateDefaultBeltLanesInput, validateProliferatorBufferLimitInput, type BuildingBufferLimitValidation } from "../game/settings";
 import { PRODUCTION_REFRESH_PROFILES, type ProductionRefreshPreference } from "../game/productionRefresh";
 import { getPerformancePeaks, getPerformancePhaseShares, type PerformanceMonitorSnapshot } from "../game/performanceMonitor";
+import type { LargeSaveAutosavePolicy } from "../game/largeSaveAutosavePolicy";
 import { clearClientErrors, collectClientDiagnostics, downloadDiagnostics, getClientErrors } from "../game/diagnostics";
 import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type CloudPublicStatus } from "../game/cloud";
 import { resetOnboarding } from "../game/onboarding";
@@ -84,6 +85,7 @@ interface OperationsWorkspaceProps {
   tab: OperationsTab;
   game: GameState;
   alerts: FactoryAlert[];
+  alertCount: number;
   slots: SaveSlotSummary[];
   snapshots: SaveSnapshotSummary[];
   importPreview: SaveInspection | null;
@@ -98,6 +100,11 @@ interface OperationsWorkspaceProps {
   onConnectExpandAllChange: (enabled: boolean) => void;
   fullRealtimeSimulation: boolean;
   onFullRealtimeSimulationChange: (enabled: boolean) => void;
+  factoryAlertsEnabled: boolean;
+  onFactoryAlertsEnabledChange: (enabled: boolean) => void;
+  largeSaveAutosaveProtection: boolean;
+  largeSaveAutosavePolicy: LargeSaveAutosavePolicy;
+  onLargeSaveAutosaveProtectionChange: (enabled: boolean) => void;
   blueprintAllowOverlap: boolean;
   onBlueprintAllowOverlapChange: (enabled: boolean) => void;
   canvasDetailPreference: CanvasDetailPreference;
@@ -176,7 +183,7 @@ function formatRuntime(seconds: number): string {
   return hours > 0 ? `${hours} 小时 ${minutes} 分` : `${minutes} 分钟`;
 }
 
-function AlertsPanel({ alerts, onSelect, onOpenTutorial }: { alerts: FactoryAlert[]; onSelect: (alert: FactoryAlert) => void; onOpenTutorial: (sectionId?: string) => void }) {
+function AlertsPanel({ alerts, enabled, onSelect, onOpenTutorial }: { alerts: FactoryAlert[]; enabled: boolean; onSelect: (alert: FactoryAlert) => void; onOpenTutorial: (sectionId?: string) => void }) {
   const criticalCount = alerts.filter((alert) => alert.severity === "critical").length;
   return (
     <div className="operations-panel operations-alerts">
@@ -187,7 +194,13 @@ function AlertsPanel({ alerts, onSelect, onOpenTutorial }: { alerts: FactoryAler
           <span><Bell size={13} />全部 <strong>{alerts.length}</strong></span>
         </div>
       </header>
-      {alerts.length === 0 ? (
+      {!enabled ? (
+        <div className="operations-empty">
+          <Bell size={28} />
+          <strong>工厂运行警报已关闭</strong>
+          <span>可在“设置 → 性能”重新开启；关闭时不会扫描全星区设备状态</span>
+        </div>
+      ) : alerts.length === 0 ? (
         <div className="operations-empty">
           <CheckCircle2 size={28} />
           <strong>生产网络运行正常</strong>
@@ -338,7 +351,7 @@ function DefaultBeltLanesSetting({ value, onChange }: { value: number; onChange:
   </div>;
 }
 
-function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, connectExpandAll, fullRealtimeSimulation, blueprintAllowOverlap, canvasDetailPreference, canvasDetailStage, canvasVisibleNodeCount, canvasStackGroupCount, canvasStackHiddenCount, canvasPerformanceFeatures, onEndgameExtremeModeChange, onConnectExpandAllChange, onFullRealtimeSimulationChange, onBlueprintAllowOverlapChange, onCanvasDetailPreferenceChange, onCanvasPerformanceFeatureChange, lineFindMode, onLineFindModeChange, connectionPointSize, onConnectionPointSizeChange, connectionHitArea, onConnectionHitAreaChange, defaultBeltLanes, onDefaultBeltLanesChange, showRunLog, onRunLogChange, showItemHover, onItemHoverChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; connectExpandAll: boolean; fullRealtimeSimulation: boolean; blueprintAllowOverlap: boolean; canvasDetailPreference: CanvasDetailPreference; canvasDetailStage: CanvasDetailStage; canvasVisibleNodeCount: number; canvasStackGroupCount: number; canvasStackHiddenCount: number; canvasPerformanceFeatures: CanvasPerformanceFeatures; onEndgameExtremeModeChange: (enabled: boolean) => void; onConnectExpandAllChange: (enabled: boolean) => void; onFullRealtimeSimulationChange: (enabled: boolean) => void; onBlueprintAllowOverlapChange: (enabled: boolean) => void; onCanvasDetailPreferenceChange: (preference: CanvasDetailPreference) => void; onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void; lineFindMode: boolean; onLineFindModeChange: (enabled: boolean) => void; connectionPointSize: ConnectionPointSize; onConnectionPointSizeChange: (size: ConnectionPointSize) => void; connectionHitArea: ConnectionHitArea; onConnectionHitAreaChange: (size: ConnectionHitArea) => void; defaultBeltLanes: number; onDefaultBeltLanesChange: (lanes: number) => void; showRunLog: boolean; onRunLogChange: (enabled: boolean) => void; showItemHover: boolean; onItemHoverChange: (enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
+function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, connectExpandAll, fullRealtimeSimulation, factoryAlertsEnabled, largeSaveAutosaveProtection, largeSaveAutosavePolicy, blueprintAllowOverlap, canvasDetailPreference, canvasDetailStage, canvasVisibleNodeCount, canvasStackGroupCount, canvasStackHiddenCount, canvasPerformanceFeatures, onEndgameExtremeModeChange, onConnectExpandAllChange, onFullRealtimeSimulationChange, onFactoryAlertsEnabledChange, onLargeSaveAutosaveProtectionChange, onBlueprintAllowOverlapChange, onCanvasDetailPreferenceChange, onCanvasPerformanceFeatureChange, lineFindMode, onLineFindModeChange, connectionPointSize, onConnectionPointSizeChange, connectionHitArea, onConnectionHitAreaChange, defaultBeltLanes, onDefaultBeltLanesChange, showRunLog, onRunLogChange, showItemHover, onItemHoverChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; connectExpandAll: boolean; fullRealtimeSimulation: boolean; factoryAlertsEnabled: boolean; largeSaveAutosaveProtection: boolean; largeSaveAutosavePolicy: LargeSaveAutosavePolicy; blueprintAllowOverlap: boolean; canvasDetailPreference: CanvasDetailPreference; canvasDetailStage: CanvasDetailStage; canvasVisibleNodeCount: number; canvasStackGroupCount: number; canvasStackHiddenCount: number; canvasPerformanceFeatures: CanvasPerformanceFeatures; onEndgameExtremeModeChange: (enabled: boolean) => void; onConnectExpandAllChange: (enabled: boolean) => void; onFullRealtimeSimulationChange: (enabled: boolean) => void; onFactoryAlertsEnabledChange: (enabled: boolean) => void; onLargeSaveAutosaveProtectionChange: (enabled: boolean) => void; onBlueprintAllowOverlapChange: (enabled: boolean) => void; onCanvasDetailPreferenceChange: (preference: CanvasDetailPreference) => void; onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void; lineFindMode: boolean; onLineFindModeChange: (enabled: boolean) => void; connectionPointSize: ConnectionPointSize; onConnectionPointSizeChange: (size: ConnectionPointSize) => void; connectionHitArea: ConnectionHitArea; onConnectionHitAreaChange: (size: ConnectionHitArea) => void; defaultBeltLanes: number; onDefaultBeltLanesChange: (lanes: number) => void; showRunLog: boolean; onRunLogChange: (enabled: boolean) => void; showItemHover: boolean; onItemHoverChange: (enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
   const { settings } = game;
   const { locale, setLocale } = useAppLocale();
   const currentReleaseNotes = getCurrentReleaseNotes(locale);
@@ -360,7 +373,7 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         ] as Array<[CanvasPerformanceFeatureId, string, string]>,
         help: "Each switch can be disabled independently; disabled features fall back to the current React Flow path. Visual reductions are inactive while extreme mode is off.",
       }
-    : {
+      : {
         ariaLabel: "画布优化独立回退开关",
         items: [
           ["renderProjection", "当前星球轻量快照", "安全优化"],
@@ -374,6 +387,14 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         ] as Array<[CanvasPerformanceFeatureId, string, string]>,
         help: "每项开关都可独立关闭；关闭后回退到当前 React Flow 路径。视觉降级项在极限模式关闭时不会生效。",
       };
+  const formatAutosaveInterval = (seconds: number) => seconds === 0
+    ? (locale === "en" ? "Off" : "关闭")
+    : seconds >= 60
+      ? `${seconds / 60} ${locale === "en" ? "min" : "分钟"}`
+      : `${seconds} ${locale === "en" ? "s" : "秒"}`;
+  const autosaveSizeLabel = largeSaveAutosavePolicy.persistedByteLength === null
+    ? (locale === "en" ? "size unknown" : "大小未知")
+    : `${(largeSaveAutosavePolicy.persistedByteLength / (1024 * 1024)).toFixed(1)} MiB`;
   return (
     <div className="operations-panel operations-settings" data-settings-category={settingsCategory}>
       <header className="operations-section-header">
@@ -571,6 +592,18 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <p className={fullRealtimeSimulation ? "settings-warning" : "settings-help"}>{locale === "en"
           ? "Device-only setting. Every simulation tick includes complete production history and Dyson plans; very large saves use substantially more memory and may stutter. Entity telemetry remains active-planet scoped. Off by default."
           : "只保存在当前设备；每个模拟切片都会同步完整生产历史与戴森规划，超大存档会明显增加内存与卡顿；建筑遥测仍只同步活动行星。默认关闭。"}</p>
+        <ToggleSetting
+          checked={factoryAlertsEnabled}
+          label={locale === "en" ? "Factory runtime alerts" : "工厂运行警报"}
+          value={factoryAlertsEnabled
+            ? locale === "en" ? "Scan factory status in the simulation Worker" : "在模拟 Worker 中扫描全星区设备状态"
+            : locale === "en" ? "Off; no alert scan, badge, or list" : "关闭；不扫描、不显示红点与警报列表"}
+          icon={<Bell size={16} />}
+          onChange={onFactoryAlertsEnabledChange}
+        />
+        <p className="settings-help">{locale === "en"
+          ? "Device-only. Turning this off can improve resume and long-idle responsiveness for very large factories without changing simulation or save data."
+          : "仅保存在当前设备。超大工厂关闭后可改善继续模拟与长时间挂机的响应；不会改变模拟结果或存档数据。"}</p>
         <div className="canvas-performance-feature-list" aria-label={canvasPerformanceCopy.ariaLabel}>
           {canvasPerformanceCopy.items.map(([id, label, scope]) => <ToggleSetting
             checked={canvasPerformanceFeatures[id]}
@@ -594,13 +627,25 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <ToggleSetting checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={onRunLogChange} />
       </section>
       <section className="settings-group" data-settings-category="storage">
-        <header><Clock3 size={14} /><span>自动保存间隔</span></header>
+        <header><Clock3 size={14} /><span>自动保存间隔</span><small>{locale === "en" ? `configured ${formatAutosaveInterval(largeSaveAutosavePolicy.configuredIntervalSeconds)} · effective ${formatAutosaveInterval(largeSaveAutosavePolicy.effectiveIntervalSeconds)}` : `设置 ${formatAutosaveInterval(largeSaveAutosavePolicy.configuredIntervalSeconds)} · 实际 ${formatAutosaveInterval(largeSaveAutosavePolicy.effectiveIntervalSeconds)}`}</small></header>
         <div className="settings-segmented" aria-label="自动保存间隔">
           {([30, 60, 120, 600, 1800, 0] as AutosaveIntervalSeconds[]).map((seconds) => (
             <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => onChange({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds >= 600 ? `${seconds / 60} 分钟` : `${seconds} 秒`}</button>
           ))}
         </div>
         {settings.autosaveIntervalSeconds === 0 ? <p className="settings-warning">关闭后，刷新、崩溃或异常退出可能丢失未保存进度；手动保存和云同步保持独立。</p> : null}
+        <ToggleSetting
+          checked={largeSaveAutosaveProtection}
+          label={locale === "en" ? "Large-save autosave protection (recommended)" : "超大存档自动保存保护（推荐）"}
+          value={largeSaveAutosaveProtection
+            ? locale === "en" ? `Device-only; ${autosaveSizeLabel}${largeSaveAutosavePolicy.throttled ? " · minimum 10 min" : ""}` : `仅本机；${autosaveSizeLabel}${largeSaveAutosavePolicy.throttled ? " · 最短 10 分钟" : ""}`
+            : locale === "en" ? "Off; use the configured interval" : "关闭；按存档设置频率执行"}
+          icon={<ShieldCheck size={16} />}
+          onChange={onLargeSaveAutosaveProtectionChange}
+        />
+        <p className={largeSaveAutosavePolicy.largeSave && !largeSaveAutosaveProtection ? "settings-warning" : "settings-help"} role={largeSaveAutosavePolicy.largeSave && !largeSaveAutosaveProtection ? "alert" : undefined}>{largeSaveAutosavePolicy.largeSave && !largeSaveAutosaveProtection
+          ? locale === "en" ? "Protection is off; frequent writes on this large save may cause stutter. Manual save, return-to-menu and export are unchanged." : "保护已关闭；当前超大存档将按配置频率写入，可能出现卡顿。手动保存、返回主页和导出不受影响。"
+          : locale === "en" ? "Device-only. At or above 24 MiB, background autosave uses at least 10 minutes; manual save, return-to-menu and export are unchanged." : "仅保存在当前设备。存档达到 24 MiB 后，后台自动保存最短间隔为 10 分钟；手动保存、返回主页和导出不受影响。"}</p>
       </section>
       <section className="settings-group" data-settings-category="storage">
         <header><MapPin size={14} /><span>星区与资源</span><small>种子 #{game.galaxy.seed}</small></header>
@@ -1098,7 +1143,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
           <div><span>星系运行协议</span><strong>运营中心</strong></div>
         </div>
         <div className="operations-summary">
-          <span className={props.alerts.length > 0 ? "warning" : "positive"}><Bell size={13} />警报 <strong>{props.alerts.length}</strong></span>
+          <span className={props.alertCount > 0 ? "warning" : "positive"}><Bell size={13} />警报 <strong>{props.alertCount}</strong></span>
           <span><Trophy size={13} />成就 <strong>{unlockedCount}/{ACHIEVEMENTS.length}</strong></span>
         </div>
         <button className="operations-close" type="button" onClick={props.onClose} title="关闭运营中心" aria-label="关闭运营中心"><X size={18} /></button>
@@ -1106,7 +1151,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
       <nav className="operations-tabs" role="tablist" aria-label="运营中心视图">
         {TABS.map((tab) => {
           const Icon = tab.icon;
-          const count = tab.id === "alerts" ? props.alerts.length : tab.id === "achievements" ? unlockedCount : null;
+          const count = tab.id === "alerts" ? props.alertCount : tab.id === "achievements" ? unlockedCount : null;
           return (
             <button className={props.tab === tab.id ? "active" : ""} type="button" role="tab" aria-selected={props.tab === tab.id} key={tab.id} onClick={() => props.onTabChange(tab.id)}>
               <Icon size={15} /><span>{tab.label}</span>{count != null ? <strong>{count}</strong> : null}
@@ -1115,10 +1160,10 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
         })}
       </nav>
       <div className="operations-body">
-        {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} onOpenTutorial={props.onOpenTutorial} /> : null}
+        {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} enabled={props.factoryAlertsEnabled} onSelect={props.onAlertSelect} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
         {props.tab === "logistics" ? <LogisticsManagementPanel game={props.game} {...props.logisticsActions} /> : null}
-        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} connectExpandAll={props.connectExpandAll} fullRealtimeSimulation={props.fullRealtimeSimulation} blueprintAllowOverlap={props.blueprintAllowOverlap} canvasDetailPreference={props.canvasDetailPreference} canvasDetailStage={props.canvasDetailStage} canvasVisibleNodeCount={props.canvasVisibleNodeCount} canvasStackGroupCount={props.canvasStackGroupCount} canvasStackHiddenCount={props.canvasStackHiddenCount} canvasPerformanceFeatures={props.canvasPerformanceFeatures} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onConnectExpandAllChange={props.onConnectExpandAllChange} onFullRealtimeSimulationChange={props.onFullRealtimeSimulationChange} onBlueprintAllowOverlapChange={props.onBlueprintAllowOverlapChange} onCanvasDetailPreferenceChange={props.onCanvasDetailPreferenceChange} onCanvasPerformanceFeatureChange={props.onCanvasPerformanceFeatureChange} lineFindMode={props.lineFindMode} onLineFindModeChange={props.onLineFindModeChange} connectionPointSize={props.connectionPointSize} onConnectionPointSizeChange={props.onConnectionPointSizeChange} connectionHitArea={props.connectionHitArea} onConnectionHitAreaChange={props.onConnectionHitAreaChange} defaultBeltLanes={props.defaultBeltLanes} onDefaultBeltLanesChange={props.onDefaultBeltLanesChange} showRunLog={props.showRunLog} onRunLogChange={props.onRunLogChange} showItemHover={props.showItemHover} onItemHoverChange={props.onItemHoverChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} connectExpandAll={props.connectExpandAll} fullRealtimeSimulation={props.fullRealtimeSimulation} factoryAlertsEnabled={props.factoryAlertsEnabled} largeSaveAutosaveProtection={props.largeSaveAutosaveProtection} largeSaveAutosavePolicy={props.largeSaveAutosavePolicy} blueprintAllowOverlap={props.blueprintAllowOverlap} canvasDetailPreference={props.canvasDetailPreference} canvasDetailStage={props.canvasDetailStage} canvasVisibleNodeCount={props.canvasVisibleNodeCount} canvasStackGroupCount={props.canvasStackGroupCount} canvasStackHiddenCount={props.canvasStackHiddenCount} canvasPerformanceFeatures={props.canvasPerformanceFeatures} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onConnectExpandAllChange={props.onConnectExpandAllChange} onFullRealtimeSimulationChange={props.onFullRealtimeSimulationChange} onFactoryAlertsEnabledChange={props.onFactoryAlertsEnabledChange} onLargeSaveAutosaveProtectionChange={props.onLargeSaveAutosaveProtectionChange} onBlueprintAllowOverlapChange={props.onBlueprintAllowOverlapChange} onCanvasDetailPreferenceChange={props.onCanvasDetailPreferenceChange} onCanvasPerformanceFeatureChange={props.onCanvasPerformanceFeatureChange} lineFindMode={props.lineFindMode} onLineFindModeChange={props.onLineFindModeChange} connectionPointSize={props.connectionPointSize} onConnectionPointSizeChange={props.onConnectionPointSizeChange} connectionHitArea={props.connectionHitArea} onConnectionHitAreaChange={props.onConnectionHitAreaChange} defaultBeltLanes={props.defaultBeltLanes} onDefaultBeltLanesChange={props.onDefaultBeltLanesChange} showRunLog={props.showRunLog} onRunLogChange={props.onRunLogChange} showItemHover={props.showItemHover} onItemHoverChange={props.onItemHoverChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "performance" ? <PerformancePanel game={props.game} snapshot={props.performanceMonitor} onStart={props.onStartPerformanceMonitor} onStop={props.onStopPerformanceMonitor} onClear={props.onClearPerformanceMonitor} onExport={props.onExportPerformanceMonitor} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}

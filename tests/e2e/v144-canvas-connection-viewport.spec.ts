@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createInitialState, placeBuilding } from "../../src/game/engine";
+import { serializeEnvelope } from "../../src/game/storage";
 import { selectSettingsCategory } from "./settings-helpers";
 
 const CONNECT_EXPAND_ALL_KEY = "dsp-idle-network.ui.connect-expand-all.v1";
@@ -24,7 +25,7 @@ async function seedAnonymousCanvas(page: Page, storageCount: number, preference?
     entity.outputs.iron_ore = index === 0 ? 500 : 0;
   }
   const fixture = {
-    raw: JSON.stringify({ savedAt: Date.now(), state }),
+    raw: serializeEnvelope(state, Date.now()),
     ids: storages.map((entity) => entity.id),
     counts: {
       active: state.entities.filter((entity) => entity.planetId === state.activePlanetId).length,
@@ -33,8 +34,7 @@ async function seedAnonymousCanvas(page: Page, storageCount: number, preference?
   };
 
   await page.addInitScript(({ key, rawPreference, extremeMode, anonymousFixture }) => {
-    window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     if (extremeMode) {
@@ -55,8 +55,19 @@ async function seedAnonymousCanvas(page: Page, storageCount: number, preference?
   }, { key: CONNECT_EXPAND_ALL_KEY, rawPreference: preference, extremeMode: extreme, anonymousFixture: fixture });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/");
-  await expect(page.locator(".game-shell")).toBeVisible();
+  await page.goto("/?menu=1");
+  await continueSeededCanvas(page);
+}
+
+async function continueSeededCanvas(page: Page) {
+  await expect(page.locator(".start-menu")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: /继续游戏|Continue/i }).click();
+  await expect(page.locator(".game-shell")).toBeVisible({ timeout: 20_000 });
+}
+
+async function reloadSeededCanvas(page: Page) {
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await continueSeededCanvas(page);
 }
 
 async function storageIds(page: Page): Promise<string[]> {
@@ -252,11 +263,14 @@ test("device-only expand-all preference is strict, persistent, accessible, and a
   await realtimeToggle.getByRole("checkbox").evaluate((input: HTMLInputElement) => input.click());
   await expect(realtimeToggle.getByRole("checkbox")).toBeChecked();
   await expect(shell).toHaveAttribute("data-full-realtime-simulation", "true");
-  await page.getByLabel("继续模拟").click();
+  const resume = page.getByLabel("继续模拟");
+  const pause = page.getByLabel("暂停模拟");
+  if (await resume.isVisible()) await resume.click();
+  else await expect(pause).toBeVisible();
   await expect.poll(() => page.evaluate(() => (
     window as typeof window & { __v144ProjectionScopes?: { scopes: string[] } }
   ).__v144ProjectionScopes?.scopes.includes("full-top-level") ?? false), { timeout: 5_000 }).toBe(true);
-  await page.getByLabel("暂停模拟").click();
+  if (await pause.isVisible()) await pause.click();
   expect(await page.evaluate((key) => window.localStorage.getItem(key), FULL_REALTIME_SIMULATION_KEY)).toBe("true");
 
   await selectSettingsCategory(operations, "画面与主题", "visual");
@@ -268,7 +282,7 @@ test("device-only expand-all preference is strict, persistent, accessible, and a
   await expect(operations.getByRole("alert").filter({ hasText: "very large factories may pause or stutter" })).toBeVisible();
 
   await page.locator(".header-settings-command").click();
-  await page.reload();
+  await reloadSeededCanvas(page);
   await expect(shell).toHaveAttribute("data-connect-expand-all", "true");
   await expect(shell).toHaveAttribute("data-full-realtime-simulation", "true");
   const ids = await storageIds(page);
@@ -336,7 +350,7 @@ test("dense Chromium connection viewport meets the desktop frame gate and report
   const boundedFrames = await finishFrameCapture(page);
 
   await page.evaluate((key) => window.localStorage.setItem(key, "true"), CONNECT_EXPAND_ALL_KEY);
-  await page.reload();
+  await reloadSeededCanvas(page);
   await expect(shell).toHaveAttribute("data-connect-expand-all", "true");
   await beginFrameCapture(page);
   await armConnectionEntryMeasurement(page, "all");
@@ -359,3 +373,4 @@ test("dense Chromium connection viewport meets the desktop frame gate and report
   expect(expandAllCounts.logicalFull).toBe(expandAllCounts.active);
   expect(expandAllCounts.logicalFull).toBeGreaterThan(boundedCounts.logicalFull);
 });
+

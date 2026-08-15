@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 function uiReviewFixture() {
   return ({ releaseNoteId, fontScale }: { releaseNoteId: string; fontScale: number }) => {
@@ -520,8 +520,8 @@ test("release notes preserve close and acknowledge actions at 360 by 480 and 200
   });
   const dialog = page.locator(".release-notes-dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog).toHaveAttribute("aria-label", "超大存档加载与保存紧急修复");
-  await expect(dialog.locator(".release-notes-version strong")).toHaveText("1.0.43");
+  await expect(dialog).toHaveAttribute("aria-label", "超大工厂运行态与保存性能优化");
+  await expect(dialog.locator(".release-notes-version strong")).toHaveText("1.0.44");
   await expect(dialog.locator(".release-notes-scroll li")).toHaveCount(4);
   await expect(dialog).toContainText("超大线路迁移改为线性处理");
   await expect(dialog).toContainText("导入与云端恢复不再冻结界面");
@@ -604,3 +604,5 @@ test("coarse-pointer primary targets and the construction-center canvas node rem
   expect(searchBox).not.toBeNull();
   expect(searchBox!.height).toBeGreaterThanOrEqual(44);
 });
+
+

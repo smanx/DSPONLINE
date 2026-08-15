@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function seedV112Factory(page: Page, options: { fontScale?: number; theme?: "dark" | "light"; mobileUi?: "legacy" | "next" } = {}) {
   await page.addInitScript(({ fontScale, theme, mobileUi, releaseNoteId }) => {
@@ -215,3 +215,4 @@ test("light logistics station controls expose hover, selected, focus and configu
   expect(diagnosticBackground.reduce((sum, channel) => sum + channel, 0)).toBeGreaterThan(600);
   await page.screenshot({ path: "artifacts/qa/v112-light-logistics-selected-200-1440x900.png", fullPage: true });
 });
+

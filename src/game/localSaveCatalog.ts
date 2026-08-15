@@ -26,6 +26,8 @@ export interface LocalSaveCatalog {
   structurePoints: number;
   integrity: SaveEnvelopeChecksumStatus;
   stateChecksum: string | null;
+  /** True only when both envelope and state explicitly carried the same mode. */
+  modeExplicit?: boolean;
   reason: string | null;
   settings: Partial<GameSettings> | null;
 }
@@ -71,6 +73,7 @@ export function parseLocalSaveCatalog(value: string | null | undefined, expected
       !(candidate.reason === null || typeof candidate.reason === "string" && candidate.reason.length <= 256) ||
       !(candidate.settings === null || Boolean(candidate.settings) && typeof candidate.settings === "object" && !Array.isArray(candidate.settings)) ||
       !(candidate.stateChecksum === null || typeof candidate.stateChecksum === "string" && candidate.stateChecksum.length <= 256)) return null;
+    if (candidate.modeExplicit !== undefined && typeof candidate.modeExplicit !== "boolean") return null;
     for (const numberKey of ["savedAt", "byteLength", "revision", "stateVersion", "entityCount", "beltCount", "elapsedSeconds", "completedTechCount", "structurePoints"] as const) {
       const numberValue = candidate[numberKey];
       if (typeof numberValue !== "number" || !Number.isSafeInteger(numberValue) || numberValue < 0) return null;

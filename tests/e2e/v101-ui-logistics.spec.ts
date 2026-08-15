@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function seedUiState(page: Page, options: { theme?: "dark" | "light"; fontScale?: number; paused?: boolean } = {}) {
   await page.addInitScript(({ theme, fontScale, paused, releaseNoteId }) => {
@@ -330,3 +330,4 @@ test("dark light dark switching and the classic mobile tablet matrix stay bounde
     await page.screenshot({ path: `artifacts/qa/v101-${viewport.name}-dark-font-200-${viewport.width}x${viewport.height}.png`, fullPage: true });
   }
 });
+

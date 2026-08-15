@@ -14,7 +14,7 @@ test("manual, autosave, and return publish ordered non-blocking persistence phas
 
   await page.addInitScript(({ saveRaw }) => {
     sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
     localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     localStorage.setItem("dsp-idle-network.save.v1", saveRaw);
     (window as typeof window & { __DSP_RUNTIME_TRANSITIONS__?: unknown }).__DSP_RUNTIME_TRANSITIONS__ = {
@@ -106,3 +106,4 @@ test("manual, autosave, and return publish ordered non-blocking persistence phas
   expect(sequence("autosave")).toContain("complete");
   expect(sequence("return")).toEqual(["checkpoint", "serialize-write-readback", "complete"]);
 });
+

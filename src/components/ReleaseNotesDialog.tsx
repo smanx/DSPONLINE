@@ -1,7 +1,7 @@
 import { Check, ChevronLeft, ChevronRight, CloudUpload, Database, Gauge, History, Info, Link2, LockKeyhole, MessageCircle, ShieldCheck, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAppLocale } from "../i18n/locale";
-import { getCurrentReleaseNotes, getReleaseNotes1039, getReleaseNotes1041, getReleaseNotes1042, getReleaseNotesUiCopy } from "../i18n/releaseNotes";
+import { getCurrentReleaseNotes, getReleaseNotes1039, getReleaseNotes1041, getReleaseNotes1042, getReleaseNotes1043, getReleaseNotesUiCopy } from "../i18n/releaseNotes";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 import { AccessibleDialog } from "./AccessibleDialog";
 
@@ -12,6 +12,7 @@ export const CURRENT_RELEASE_NOTES = getCurrentReleaseNotes("zh-CN");
 const RELEASE_NOTES_1_0_39 = getReleaseNotes1039("zh-CN");
 const RELEASE_NOTES_1_0_41 = getReleaseNotes1041("zh-CN");
 const RELEASE_NOTES_1_0_42 = getReleaseNotes1042("zh-CN");
+const RELEASE_NOTES_1_0_43 = getReleaseNotes1043("zh-CN");
 
 const RELEASE_NOTES_1_0_40 = {
   ...getCurrentReleaseNotes("zh-CN"),
@@ -136,6 +137,7 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  RELEASE_NOTES_1_0_43,
   RELEASE_NOTES_1_0_42,
   RELEASE_NOTES_1_0_41,
   RELEASE_NOTES_1_0_40,
@@ -514,6 +516,7 @@ export function markCurrentReleaseNotesSeen(): void {
 export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { locale } = useAppLocale();
   const localizedCurrentRelease = getCurrentReleaseNotes(locale);
+  const localizedRelease1043 = getReleaseNotes1043(locale);
   const localizedRelease1042 = getReleaseNotes1042(locale);
   const localizedRelease1041 = getReleaseNotes1041(locale);
   const localizedRelease1039 = getReleaseNotes1039(locale);
@@ -527,6 +530,7 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
   const selectedReleaseRecord = RELEASE_NOTES_HISTORY.find((release) => release.id === selectedReleaseId) ?? CURRENT_RELEASE_NOTES;
   const selectedRelease = selectedReleaseRecord.id === CURRENT_RELEASE_NOTES.id
     ? localizedCurrentRelease
+    : selectedReleaseRecord.id === RELEASE_NOTES_1_0_43.id ? localizedRelease1043
     : selectedReleaseRecord.id === RELEASE_NOTES_1_0_42.id ? localizedRelease1042
     : selectedReleaseRecord.id === RELEASE_NOTES_1_0_41.id ? localizedRelease1041
     : selectedReleaseRecord.id === RELEASE_NOTES_1_0_39.id ? localizedRelease1039 : selectedReleaseRecord;

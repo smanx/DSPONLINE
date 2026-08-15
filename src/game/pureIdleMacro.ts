@@ -2,7 +2,10 @@ import {
   getEffectiveSimulationMultiplier,
   refreshDysonGenerationSnapshot,
   refreshTimeWarpPowerSnapshotInPlace,
+  setPaused,
+  settleCompletedResearchBoundaries,
 } from "./engine";
+import { finishIdleRun, settleIdleRun } from "./idleSettlement";
 import {
   advanceExactSimulationWindow,
   applyPureIdleAffineContract,
@@ -15,7 +18,7 @@ import {
   type ResearchMacroLedger,
   type ResearchMacroStatus,
 } from "./researchMacro";
-import type { GameState, ItemId } from "./types";
+import type { GameState, IdleSettlementState, ItemId } from "./types";
 
 export const PURE_IDLE_MACRO_ALGORITHM_VERSION = "pure-idle-macro-v3";
 export const PURE_IDLE_MACRO_BUCKET_WALL_SECONDS = 30;
@@ -143,6 +146,33 @@ export interface PureIdleMacroOperationOptions {
   deadlineAtMs?: number;
   shouldCancel?: () => boolean;
   forceConservativeReason?: string;
+}
+
+/**
+ * Small recovery-record fields required to turn a macro candidate into the
+ * exact state that should be persisted when a normal stop completes. These
+ * fields travel to the Worker; the UI must not apply them after the envelope
+ * has already been serialized.
+ */
+export interface PureIdleMacroFinalStateOptions {
+  startedPaused: boolean;
+  baselineIdleSettlement: IdleSettlementState;
+  baselineTotalProduced: Partial<Record<ItemId, number>>;
+}
+
+export function applyPureIdleMacroFinalState(
+  candidate: GameState,
+  targetWallSeconds: number,
+  options: PureIdleMacroFinalStateOptions,
+): GameState {
+  const idleSettlement = finishIdleRun(settleIdleRun(
+    options.baselineIdleSettlement,
+    targetWallSeconds,
+    options.baselineTotalProduced,
+    candidate.totalProduced,
+  ));
+  const researchSettled = settleCompletedResearchBoundaries(candidate);
+  return setPaused({ ...researchSettled, idleSettlement }, options.startedPaused);
 }
 
 export class PureIdleMacroDeadlineError extends Error {

@@ -1,4 +1,5 @@
 import type { BeltConnection, FactoryEntity, GameState, PlanetId } from "./types";
+import type { FactoryAlertProjection } from "./alerts";
 
 /** Versioned, UI-only projection carried alongside the authoritative state. */
 export interface SimulationProjection {
@@ -33,6 +34,8 @@ export interface SimulationProjection {
   beltCount: number;
   inFlightRouteCount: number;
   totalProduced: number;
+  /** Compact exact global alert rows derived in the authoritative Worker. */
+  alerts?: FactoryAlertProjection;
 }
 
 export interface SimulationProjectionBaseline {

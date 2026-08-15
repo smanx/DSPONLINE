@@ -551,6 +551,50 @@ export function getPrimaryLocalSaveRevision(mode: LocalSaveMode = "normal"): num
   return revisionCache.get(primaryKeyForMode(mode)) ?? 0;
 }
 
+/** Small revision metadata for a proof-bound non-primary payload. */
+export function getLocalSaveRevision(key: string): number {
+  ensureSynchronousFallback();
+  return revisionCache.get(key) ?? 0;
+}
+
+export interface VerifiedPrimaryLocalSaveIdentity {
+  key: string;
+  mode: LocalSaveMode;
+  revision: number;
+  savedAt: number;
+  stateChecksum: string;
+  payloadChecksum: string;
+  byteLength: number;
+}
+
+/**
+ * Small exact identity proving the current primary payload has a matching
+ * valid catalog and revision. This never hydrates or parses the save body.
+ */
+export function getVerifiedPrimaryLocalSaveIdentity(
+  mode: LocalSaveMode = "normal",
+): VerifiedPrimaryLocalSaveIdentity | null {
+  ensureSynchronousFallback();
+  const key = primaryKeyForMode(mode);
+  const catalog = catalogCache.get(key);
+  const revision = revisionCache.get(key) ?? 0;
+  if (!knownSaveKeys.has(key) || !catalog || catalog.key !== key || catalog.mode !== mode ||
+    catalog.kind !== "primary" || catalog.slot !== "main" || catalog.integrity !== "valid" ||
+    typeof catalog.stateChecksum !== "string" || catalog.stateChecksum.length === 0 ||
+    !/^[0-9a-f]{8}$/.test(catalog.payloadChecksum) ||
+    !Number.isSafeInteger(catalog.byteLength) || catalog.byteLength <= 0 ||
+    catalog.revision !== revision) return null;
+  return {
+    key,
+    mode,
+    revision,
+    savedAt: catalog.savedAt,
+    stateChecksum: catalog.stateChecksum,
+    payloadChecksum: catalog.payloadChecksum,
+    byteLength: catalog.byteLength,
+  };
+}
+
 /**
  * Exact primary identity for binding an authoritative runtime checkpoint.
  * `checksum` is the catalog's verified save-envelope/state checksum, not the
@@ -559,17 +603,13 @@ export function getPrimaryLocalSaveRevision(mode: LocalSaveMode = "normal"): num
 export function getPrimaryLocalSaveRecoveryIdentity(
   mode: LocalSaveMode = "normal",
 ): SimulationRuntimeRecoveryBaseIdentity | null {
-  ensureSynchronousFallback();
-  const key = primaryKeyForMode(mode);
-  const catalog = catalogCache.get(key);
-  const revision = revisionCache.get(key) ?? 0;
-  if (!catalog || catalog.key !== key || catalog.mode !== mode || catalog.integrity !== "valid" ||
-    !catalog.stateChecksum || catalog.revision !== revision) return null;
+  const identity = getVerifiedPrimaryLocalSaveIdentity(mode);
+  if (!identity) return null;
   return {
     mode,
-    savedAt: catalog.savedAt,
-    checksum: catalog.stateChecksum,
-    revision,
+    savedAt: identity.savedAt,
+    checksum: identity.stateChecksum,
+    revision: identity.revision,
   };
 }
 
@@ -1240,7 +1280,14 @@ async function initializeIndexedDb(): Promise<void> {
     catalogCache.set(catalog.key, catalog);
     updateStorageEntryFromCatalog(catalog, recordUpdatedAt(records, localSaveCatalogRecordKey(catalog.key), catalog.savedAt));
   }
-  legacyCatalogIndexQueue = [...knownSaveKeys].filter((key) => isCatalogedSaveKey(key) && !catalogCache.has(key));
+  legacyCatalogIndexQueue = [...knownSaveKeys].filter((key) => {
+    if (!isCatalogedSaveKey(key)) return false;
+    const catalog = catalogCache.get(key);
+    // Catalog v1 gained `modeExplicit` after 1.0.43. Rebuild old entries in
+    // the same Worker-only migration queue rather than treating them as
+    // permanently ambiguous on every large-save checkpoint.
+    return !catalog || catalog.modeExplicit === undefined;
+  });
   scheduleLegacyCatalogIndex();
 
   const durableLease = parseLocalSaveWriterLease(await readCoordinationValue(db, LOCAL_SAVE_WRITER_LEASE_KEY));
@@ -1899,6 +1946,7 @@ export function setLocalSaveValue(key: string, value: string): void {
 export async function setLocalSavePayloadWithProof(
   input: AuthoritativeSavePayloadCommitInput,
   onProgress?: (progress: AuthoritativeSavePersistenceProgress) => void,
+  shouldCommit?: () => boolean,
 ): Promise<AuthoritativeSavePersistenceCommitResult> {
   await initializeLocalSaveStore();
   if (backend !== "indexeddb" || !database) throw new Error("proof-bound local save requires IndexedDB");
@@ -1912,7 +1960,22 @@ export async function setLocalSavePayloadWithProof(
   // legacy writes that existed at this exact call boundary.
   const priorLegacyWrites = flushLocalSaveWrites();
   return enqueueAuthoritativeSave(priorLegacyWrites, async () => {
-    const result = await commitAuthoritativeSavePayloadInPersistenceWorker(input, onProgress);
+    // This is the final synchronous admission point before payload ownership
+    // moves to the persistence Worker. A low-priority snapshot can therefore
+    // yield to a primary intent that arrived while initialization or older
+    // legacy writes were still pending. Once dispatched, an IDB transaction
+    // is deliberately not presented as preemptible.
+    if (shouldCommit && !shouldCommit()) throw new Error("proof-bound save admission cancelled");
+    let result: AuthoritativeSavePersistenceCommitResult;
+    try {
+      result = await commitAuthoritativeSavePayloadInPersistenceWorker(input, onProgress);
+    } catch (error) {
+      // A persistence Worker may have committed before its readback/response
+      // was lost. Refresh the small catalog/revision side records before a
+      // queued retry computes its next CAS expectation.
+      try { await reloadLocalSaveCache(); } catch { /* original error wins */ }
+      throw error;
+    }
     if (result.result.ok) {
       revisionCache.set(input.key, result.result.proof.revision);
       // Only small catalog/revision metadata is refreshed on the UI thread;
@@ -1928,6 +1991,11 @@ export async function setLocalSavePayloadWithProof(
         revision: result.result.proof.revision,
         fencingToken: input.fence.fencingToken,
       });
+    } else {
+      // Controlled readback/CAS/abort failures can also follow a durable write
+      // whose terminal proof was lost. Never let stale revisionCache cascade
+      // into every later request in this tab.
+      try { await reloadLocalSaveCache(); } catch { /* controlled failure remains authoritative */ }
     }
     return result;
   });
@@ -2074,7 +2142,11 @@ export async function reloadLocalSaveCache(): Promise<void> {
     catalogCache.set(catalog.key, catalog);
     updateStorageEntryFromCatalog(catalog, recordUpdatedAt(records, localSaveCatalogRecordKey(catalog.key), catalog.savedAt));
   }
-  legacyCatalogIndexQueue = [...knownSaveKeys].filter((key) => isCatalogedSaveKey(key) && !catalogCache.has(key));
+  legacyCatalogIndexQueue = [...knownSaveKeys].filter((key) => {
+    if (!isCatalogedSaveKey(key)) return false;
+    const catalog = catalogCache.get(key);
+    return !catalog || catalog.modeExplicit === undefined;
+  });
   scheduleLegacyCatalogIndex();
   notifyStorageStatus();
 }

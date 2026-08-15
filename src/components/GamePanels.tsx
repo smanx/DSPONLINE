@@ -151,15 +151,45 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
     setTrayLimitDraft(String(next));
     onSetTrayItemLimit(next);
   };
-  const trayItems = (Object.entries(game.tray) as Array<[ItemId, number]>)
+  const trayItems = useMemo(() => (Object.entries(game.tray) as Array<[ItemId, number]>)
     .filter(([, amount]) => amount > 0.001)
-    .sort((a, b) => b[1] - a[1]);
-  const campaign = getCampaignSnapshot(game);
+    .sort((a, b) => b[1] - a[1]), [game.tray]);
+  const campaign = useMemo(() => getCampaignSnapshot(game), [
+    game.blueprints,
+    game.belts,
+    game.campaign,
+    game.dysonSphere,
+    game.dysonSwarm,
+    game.endgame,
+    game.entities,
+    game.exploration,
+    game.manualMined,
+    game.planetMetrics,
+    game.research,
+    game.totalProduced,
+  ]);
   const activeTask = campaign.activeTask;
-  const activeDeficits = activeTask ? getCampaignTaskDeficits(game, activeTask) : [];
+  const activeDeficits = useMemo(() => activeTask ? getCampaignTaskDeficits(game, activeTask) : [], [
+    activeTask,
+    game.activePlanetId,
+    game.cargo,
+    game.entities,
+    game.planetTrays,
+    game.tray,
+  ]);
   const dysonGenerationKw = game.dysonSwarm.generationKw + game.dysonSphere.generationKw;
-  const shellCapacity = getDysonShellCapacity(game);
-  const dysonEngineering = getDysonEngineeringSnapshot(game, getPlanet(game.activePlanetId).systemId);
+  const shellCapacity = useMemo(() => getDysonShellCapacity(game), [game.dysonPlans, game.dysonSphere.structurePoints]);
+  const activeSystemId = getPlanet(game.activePlanetId).systemId;
+  const dysonEngineering = useMemo(() => getDysonEngineeringSnapshot(game, activeSystemId), [
+    activeSystemId,
+    game.dysonEngineering,
+    game.dysonPlans,
+    game.endgame,
+    game.entities,
+    game.galaxy,
+    game.research,
+    game.settings,
+  ]);
   const swarmLoad = dysonEngineering.dysonPowerUtilization * 100;
   const cargoIsPortableFleet = Boolean(game.cargo && isPortableFleetItem(game.cargo.itemId));
 
@@ -340,16 +370,23 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
 export function PlanetNavigator({ game, onPlanetChange }: { game: GameState; onPlanetChange: (planetId: PlanetId) => void }) {
   const [collapsed, setCollapsed] = useState(false);
   const activeSystemId = getPlanet(game.activePlanetId).systemId;
-  const visiblePlanets = PLANET_LIST.filter((planet) => planet.systemId === activeSystemId &&
-    game.exploration.unlockedSystemIds.includes(planet.systemId));
+  const visiblePlanets = useMemo(() => PLANET_LIST.filter((planet) => planet.systemId === activeSystemId &&
+    game.exploration.unlockedSystemIds.includes(planet.systemId)), [activeSystemId, game.exploration.unlockedSystemIds]);
+  const deviceCounts = useMemo(() => {
+    const counts = new Map<PlanetId, number>();
+    if (collapsed) return counts;
+    for (const entity of game.entities) {
+      counts.set(entity.planetId, (counts.get(entity.planetId) ?? 0) + entity.machineCount + entity.minerCount);
+    }
+    return counts;
+  }, [collapsed, game.entities]);
   return (
     <nav className={`planet-navigator nodrag nopan${collapsed ? " planet-navigator--collapsed" : ""}`} aria-label="行星切换">
       {!collapsed ? visiblePlanets.map((planet) => {
         const active = game.activePlanetId === planet.id;
         const unlocked = isPlanetColonized(game, planet.id);
         const metrics = getPlanetMetrics(game, planet.id);
-        const deviceCount = game.entities.reduce((sum, entity) =>
-          entity.planetId === planet.id ? sum + entity.machineCount + entity.minerCount : sum, 0);
+        const deviceCount = deviceCounts.get(planet.id) ?? 0;
         return (
           <button type="button" className={`${active ? "active" : ""}${unlocked ? "" : " locked"}`} aria-pressed={active} key={planet.id} disabled={!unlocked} onClick={() => onPlanetChange(planet.id)} title={unlocked ? `切换到${getPlanetDisplayName(game, planet.id)}` : "完成星际物流系统科技后开放"}>
             <i style={{ color: unlocked ? planet.color : undefined }}>{unlocked ? <Orbit size={15} /> : <LockKeyhole size={15} />}</i>
@@ -560,19 +597,39 @@ function MultiSelectionInspector({ game, entities, onRecipeChange, onEjectorOrbi
 }
 
 function InspectorEmpty({ game, onOpenTutorial }: { game: GameState; onOpenTutorial?: (sectionId?: string) => void }) {
-  const planetEntities = game.entities.filter((entity) => entity.planetId === game.activePlanetId);
-  const machines = planetEntities.reduce((sum, entity) => sum + entity.machineCount + entity.minerCount, 0);
-  const topConsumer = planetEntities
-    .map((entity) => {
+  const networkStats = useMemo(() => {
+    let entityCount = 0;
+    let machineCount = 0;
+    let beltCount = 0;
+    let topConsumerName = "";
+    let topConsumerDemand = 0;
+
+    for (const entity of game.entities) {
+      if (entity.planetId !== game.activePlanetId) continue;
+      entityCount += 1;
+      machineCount += entity.machineCount + entity.minerCount;
+
       if (entity.kind === "vein" && entity.minerCount > 0) {
-        const buildingId = getExtractorBuildingId(entity.resourceId!);
-        return { name: getBuilding(buildingId).name, demand: (getBuilding(buildingId).powerDemandKw ?? 0) * entity.minerCount };
+        const building = getBuilding(getExtractorBuildingId(entity.resourceId!));
+        const demand = (building.powerDemandKw ?? 0) * entity.minerCount;
+        if (demand > topConsumerDemand) {
+          topConsumerName = building.name;
+          topConsumerDemand = demand;
+        }
+      } else if (entity.buildingId) {
+        const building = getBuilding(entity.buildingId);
+        const demand = (building.powerDemandKw ?? 0) * entity.machineCount;
+        if (demand > topConsumerDemand) {
+          topConsumerName = building.name;
+          topConsumerDemand = demand;
+        }
       }
-      return entity.buildingId
-        ? { name: getBuilding(entity.buildingId).name, demand: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount }
-        : { name: "", demand: 0 };
-    })
-    .sort((a, b) => b.demand - a.demand)[0];
+    }
+    for (const belt of game.belts) {
+      if (belt.planetId === game.activePlanetId) beltCount += 1;
+    }
+    return { beltCount, entityCount, machineCount, topConsumerDemand, topConsumerName };
+  }, [game.activePlanetId, game.belts, game.entities]);
   const reserve = game.metrics.fuelReserveSeconds;
   const reserveLabel = reserve >= 60 ? `${Math.floor(reserve / 60)}m ${Math.floor(reserve % 60)}s` : reserve > 0 ? `${Math.floor(reserve)}s` : "-";
   return (
@@ -580,16 +637,16 @@ function InspectorEmpty({ game, onOpenTutorial }: { game: GameState; onOpenTutor
       <Layers3 size={24} />
       <strong>行星生产网络</strong>
       <dl>
-        <div><dt>生产节点</dt><dd>{planetEntities.length}</dd></div>
-        <div><dt>已部署设备</dt><dd>{machines}</dd></div>
-        <div><dt>物流连接</dt><dd>{game.belts.filter((belt) => belt.planetId === game.activePlanetId).length}</dd></div>
+        <div><dt>生产节点</dt><dd>{networkStats.entityCount}</dd></div>
+        <div><dt>已部署设备</dt><dd>{networkStats.machineCount}</dd></div>
+        <div><dt>物流连接</dt><dd>{networkStats.beltCount}</dd></div>
         <div><dt>可再生能源</dt><dd><PowerValue valueKw={game.metrics.windGenerationKw + game.metrics.solarGenerationKw + game.metrics.geothermalGenerationKw} /></dd></div>
         <div><dt>射线电力</dt><dd><PowerValue valueKw={game.metrics.rayGenerationKw} /></dd></div>
         <div><dt>戴森球功率</dt><dd><PowerValue valueKw={game.dysonSphere.generationKw} /></dd></div>
         <div><dt>燃料发电</dt><dd><PowerValue valueKw={game.metrics.thermalGenerationKw + game.metrics.fusionGenerationKw + game.metrics.artificialStarGenerationKw} /></dd></div>
         <div><dt>燃料续航</dt><dd>{reserveLabel}</dd></div>
         <div><dt>电网储能</dt><dd>{game.metrics.storedEnergyMj.toFixed(1)} / {game.metrics.storageCapacityMj.toFixed(0)} MJ</dd></div>
-        <div><dt>最大耗电设备</dt><dd>{topConsumer?.demand ? <>{topConsumer.name} <PowerValue valueKw={topConsumer.demand} /></> : "-"}</dd></div>
+        <div><dt>最大耗电设备</dt><dd>{networkStats.topConsumerDemand ? <>{networkStats.topConsumerName} <PowerValue valueKw={networkStats.topConsumerDemand} /></> : "-"}</dd></div>
         <div><dt>运行时间</dt><dd>{Math.floor(game.elapsedSeconds / 60)} min</dd></div>
       </dl>
       {onOpenTutorial ? <button className="inspector-tutorial-link" type="button" onClick={() => onOpenTutorial("troubleshooting")}><BookOpen size={14} />查看常见故障排查教程</button> : null}

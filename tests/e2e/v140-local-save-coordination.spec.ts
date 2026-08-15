@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function preparePage(page: Page, disableCoordinationApis = false) {
   await page.addInitScript(({ releaseNoteId, disable }) => {
@@ -752,3 +752,4 @@ test("missing-primary conflict can intentionally keep the clearly labelled empty
   expect(await readRecord(page, seeded.candidateKey)).toBeNull();
   expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(0);
 });
+

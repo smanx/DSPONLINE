@@ -4,7 +4,9 @@ import {
   applySimulationCommandPatch,
   createSimulationCommandPatch,
   deserializeSimulationStateTransfer,
+  serializeSimulationStateCheckpoint,
   serializeSimulationStateForTransfer,
+  validateSimulationStateCheckpoint,
 } from "./simulationRuntimeProtocol";
 
 describe("authoritative simulation runtime protocol", () => {
@@ -14,6 +16,18 @@ describe("authoritative simulation runtime protocol", () => {
     const transfer = serializeSimulationStateForTransfer(state);
     expect(transfer.byteLength).toBeGreaterThan(0);
     expect(deserializeSimulationStateTransfer(transfer)).toEqual(state);
+  });
+
+  it("creates a JSON-canonical checkpoint mirror and validates its transfer envelope", () => {
+    const state = createInitialState(14_044) as ReturnType<typeof createInitialState> & { optionalDebug?: string };
+    state.optionalDebug = undefined;
+    const { checkpoint, checkpointState } = serializeSimulationStateCheckpoint(state);
+    expect(validateSimulationStateCheckpoint(checkpoint, checkpointState)).toEqual(JSON.parse(JSON.stringify(state)));
+    expect("optionalDebug" in checkpointState).toBe(false);
+    expect(() => validateSimulationStateCheckpoint({ ...checkpoint, protocolVersion: 99 as 1 }, checkpointState)).toThrow(/协议/);
+    expect(() => validateSimulationStateCheckpoint({ ...checkpoint, byteLength: checkpoint.byteLength + 1 }, checkpointState)).toThrow(/长度/);
+    expect(() => validateSimulationStateCheckpoint(checkpoint, undefined)).toThrow(/结构/);
+    expect(() => validateSimulationStateCheckpoint(checkpoint, { entities: [], belts: null })).toThrow(/结构/);
   });
 
   it("round-trips player commands without carrying unchanged runtime fields", () => {

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function seedV104Factory(page: Page, options: { endgame?: boolean; mobileUi?: "legacy" | "next" } = {}) {
   await page.addInitScript(({ releaseNoteId, endgame, mobileUi }) => {
@@ -165,3 +165,4 @@ test("construction center accepts 100,000,000 targets, presets and mobile 200 pe
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/v104-construction-center-font-200-390x844.png", fullPage: true });
 });
+

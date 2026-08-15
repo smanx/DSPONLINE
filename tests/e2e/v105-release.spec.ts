@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function seedV105Factory(page: Page, mobileUi: "legacy" | "next" = "legacy") {
   await page.addInitScript(({ releaseNoteId, selectedMobileUi }) => {
@@ -134,3 +134,4 @@ test("dragged building coordinates survive an immediate page refresh without dri
   expect(restored!.y).toBeCloseTo(moved!.y, 0);
   await page.screenshot({ path: "artifacts/qa/v105-position-refresh-desktop-1440x900.png", fullPage: true });
 });
+

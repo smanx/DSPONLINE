@@ -41,27 +41,65 @@ export interface SimulationStateTransfer {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-export function serializeSimulationStateForTransfer(state: GameState): SimulationStateTransfer {
-  const bytes = textEncoder.encode(JSON.stringify(state));
-  return {
+function encodeSimulationState(state: GameState): { raw: string; transfer: SimulationStateTransfer } {
+  const raw = JSON.stringify(state);
+  const bytes = textEncoder.encode(raw);
+  return { raw, transfer: {
     protocolVersion: SIMULATION_RUNTIME_PROTOCOL_VERSION,
     byteLength: bytes.byteLength,
     buffer: bytes.buffer,
-  };
+  } };
 }
 
-export function deserializeSimulationStateTransfer(transfer: SimulationStateTransfer): GameState {
-  if (transfer.protocolVersion !== SIMULATION_RUNTIME_PROTOCOL_VERSION) {
-    throw new Error(`不支持的模拟运行时传输协议 ${transfer.protocolVersion}`);
-  }
-  if (transfer.byteLength !== transfer.buffer.byteLength) {
-    throw new Error("模拟运行时传输长度校验失败");
-  }
-  const parsed = JSON.parse(textDecoder.decode(new Uint8Array(transfer.buffer))) as Partial<GameState>;
+function validateSimulationStateShape(value: unknown): GameState {
+  const parsed = value as Partial<GameState> | null;
   if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.entities) || !Array.isArray(parsed.belts)) {
     throw new Error("模拟运行时状态结构无效");
   }
   return parsed as GameState;
+}
+
+function validateSimulationStateTransferEnvelope(transfer: SimulationStateTransfer): void {
+  if (transfer.protocolVersion !== SIMULATION_RUNTIME_PROTOCOL_VERSION) {
+    throw new Error(`不支持的模拟运行时传输协议 ${transfer.protocolVersion}`);
+  }
+  if (!(transfer.buffer instanceof ArrayBuffer) || transfer.byteLength !== transfer.buffer.byteLength) {
+    throw new Error("模拟运行时传输长度校验失败");
+  }
+}
+
+export function serializeSimulationStateForTransfer(state: GameState): SimulationStateTransfer {
+  return encodeSimulationState(state).transfer;
+}
+
+/**
+ * Checkpoint responses need both transferable persistence bytes and a main
+ * thread mirror. Both values are created from the same JSON text so optional
+ * `undefined` leaves follow the persisted-state contract exactly.
+ */
+export function serializeSimulationStateCheckpoint(state: GameState): {
+  checkpoint: SimulationStateTransfer;
+  checkpointState: GameState;
+} {
+  const encoded = encodeSimulationState(state);
+  return {
+    checkpoint: encoded.transfer,
+    checkpointState: validateSimulationStateShape(JSON.parse(encoded.raw)),
+  };
+}
+
+/** Validate a Worker-created checkpoint without decoding its large buffer on UI. */
+export function validateSimulationStateCheckpoint(
+  transfer: SimulationStateTransfer,
+  checkpointState: unknown,
+): GameState {
+  validateSimulationStateTransferEnvelope(transfer);
+  return validateSimulationStateShape(checkpointState);
+}
+
+export function deserializeSimulationStateTransfer(transfer: SimulationStateTransfer): GameState {
+  validateSimulationStateTransferEnvelope(transfer);
+  return validateSimulationStateShape(JSON.parse(textDecoder.decode(new Uint8Array(transfer.buffer))));
 }
 
 function isContainer(value: unknown): value is Record<string, unknown> | unknown[] {

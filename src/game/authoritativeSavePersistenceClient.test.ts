@@ -23,6 +23,7 @@ const seed = {
   activePlanetId: "home",
   structurePoints: 4,
   stateChecksum: "1234abcd",
+  modeExplicit: true as const,
   reason: null,
   settings: null,
 };

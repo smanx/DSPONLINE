@@ -1,16 +1,17 @@
 /// <reference lib="webworker" />
 
 import { applyContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from "./contentPacks";
-import { advancePersistentSimulationRuntime, advancePersistentSimulationRuntimeMulticore, createPersistentSimulationRuntime, createSimulationLookupContext, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
+import { advancePersistentSimulationRuntime, advancePersistentSimulationRuntimeMulticore, createPersistentSimulationRuntime, createSimulationPlanetPhaseLookup, ensureSimulationDynamicRouteLookup, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
 import { BrowserMulticoreExecutor, planMulticoreSimulation, type MulticoreSimulationOptions } from "./multicoreSimulation";
 import type { GameState } from "./types";
 import { captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createFullCurrentPlanetSimulationProjection, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
 import { runTimeWarpApproximateSettlement, type TimeWarpApproximationReport } from "./offlineApproximation";
+import { createFactoryAlertProjection } from "./alerts";
 import {
   applySimulationCommandPatch,
   deserializeSimulationStateTransfer,
-  serializeSimulationStateForTransfer,
+  serializeSimulationStateCheckpoint,
   type SimulationCommandPatch,
   type SimulationStateTransfer,
 } from "./simulationRuntimeProtocol";
@@ -41,11 +42,23 @@ export interface SimulationWorkerRequest {
   /** Use the guarded short-calibration macro path for pure-idle time warp. */
   approximate?: boolean;
   projectionScope?: "default" | "full-top-level";
+  /** Device-only diagnostics switch. Omitted/false skips the full-factory alert scan. */
+  includeFactoryAlerts?: boolean;
+  /** Echoed so the UI cannot accept an alert snapshot from before a toggle. */
+  factoryAlertsGeneration?: number;
   /** Validated durable journal; accepted only with a transferred checkpoint. */
   durableReplay?: SimulationRuntimeDurableReplayPlan;
   /** MessagePort lets a long replay observe cancellation between RLE steps. */
   durableReplayCancelPort?: MessagePort;
+  /** Authority replacement requests may ask for the exact post-replay state
+   * mirror using the same bounded checkpoint chunk protocol as normal saves. */
+  includeCheckpointStateMirror?: boolean;
 }
+
+export type SimulationCheckpointStateChunk =
+  | { kind: "base"; state: Omit<GameState, "entities" | "belts">; entityCount: number; beltCount: number }
+  | { kind: "entities"; offset: number; values: GameState["entities"] }
+  | { kind: "belts"; offset: number; values: GameState["belts"] };
 
 export interface SimulationWorkerResponse {
   id: number;
@@ -65,6 +78,7 @@ export interface SimulationWorkerResponse {
   registryError?: string;
   /** Optional P4 projection; `state` remains the compatibility oracle. */
   projection?: SimulationProjection;
+  factoryAlertsGeneration?: number;
   protocol?: "full" | "delta" | "projection";
   stateRevision?: number;
   delta?: SimulationStateDelta;
@@ -72,6 +86,10 @@ export interface SimulationWorkerResponse {
   multicore?: { enabled: boolean; workerCount: number; fallback?: boolean; reason?: string };
   timeWarpApproximation?: TimeWarpApproximationReport;
   checkpoint?: SimulationStateTransfer;
+  /** JSON-canonical mirror created from the exact checkpoint text in Worker. */
+  checkpointState?: GameState;
+  /** Large checkpoint mirrors are streamed in ordered small clones before the final buffer response. */
+  checkpointStateChunk?: SimulationCheckpointStateChunk;
   commandApplied?: boolean;
   durableReplayProgress?: SimulationRuntimeDurableReplayProgress;
   durableReplayResult?: SimulationRuntimeDurableReplayResult;
@@ -88,6 +106,47 @@ let multicoreExecutorWorkerCount = 0;
 let activeRegistrySnapshot: ContentPackRuntimeSnapshot | undefined;
 let simulationMessageQueue: Promise<void> = Promise.resolve();
 let runtimeInvalidated = false;
+
+const CHECKPOINT_CHUNK_THRESHOLD_BYTES = 1024 * 1024;
+const CHECKPOINT_ENTITY_CHUNK_SIZE = 1024;
+const CHECKPOINT_BELT_CHUNK_SIZE = 2048;
+
+function postCheckpointStateChunks(id: number, state: GameState): void {
+  const { entities, belts, ...base } = state;
+  self.postMessage({
+    id,
+    changed: false,
+    durationMs: 0,
+    checkpointStateChunk: { kind: "base", state: base, entityCount: entities.length, beltCount: belts.length },
+  } satisfies SimulationWorkerResponse);
+  for (let offset = 0; offset < entities.length; offset += CHECKPOINT_ENTITY_CHUNK_SIZE) {
+    self.postMessage({
+      id,
+      changed: false,
+      durationMs: 0,
+      checkpointStateChunk: { kind: "entities", offset, values: entities.slice(offset, offset + CHECKPOINT_ENTITY_CHUNK_SIZE) },
+    } satisfies SimulationWorkerResponse);
+  }
+  for (let offset = 0; offset < belts.length; offset += CHECKPOINT_BELT_CHUNK_SIZE) {
+    self.postMessage({
+      id,
+      changed: false,
+      durationMs: 0,
+      checkpointStateChunk: { kind: "belts", offset, values: belts.slice(offset, offset + CHECKPOINT_BELT_CHUNK_SIZE) },
+    } satisfies SimulationWorkerResponse);
+  }
+}
+
+function attachFactoryAlertProjection(projection: SimulationProjection, includeFactoryAlerts: boolean): SimulationProjection {
+  if (!runtime || !includeFactoryAlerts) return projection;
+  if (!runtime.state.paused) {
+    runtime.lookup = runtime.lookup
+      ? ensureSimulationDynamicRouteLookup(runtime.state, runtime.lookup)
+      : createSimulationPlanetPhaseLookup(runtime.state);
+  }
+  projection.alerts = createFactoryAlertProjection(runtime.state, runtime.lookup);
+  return projection;
+}
 
 function activateRuntimeRegistry(registry: ContentPackRuntimeSnapshot, profiler?: SimulationProfiler): void {
   if (activeRegistryFingerprint === registry.fingerprint) return;
@@ -201,11 +260,14 @@ async function processDurableReplayRequest(
       ...response,
       ...(stateTransfer ? { sourceCheckpointTransfer: stateTransfer } : {}),
     };
+    const transfers: Transferable[] = [];
     if (stateTransfer?.buffer instanceof ArrayBuffer && stateTransfer.buffer.byteLength === stateTransfer.byteLength) {
-      self.postMessage(envelope, [stateTransfer.buffer]);
-    } else {
-      self.postMessage(envelope);
+      transfers.push(stateTransfer.buffer);
     }
+    if (response.checkpoint?.buffer instanceof ArrayBuffer && response.checkpoint.buffer.byteLength === response.checkpoint.byteLength) {
+      transfers.push(response.checkpoint.buffer);
+    }
+    self.postMessage(envelope, transfers);
     returned = true;
   };
   try {
@@ -280,13 +342,27 @@ async function processDurableReplayRequest(
       throw new SimulationRuntimeDurableReplayError("revision-mismatch", "durable replay final revision 不匹配");
     }
     runtimeInvalidated = false;
+    let checkpoint: SimulationStateTransfer | undefined;
+    let checkpointState: GameState | undefined;
+    if (event.data.includeCheckpointStateMirror) {
+      const serialized = serializeSimulationStateCheckpoint(runtime.state);
+      checkpoint = serialized.checkpoint;
+      checkpointState = serialized.checkpointState;
+      if (checkpoint.byteLength >= CHECKPOINT_CHUNK_THRESHOLD_BYTES) {
+        postCheckpointStateChunks(id, checkpointState);
+        checkpointState = undefined;
+      }
+    }
     returnSourceCheckpoint({
       changed: true,
       protocol: "projection",
       stateRevision: runtimeRevision,
       registryFingerprint: activeRegistryFingerprint ?? undefined,
-      projection: createFullCurrentPlanetSimulationProjection(runtime.state),
+      projection: attachFactoryAlertProjection(createFullCurrentPlanetSimulationProjection(runtime.state), event.data.includeFactoryAlerts === true),
+      factoryAlertsGeneration: event.data.factoryAlertsGeneration,
       durableReplayResult: replayResult,
+      ...(checkpoint ? { checkpoint } : {}),
+      ...(checkpointState ? { checkpointState } : {}),
     });
   } catch (error) {
     const replayError = error instanceof SimulationRuntimeDurableReplayError
@@ -385,7 +461,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   let commandApplied = false;
   if (event.data.command) {
     if (event.data.command.baseRevision !== runtimeRevision) {
-      const checkpoint = serializeSimulationStateForTransfer(runtime.state);
+      const { checkpoint, checkpointState } = serializeSimulationStateCheckpoint(runtime.state);
       self.postMessage({
         id,
         changed: false,
@@ -394,6 +470,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
         stateRevision: runtimeRevision,
         registryFingerprint: activeRegistryFingerprint ?? undefined,
         checkpoint,
+        checkpointState,
       } satisfies SimulationWorkerResponse, [checkpoint.buffer]);
       return;
     }
@@ -403,7 +480,9 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
     commandApplied = true;
   }
   if (event.data.kind === "checkpoint") {
-    const checkpoint = serializeSimulationStateForTransfer(runtime.state);
+    const { checkpoint, checkpointState } = serializeSimulationStateCheckpoint(runtime.state);
+    const chunkedCheckpointState = checkpoint.byteLength >= CHECKPOINT_CHUNK_THRESHOLD_BYTES;
+    if (chunkedCheckpointState) postCheckpointStateChunks(id, checkpointState);
     self.postMessage({
       id,
       changed: commandApplied,
@@ -413,11 +492,12 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       stateRevision: runtimeRevision,
       registryFingerprint: activeRegistryFingerprint ?? undefined,
       checkpoint,
+      ...(!chunkedCheckpointState ? { checkpointState } : {}),
     } satisfies SimulationWorkerResponse, [checkpoint.buffer]);
     return;
   }
   if (event.data.kind === "sync-projection") {
-    const projection = createDeferredTopLevelSimulationProjection(runtime.state);
+    const projection = attachFactoryAlertProjection(createDeferredTopLevelSimulationProjection(runtime.state), event.data.includeFactoryAlerts === true);
     const response: SimulationWorkerResponse = {
       id,
       // This is a forced publication even when no simulation field changed.
@@ -429,6 +509,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       stateRevision: runtimeRevision,
       registryFingerprint: activeRegistryFingerprint ?? undefined,
       projection,
+      factoryAlertsGeneration: event.data.factoryAlertsGeneration,
     };
     if (profile) {
       try {
@@ -470,10 +551,11 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
     reusedState,
     cacheRebuilt: result.cacheRebuilt,
     registryFingerprint: activeRegistryFingerprint ?? undefined,
-    ...(result.changed ? { projection: createSimulationProjection(projectionBaseline, result.state, {
+    factoryAlertsGeneration: event.data.factoryAlertsGeneration,
+    ...((result.changed || commandApplied || (suppliedState && event.data.includeFactoryAlerts === true)) ? { projection: attachFactoryAlertProjection(createSimulationProjection(projectionBaseline, result.state, {
       compact: event.data.protocol === "projection",
       includeDeferredTopLevel,
-    }) } : {}),
+    }), event.data.includeFactoryAlerts === true) } : {}),
     ...(event.data.multicore ? { multicore: {
       enabled: multicoreUsed,
       workerCount: multicoreUsed ? multicoreExecutor?.workerCount ?? multicorePlan.workerCount : multicorePlan.workerCount,

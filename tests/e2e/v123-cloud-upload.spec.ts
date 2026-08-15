@@ -10,7 +10,7 @@ test.use({ serviceWorkers: "block" });
 
 test("cloud upload preparation keeps a large save off the main thread", async ({ page }) => {
   test.setTimeout(Math.max(180_000, OFFLINE_SECONDS * 250));
-  await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43"));
+  await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44"));
   await page.goto("/?menu=1");
   const raw = FIXTURE ? readFileSync(FIXTURE, "utf8") : createSyntheticCloudSave({ targetBytes: 8 * 1024 * 1024 });
   const fixtureSavedAt = (JSON.parse(raw) as { savedAt?: number }).savedAt ?? Date.now();
@@ -136,3 +136,4 @@ test("browser upload sends real gzip bodies for 1 MB, 2 MB and 7 MB saves", asyn
   expect(requests.map((request) => request.expectedRevision)).toEqual(revisions);
   expect(result).toEqual([8, 9, 10]);
 });
+

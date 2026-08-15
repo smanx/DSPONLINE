@@ -14,6 +14,8 @@ export const CONNECT_EXPAND_ALL_PREFERENCE_KEY = "dsp-idle-network.ui.connect-ex
 export const FULL_REALTIME_SIMULATION_PREFERENCE_KEY = "dsp-idle-network.full-realtime-simulation.v1";
 export const CANVAS_DETAIL_PREFERENCE_KEY = "dsp-idle-network.ui.canvas-detail.v1";
 export const BLUEPRINT_ALLOW_OVERLAP_PREFERENCE_KEY = "dsp-idle-network.ui.blueprint-allow-overlap.v1";
+export const LARGE_SAVE_AUTOSAVE_THROTTLE_PREFERENCE_KEY = "dsp-idle-network.ui.large-save-autosave-throttle.v1";
+export const FACTORY_ALERTS_PREFERENCE_KEY = "dsp-idle-network.ui.factory-alerts.v1";
 
 export type SettingsCategory = "all" | "visual" | "performance" | "interaction" | "storage" | "statistics" | "other";
 export type ConnectionPointSize = "default" | "large25" | "large50";
@@ -220,6 +222,42 @@ export function writeBlueprintAllowOverlapPreference(enabled: boolean): void {
   const storage = localStorageOrNull();
   if (!storage) return;
   try { storage.setItem(BLUEPRINT_ALLOW_OVERLAP_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
+}
+
+/** Protect the main thread from frequent large-save background writes. Device-only and on by default. */
+export function readLargeSaveAutosaveThrottlePreference(): boolean {
+  const storage = localStorageOrNull();
+  if (!storage) return true;
+  try {
+    const value = storage.getItem(LARGE_SAVE_AUTOSAVE_THROTTLE_PREFERENCE_KEY);
+    return value == null ? true : value !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function writeLargeSaveAutosaveThrottlePreference(enabled: boolean): void {
+  const storage = localStorageOrNull();
+  if (!storage) return;
+  try { storage.setItem(LARGE_SAVE_AUTOSAVE_THROTTLE_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
+}
+
+/** Factory diagnostics can be disabled locally for very large factories. */
+export function readFactoryAlertsPreference(): boolean {
+  const storage = localStorageOrNull();
+  if (!storage) return true;
+  try {
+    const value = storage.getItem(FACTORY_ALERTS_PREFERENCE_KEY);
+    return value == null ? true : value !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function writeFactoryAlertsPreference(enabled: boolean): void {
+  const storage = localStorageOrNull();
+  if (!storage) return;
+  try { storage.setItem(FACTORY_ALERTS_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
 }
 
 /** The speedrun panel is expanded by default and is never part of a save. */

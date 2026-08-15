@@ -5,11 +5,15 @@ import {
   BLUEPRINT_ALLOW_OVERLAP_PREFERENCE_KEY,
   DEFAULT_BELT_LANES_PREFERENCE_KEY,
   FULL_REALTIME_SIMULATION_PREFERENCE_KEY,
+  FACTORY_ALERTS_PREFERENCE_KEY,
+  LARGE_SAVE_AUTOSAVE_THROTTLE_PREFERENCE_KEY,
   readConnectExpandAllPreference,
   readCanvasDetailPreference,
   readBlueprintAllowOverlapPreference,
   readDefaultBeltLanesPreference,
   readFullRealtimeSimulationPreference,
+  readFactoryAlertsPreference,
+  readLargeSaveAutosaveThrottlePreference,
   readSettingsCategoryPreference,
   readConnectionPointSize,
   readShowRunLogPreference,
@@ -27,6 +31,8 @@ import {
   writeBlueprintAllowOverlapPreference,
   writeDefaultBeltLanesPreference,
   writeFullRealtimeSimulationPreference,
+  writeFactoryAlertsPreference,
+  writeLargeSaveAutosaveThrottlePreference,
 } from "./uiPreferences";
 
 function memoryStorage(): Storage {
@@ -56,8 +62,10 @@ describe("device-only UI preferences", () => {
       expect(readDefaultBeltLanesPreference()).toBe(1);
       expect(readConnectExpandAllPreference()).toBe(false);
       expect(readFullRealtimeSimulationPreference()).toBe(false);
+      expect(readFactoryAlertsPreference()).toBe(true);
       expect(readCanvasDetailPreference()).toBe("auto");
       expect(readBlueprintAllowOverlapPreference()).toBe(false);
+      expect(readLargeSaveAutosaveThrottlePreference()).toBe(true);
       writeThemePreference("light");
       writeShowRunLogPreference(false);
       writeShowItemHoverPreference(false);
@@ -67,8 +75,10 @@ describe("device-only UI preferences", () => {
       writeDefaultBeltLanesPreference(4_096);
       writeConnectExpandAllPreference(true);
       writeFullRealtimeSimulationPreference(true);
+      writeFactoryAlertsPreference(false);
       writeCanvasDetailPreference("minimal");
       writeBlueprintAllowOverlapPreference(true);
+      writeLargeSaveAutosaveThrottlePreference(false);
       expect(readThemePreference()).toBe("light");
       expect(readShowRunLogPreference()).toBe(false);
       expect(readShowItemHoverPreference()).toBe(false);
@@ -78,11 +88,14 @@ describe("device-only UI preferences", () => {
       expect(readDefaultBeltLanesPreference()).toBe(4_096);
       expect(readConnectExpandAllPreference()).toBe(true);
       expect(readFullRealtimeSimulationPreference()).toBe(true);
+      expect(readFactoryAlertsPreference()).toBe(false);
       expect(storage.getItem(DEFAULT_BELT_LANES_PREFERENCE_KEY)).toBe("4096");
       expect(storage.getItem(CONNECT_EXPAND_ALL_PREFERENCE_KEY)).toBe("true");
       expect(storage.getItem(FULL_REALTIME_SIMULATION_PREFERENCE_KEY)).toBe("true");
+      expect(storage.getItem(FACTORY_ALERTS_PREFERENCE_KEY)).toBe("false");
       expect(readCanvasDetailPreference()).toBe("minimal");
       expect(readBlueprintAllowOverlapPreference()).toBe(true);
+      expect(readLargeSaveAutosaveThrottlePreference()).toBe(false);
       expect(storage.getItem(CANVAS_DETAIL_PREFERENCE_KEY)).toBe("minimal");
       expect(storage.getItem(BLUEPRINT_ALLOW_OVERLAP_PREFERENCE_KEY)).toBe("true");
     } finally {
@@ -101,8 +114,10 @@ describe("device-only UI preferences", () => {
     storage.setItem(DEFAULT_BELT_LANES_PREFERENCE_KEY, "4097");
     storage.setItem(CONNECT_EXPAND_ALL_PREFERENCE_KEY, "damaged");
     storage.setItem(FULL_REALTIME_SIMULATION_PREFERENCE_KEY, "damaged");
+    storage.setItem(FACTORY_ALERTS_PREFERENCE_KEY, "damaged");
     storage.setItem(CANVAS_DETAIL_PREFERENCE_KEY, "damaged");
     storage.setItem(BLUEPRINT_ALLOW_OVERLAP_PREFERENCE_KEY, "damaged");
+    storage.setItem(LARGE_SAVE_AUTOSAVE_THROTTLE_PREFERENCE_KEY, "damaged");
     const original = globalThis.window;
     Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage, matchMedia: () => ({ matches: false }) } });
     try {
@@ -115,8 +130,11 @@ describe("device-only UI preferences", () => {
       expect(readDefaultBeltLanesPreference()).toBe(1);
       expect(readConnectExpandAllPreference()).toBe(false);
       expect(readFullRealtimeSimulationPreference()).toBe(false);
+      expect(readFactoryAlertsPreference()).toBe(true);
       expect(readCanvasDetailPreference()).toBe("auto");
       expect(readBlueprintAllowOverlapPreference()).toBe(false);
+      expect(readLargeSaveAutosaveThrottlePreference()).toBe(true);
+      expect(storage.getItem(LARGE_SAVE_AUTOSAVE_THROTTLE_PREFERENCE_KEY)).toBe("damaged");
     } finally {
       Object.defineProperty(globalThis, "window", { configurable: true, value: original });
     }

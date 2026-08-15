@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 async function prepareFactory(page: Page, persistence: "granted" | "denied" | "unsupported", usage = 24, quota = 100, mobile = false) {
   await page.addInitScript(({ releaseNoteId, persistenceState, storageUsage, storageQuota }) => {
@@ -182,3 +182,4 @@ test("normal and speedrun snapshots restore the same checksum, mode, slot, and s
   expect(result?.normal.envelopeChecksum).toBe(result?.normal.inspectedChecksum);
   expect(result?.speedrun.envelopeChecksum).toBe(result?.speedrun.inspectedChecksum);
 });
+

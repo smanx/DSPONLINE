@@ -4,11 +4,22 @@ export interface CanvasBeltHitIndex {
   batch: CanvasLineBatch;
   cellSize: number;
   buckets: ReadonlyMap<string, readonly number[]>;
+  /** Packed route polylines reused by hover/double-click hit testing. */
+  routeOffsets: Uint32Array;
+  routeCoordinates: Float32Array;
+  routeBounds: Float32Array;
 }
 
 export interface CanvasBeltHit {
   beltId: string;
   distance: number;
+}
+
+export interface CanvasBeltBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
 }
 
 interface Point { x: number; y: number }
@@ -72,8 +83,28 @@ function cellsForSegment(start: Point, end: Point, cellSize: number, output: Set
 export function buildCanvasBeltHitIndex(batch: CanvasLineBatch, requestedCellSize = 256): CanvasBeltHitIndex {
   const cellSize = Math.max(64, Math.min(1_024, Math.floor(requestedCellSize)));
   const buckets = new Map<string, number[]>();
+  const routeOffsets = new Uint32Array(batch.beltIds.length + 1);
+  const routeCoordinates: number[] = [];
+  const routeBounds = new Float32Array(batch.beltIds.length * 4);
   for (let index = 0; index < batch.beltIds.length; index += 1) {
     const points = routePoints(batch, index);
+    routeOffsets[index] = routeCoordinates.length / 2;
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const point of points) {
+      routeCoordinates.push(point.x, point.y);
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+    const boundsOffset = index * 4;
+    routeBounds[boundsOffset] = minX;
+    routeBounds[boundsOffset + 1] = minY;
+    routeBounds[boundsOffset + 2] = maxX;
+    routeBounds[boundsOffset + 3] = maxY;
     const cells = new Set<string>();
     for (let pointIndex = 1; pointIndex < points.length; pointIndex += 1) {
       cellsForSegment(points[pointIndex - 1], points[pointIndex], cellSize, cells);
@@ -84,7 +115,37 @@ export function buildCanvasBeltHitIndex(batch: CanvasLineBatch, requestedCellSiz
       else buckets.set(key, [index]);
     }
   }
-  return { batch, cellSize, buckets };
+  routeOffsets[batch.beltIds.length] = routeCoordinates.length / 2;
+  return { batch, cellSize, buckets, routeOffsets, routeCoordinates: Float32Array.from(routeCoordinates), routeBounds };
+}
+
+/**
+ * Returns the stable batch indices whose route buckets touch a world-space
+ * rectangle. Rendering can use the same topology-scoped index as hit testing
+ * instead of walking every line whenever a dense canvas is zoomed.
+ */
+export function collectCanvasBeltIndicesInBounds(
+  index: CanvasBeltHitIndex,
+  bounds: CanvasBeltBounds,
+  padding = 0,
+): number[] {
+  const normalizedPadding = Number.isFinite(padding) ? Math.max(0, padding) : 0;
+  const left = Math.min(bounds.left, bounds.right) - normalizedPadding;
+  const right = Math.max(bounds.left, bounds.right) + normalizedPadding;
+  const top = Math.min(bounds.top, bounds.bottom) - normalizedPadding;
+  const bottom = Math.max(bounds.top, bounds.bottom) + normalizedPadding;
+  if (![left, right, top, bottom].every(Number.isFinite)) return [];
+  const candidates = new Set<number>();
+  const firstX = Math.floor(left / index.cellSize);
+  const lastX = Math.floor(right / index.cellSize);
+  const firstY = Math.floor(top / index.cellSize);
+  const lastY = Math.floor(bottom / index.cellSize);
+  for (let x = firstX; x <= lastX; x += 1) {
+    for (let y = firstY; y <= lastY; y += 1) {
+      for (const candidate of index.buckets.get(cellKey(x, y)) ?? []) candidates.add(candidate);
+    }
+  }
+  return [...candidates].sort((leftIndex, rightIndex) => leftIndex - rightIndex);
 }
 
 export function findNearestCanvasBelt(
@@ -104,10 +165,23 @@ export function findNearestCanvasBelt(
   }
   let nearest: CanvasBeltHit | null = null;
   for (const candidate of candidates) {
-    const points = routePoints(index.batch, candidate);
+    const boundsOffset = candidate * 4;
+    const minX = index.routeBounds[boundsOffset];
+    const minY = index.routeBounds[boundsOffset + 1];
+    const maxX = index.routeBounds[boundsOffset + 2];
+    const maxY = index.routeBounds[boundsOffset + 3];
+    const dx = point.x < minX ? minX - point.x : point.x > maxX ? point.x - maxX : 0;
+    const dy = point.y < minY ? minY - point.y : point.y > maxY ? point.y - maxY : 0;
+    if (Math.hypot(dx, dy) > limit) continue;
+    const firstPoint = index.routeOffsets[candidate];
+    const endPoint = index.routeOffsets[candidate + 1];
     let distance = Number.POSITIVE_INFINITY;
-    for (let pointIndex = 1; pointIndex < points.length; pointIndex += 1) {
-      distance = Math.min(distance, distanceToSegment(point, points[pointIndex - 1], points[pointIndex]));
+    for (let pointIndex = firstPoint + 1; pointIndex < endPoint; pointIndex += 1) {
+      const startOffset = (pointIndex - 1) * 2;
+      const endOffset = pointIndex * 2;
+      distance = Math.min(distance, distanceToSegment(point,
+        { x: index.routeCoordinates[startOffset], y: index.routeCoordinates[startOffset + 1] },
+        { x: index.routeCoordinates[endOffset], y: index.routeCoordinates[endOffset + 1] }));
     }
     if (distance <= limit && (!nearest || distance < nearest.distance ||
       (distance === nearest.distance && index.batch.beltIds[candidate].localeCompare(nearest.beltId) < 0))) {

@@ -7,7 +7,7 @@ const BACKUP_KEY = `${SAVE_KEY}.backup`;
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
   });
   const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
   await page.addLocatorHandler(offlineReport, async () => {
@@ -245,3 +245,4 @@ test("buffer controls fit desktop and both mobile settings from 80 to 200 percen
     }
   }
 });
+

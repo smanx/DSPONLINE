@@ -27,7 +27,7 @@ export interface LocalizedReleaseNotesUiCopy {
   acknowledge: string;
 }
 
-const currentCopy = {
+const release1043Copy = {
   date: { "zh-CN": "2026年8月14日", en: "August 14, 2026" },
   title: { "zh-CN": "超大存档加载与保存紧急修复", en: "Large-save Loading and Saving Hotfix" },
   summary: {
@@ -53,6 +53,35 @@ const currentCopy = {
   compatibilityDescription: {
     "zh-CN": "不升级 GameState、存档封装、云服务或 IndexedDB 结构；模式、库存、checksum、原始数据、异常线路退款、物质投递枢纽与黑洞端口语义保持不变。",
     en: "This hotfix does not upgrade GameState, the save envelope, cloud services, or IndexedDB layout. Mode, inventory, checksum, raw data, invalid-belt refunds, material-delivery hubs, and black-hole port semantics remain unchanged.",
+  },
+} as const;
+
+const currentCopy = {
+  date: { "zh-CN": "2026年8月15日", en: "August 15, 2026" },
+  title: { "zh-CN": "超大工厂运行态与保存性能优化", en: "Large-factory Runtime and Save Performance" },
+  summary: {
+    "zh-CN": "1.0.44 让超大工厂的主动运行不阻塞主线程：模拟、离线、保存与纯挂机使用授权的后台与模拟 Worker，主线程不再解析或序列化大存档，后台纯挂机宽限到期也走同一条 Worker 权威结算与接管。画布密集视口、连线 LOD 与默认工厂警报在超大终局工厂下显著降低渲染和投影开销。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    en: "Version 1.0.44 keeps large-factory runtime responsive on the main thread: simulation, offline settlement, saving, and pure idle use authoritative background and simulation workers, so the UI thread no longer parses or serializes large saves, and the background grace-expired pure-idle path now follows the same worker-owned terminal settle and hand-off. Dense viewport, connection LOD, and steady factory-alert projections cut rendering and payload overhead on large endgame factories. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 remain unchanged.",
+  },
+  runtimeTitle: { "zh-CN": "大存档全程由 Worker 作为权威", en: "Large saves stay authoritative in Workers" },
+  runtimeDescription: {
+    "zh-CN": "实时模拟、普通离线、纯挂机和保存均在后台 Worker 内解码、结算与序列化，主线程只收到有界镜像与结果，不再整体解析或重写大存档；即使长时间后台纯挂机宽限到期，也按与主动停止相同的 Worker 权威终止并接管模拟。",
+    en: "Realtime simulation, ordinary offline, pure idle, and saving decode, settle, and serialize inside background Workers; the UI thread only receives bounded mirrors and results and never fully parses or rewrites a large save. Even when a long backgrounded pure-idle grace expires, the terminal settle and simulation hand-off follow the same worker-authoritative path as an explicit stop.",
+  },
+  saveTitle: { "zh-CN": "启动恢复与读取按需投影", en: "Startup recovery and on-demand projection" },
+  saveDescription: {
+    "zh-CN": "启动恢复日志在 Worker 中压缩与复核，主线程完全不解析大档；运行中的工厂按需投影权威结果，超大工厂的画布与界面只在视口需要时生成完整卡片。",
+    en: "Startup recovery journals are compressed and verified inside a Worker with no main-thread large-save parsing, and the running factory projects authoritative results on demand so large factories only build full cards when they enter the viewport.",
+  },
+  macroTitle: { "zh-CN": "超大工厂命令面板更流畅", en: "Faster command palette in huge factories" },
+  macroBroadcastDescription: {
+    "zh-CN": "命令面板在超大工厂空搜索时不再构建全部实体命令，输入定位仍保持即时应答。",
+    en: "The command palette no longer builds a command per entity on an empty search in huge factories, keeping input and entity-locate responsive.",
+  },
+  compatibilityTitle: { "zh-CN": "存档与在线协议保持兼容", en: "Save and online protocols remain compatible" },
+  compatibilityDescription: {
+    "zh-CN": "不升级 GameState、存档封装、云服务或 IndexedDB 结构；模式、库存、checksum、后台宽限、纯挂机恢复日志与排行榜语义保持不变。",
+    en: "GameState, the save envelope, cloud services, and IndexedDB layout are unchanged; mode, inventory, checksum, background grace, pure-idle recovery journals, and leaderboard semantics remain intact.",
   },
 } as const;
 
@@ -224,6 +253,10 @@ function currentMessage(locale: AppLocale, key: keyof typeof currentCopy): strin
   return currentCopy[key][locale];
 }
 
+function release1043Message(locale: AppLocale, key: keyof typeof release1043Copy): string {
+  return release1043Copy[key][locale];
+}
+
 function release1042Message(locale: AppLocale, key: keyof typeof release1042Copy): string {
   return release1042Copy[key][locale];
 }
@@ -231,16 +264,32 @@ function release1042Message(locale: AppLocale, key: keyof typeof release1042Copy
 /** Stable-key release copy; current text does not use the legacy DOM translation bridge. */
 export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteRecord {
   return {
-    id: "2026-08-14-v1.0.43",
+    id: "2026-08-15-v1.0.44",
     date: currentMessage(locale, "date"),
-    version: "1.0.43",
+    version: "1.0.44",
     title: currentMessage(locale, "title"),
     summary: currentMessage(locale, "summary"),
     items: [
-      { id: "linear-large-save-migration", title: currentMessage(locale, "migrationTitle"), description: currentMessage(locale, "migrationDescription") },
-      { id: "background-save-inspection", title: currentMessage(locale, "importTitle"), description: currentMessage(locale, "importDescription") },
-      { id: "single-save-commit", title: currentMessage(locale, "saveTitle"), description: currentMessage(locale, "saveDescription") },
+      { id: "worker-owned-large-save-runtime", title: currentMessage(locale, "runtimeTitle"), description: currentMessage(locale, "runtimeDescription") },
+      { id: "startup-recovery-and-projection", title: currentMessage(locale, "saveTitle"), description: currentMessage(locale, "saveDescription") },
+      { id: "command-palette-large-factory", title: currentMessage(locale, "macroTitle"), description: currentMessage(locale, "macroBroadcastDescription") },
       { id: "save-compatibility", title: currentMessage(locale, "compatibilityTitle"), description: currentMessage(locale, "compatibilityDescription") },
+    ],
+  };
+}
+
+export function getReleaseNotes1043(locale: AppLocale): LocalizedReleaseNoteRecord {
+  return {
+    id: "2026-08-14-v1.0.43",
+    date: release1043Message(locale, "date"),
+    version: "1.0.43",
+    title: release1043Message(locale, "title"),
+    summary: release1043Message(locale, "summary"),
+    items: [
+      { id: "linear-large-save-migration", title: release1043Message(locale, "migrationTitle"), description: release1043Message(locale, "migrationDescription") },
+      { id: "background-save-inspection", title: release1043Message(locale, "importTitle"), description: release1043Message(locale, "importDescription") },
+      { id: "single-save-commit", title: release1043Message(locale, "saveTitle"), description: release1043Message(locale, "saveDescription") },
+      { id: "save-compatibility", title: release1043Message(locale, "compatibilityTitle"), description: release1043Message(locale, "compatibilityDescription") },
     ],
   };
 }

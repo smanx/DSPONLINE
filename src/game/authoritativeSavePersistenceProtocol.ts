@@ -14,6 +14,7 @@ export interface AuthoritativeSaveCatalogSeed {
   activePlanetId: string;
   structurePoints: number;
   stateChecksum: string;
+  modeExplicit: true;
   reason: string | null;
   settings: Partial<GameSettings> | null;
 }

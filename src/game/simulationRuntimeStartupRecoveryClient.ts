@@ -8,12 +8,12 @@ import {
   type SimulationRuntimeDurableReplayResult,
 } from "./simulationRuntimeDurableReplay";
 import {
-  deserializeSimulationStateTransfer,
   serializeSimulationStateForTransfer,
+  validateSimulationStateCheckpoint,
   type SimulationStateTransfer,
 } from "./simulationRuntimeProtocol";
 import type { GameState } from "./types";
-import type { SimulationWorkerResponse } from "./simulation.worker";
+import type { SimulationCheckpointStateChunk, SimulationWorkerResponse } from "./simulation.worker";
 
 export interface SimulationRuntimeStartupReplayOptions {
   registry: ContentPackRuntimeSnapshot;
@@ -38,11 +38,59 @@ function asReplayError(response: SimulationWorkerResponse): SimulationRuntimeDur
   );
 }
 
+interface StartupCheckpointAccumulator {
+  base: Omit<GameState, "entities" | "belts"> | null;
+  entityCount: number;
+  beltCount: number;
+  entities: GameState["entities"];
+  belts: GameState["belts"];
+}
+
+function appendStartupCheckpointChunk(
+  current: StartupCheckpointAccumulator | undefined,
+  chunk: SimulationCheckpointStateChunk,
+): StartupCheckpointAccumulator {
+  const accumulator = current ?? { base: null, entityCount: -1, beltCount: -1, entities: [], belts: [] };
+  if (chunk.kind === "base") {
+    if (accumulator.base || accumulator.entities.length > 0 || accumulator.belts.length > 0 ||
+      !Number.isSafeInteger(chunk.entityCount) || chunk.entityCount < 0 ||
+      !Number.isSafeInteger(chunk.beltCount) || chunk.beltCount < 0) {
+      throw new Error("启动恢复 checkpoint base 分块顺序无效");
+    }
+    accumulator.base = chunk.state;
+    accumulator.entityCount = chunk.entityCount;
+    accumulator.beltCount = chunk.beltCount;
+    return accumulator;
+  }
+  if (!accumulator.base) throw new Error("启动恢复 checkpoint 数据分块早于 base");
+  if (chunk.kind === "entities") {
+    if (chunk.offset !== accumulator.entities.length || accumulator.entities.length + chunk.values.length > accumulator.entityCount) {
+      throw new Error("启动恢复 checkpoint entity 分块不连续");
+    }
+    accumulator.entities.push(...chunk.values);
+    return accumulator;
+  }
+  if (chunk.offset !== accumulator.belts.length || accumulator.belts.length + chunk.values.length > accumulator.beltCount) {
+    throw new Error("启动恢复 checkpoint belt 分块不连续");
+  }
+  accumulator.belts.push(...chunk.values);
+  return accumulator;
+}
+
+function finishStartupCheckpointChunks(accumulator: StartupCheckpointAccumulator | undefined): GameState | undefined {
+  if (!accumulator) return undefined;
+  if (!accumulator.base || accumulator.entities.length !== accumulator.entityCount || accumulator.belts.length !== accumulator.beltCount) {
+    throw new Error("启动恢复 checkpoint 分块缺失");
+  }
+  return { ...accumulator.base, entities: accumulator.entities, belts: accumulator.belts };
+}
+
 /**
  * Run T0 durable replay and obtain a post-replay checkpoint without ever
  * returning a full GameState in the replay response. The only full state
  * transfer is the explicit checkpoint barrier needed by offline settlement;
- * its parse happens after the Worker has proved the ordered replay.
+ * its JSON-canonical mirror is parsed inside the simulation Worker after the
+ * ordered replay has been proved, then structured-cloned back with the bytes.
  */
 export function replaySimulationRuntimeStartupInWorker(
   state: GameState,
@@ -78,6 +126,7 @@ export function replaySimulationRuntimeStartupInWorker(
   };
   return new Promise((resolve, reject) => {
     let replayResponse: SimulationWorkerResponse | null = null;
+    let checkpointChunks: StartupCheckpointAccumulator | undefined;
     const fail = (error: unknown) => finish(() => reject(error instanceof Error ? error : new Error("启动恢复 Worker 失败")));
     timeout = globalThis.setTimeout(() => fail(new Error("启动恢复 Worker 超时，原主存档未修改")), timeoutMs);
     abortListener = () => {
@@ -121,12 +170,21 @@ export function replaySimulationRuntimeStartupInWorker(
         }
         return;
       }
+      if (response.checkpointStateChunk) {
+        try {
+          checkpointChunks = appendStartupCheckpointChunk(checkpointChunks, response.checkpointStateChunk);
+        } catch (error) {
+          fail(error);
+        }
+        return;
+      }
       if (!response.checkpoint || response.checkpoint.buffer.byteLength !== response.checkpoint.byteLength) {
         fail(new Error("启动恢复 checkpoint 回执无效"));
         return;
       }
       try {
-        const nextState = deserializeSimulationStateTransfer(response.checkpoint);
+        const checkpointState = response.checkpointState ?? finishStartupCheckpointChunks(checkpointChunks);
+        const nextState = validateSimulationStateCheckpoint(response.checkpoint, checkpointState);
         finish(() => resolve({ state: nextState, replay: replayResponse!.durableReplayResult! }));
       } catch (error) {
         fail(error);

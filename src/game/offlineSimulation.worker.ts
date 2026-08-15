@@ -2,7 +2,7 @@
 
 import { completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
 import { applyContentPackRuntimeSnapshot } from "./contentPacks";
-import { advanceOfflineSimulationChunk, type CloudUploadSummary, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
+import { advanceOfflineSimulationChunk, buildBackgroundFinalEnvelope, type CloudUploadSummary, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
 import {
   FAST_OFFLINE_CALIBRATION_SECONDS,
   FAST_OFFLINE_DESKTOP_DEADLINE_MS,
@@ -15,8 +15,8 @@ import {
   selectOfflineWorkerStrategyAfterFastResult,
   type OfflineWorkerSettlementRequestShape,
 } from "./offlineSettlementStrategy";
-import { applyReturningRewardToState, inspectSave, prepareSaveStateForBackground } from "./storage";
-import { serializeSaveEnvelopeToTransfer } from "./saveTransfer";
+import { applyReturningRewardToState, inspectSave, parseTrustedWorkerEnvelope, prepareSaveStateForBackground } from "./storage";
+import { decodeVerifiedSaveTransfer, serializeSaveEnvelopeToTransfer, type SaveTransferVerification } from "./saveTransfer";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 import { sha256Bytes } from "./payloadDigest";
 import type { GameSettings, GameState } from "./types";
@@ -220,6 +220,108 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         activeId = null;
       };
       void runChunk();
+      return;
+    }
+    if (request.type === "finalize-background") {
+      const finalizeStartedAt = nowMs();
+      const registry = request.registry.registry;
+      applyContentPackRuntimeSnapshot(request.registry);
+      let sourceRaw: string;
+      let sourceState: GameState;
+      try {
+        sourceRaw = decodeVerifiedSaveTransfer(request.sourceEnvelope, request.sourceVerification);
+        sourceState = parseTrustedWorkerEnvelope(sourceRaw, request.sourceVerification, registry, { persistentProjection: false });
+      } catch (error) {
+        throw new Error(error instanceof Error ? error.message : "后台宏 envelope 解码失败，原档与恢复日志保持不变");
+      }
+      if (request.approximate === true && request.normalOfflineSeconds >= 1) {
+        const strategyRequest: OfflineWorkerSettlementRequestShape = {
+          approximate: true,
+          conservativeOnly: false,
+          speedrun: sourceState.speedrun?.enabled === true,
+          seconds: request.normalOfflineSeconds,
+        };
+        let strategy = selectInitialOfflineWorkerStrategy(strategyRequest);
+        let fastSettled = false;
+        if (strategy === "fast") {
+          currentPhase = "macro";
+          const experiment = await runFastOfflineSettlementAsync(sourceState, request.normalOfflineSeconds, {
+            wallSeconds: request.normalOfflineSeconds,
+            deadlineAtMs: nowMs() + Math.max(1_000, request.deadlineMs ?? FAST_OFFLINE_DESKTOP_DEADLINE_MS),
+            shouldCancel: () => activeId !== request.id || cancelled,
+            onPhase: () => { currentPhase = "macro"; },
+            onProgress: (completed, total) => postProgress(completed, total, { algorithmVersion: "fast-30s-v2" }),
+          });
+          if (experiment.status === "approximate" || experiment.status === "bounded-exact") {
+            sourceState = experiment.state;
+            fastSettled = true;
+          } else {
+            strategy = selectOfflineWorkerStrategyAfterFastResult(strategyRequest, experiment);
+          }
+        }
+        if (!fastSettled) {
+          if (strategy === "invalid-source") {
+            throw new Error("后台离线结算源校验失败，原档与恢复日志保持不变");
+          }
+          if (strategy === "conservative-preview") {
+            const conservative = runConservativeOfflineSettlement(
+              sourceState,
+              request.normalOfflineSeconds,
+              request.normalOfflineSeconds,
+              "后台快速结算未通过，使用零校准保守宏观",
+            );
+            if (conservative.status === "conservative") sourceState = conservative.state;
+            else if (conservative.status === "invalid-source") {
+              throw new Error("后台离线保守宏观源失效，原档与恢复日志保持不变");
+            }
+            else {
+              throw new Error(conservative.report?.fallbackReason ?? "后台离线保守宏观候选无效");
+            }
+          } else {
+            const session = createSimulationAdvanceSession(sourceState, request.normalOfflineSeconds);
+            let guard = 0;
+            while (session.remainingSeconds > 0 && !cancelled && (request.deadlineMs === undefined || nowMs() - finalizeStartedAt < request.deadlineMs)) {
+              advanceOfflineSimulationChunk(session, { maximumWindowSeconds: 256 });
+              if (++guard % 16 === 0) postProgress(session.totalSeconds - session.remainingSeconds, session.totalSeconds);
+            }
+            if (session.remainingSeconds > 0) {
+              throw new Error("后台离线精确结算超时，原档与恢复日志保持不变");
+            }
+            sourceState = completeSimulationAdvanceSession(session);
+          }
+        }
+      } else if (request.normalOfflineSeconds >= 1) {
+        const session = createSimulationAdvanceSession(sourceState, request.normalOfflineSeconds);
+        let guard = 0;
+        while (session.remainingSeconds > 0 && !cancelled) {
+          advanceOfflineSimulationChunk(session, { maximumWindowSeconds: 256 });
+          if (++guard % 16 === 0) postProgress(session.totalSeconds - session.remainingSeconds, session.totalSeconds);
+        }
+        if (session.remainingSeconds > 0) {
+          throw new Error("后台离线精确结算中断，原档与恢复日志保持不变");
+        }
+        sourceState = completeSimulationAdvanceSession(session);
+      }
+      if (cancelled) {
+        post({ type: "cancelled", id: request.id });
+        activeId = null;
+        return;
+      }
+      currentPhase = "saving";
+      const { finalEnvelope } = buildBackgroundFinalEnvelope(sourceState, {
+        baseline: request.baseline,
+        highWallSeconds: request.highWallSeconds,
+        normalOfflineSeconds: request.normalOfflineSeconds,
+        registryFingerprint: request.registry.fingerprint,
+        savedAt: request.savedAt,
+      });
+      post({
+        type: "finalized-background",
+        id: request.id,
+        finalEnvelope,
+        durationMs: Math.max(0, nowMs() - finalizeStartedAt),
+      } satisfies OfflineSimulationWorkerResponse, [finalEnvelope.payloadBytes]);
+      activeId = null;
       return;
     }
     let approximation: OfflineApproximationReport | undefined;

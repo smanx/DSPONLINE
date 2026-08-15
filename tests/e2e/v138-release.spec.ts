@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-14-v1.0.43";
+const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript((releaseNoteId) => {
@@ -324,3 +324,4 @@ test("bounded canvas matrix covers paused/running pan, zoom, selections, inspect
   expect(metrics.every((metric) => metric.domNodes > 0)).toBe(true);
   console.info("V138_CANVAS_MATRIX", JSON.stringify(metrics));
 });
+

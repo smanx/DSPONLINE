@@ -17,6 +17,7 @@ const seed = {
   activePlanetId: "home",
   structurePoints: 4,
   stateChecksum: "1234abcd",
+  modeExplicit: true as const,
   reason: null,
   settings: { volume: 0.5 } as never,
 };
@@ -36,7 +37,7 @@ describe("authoritative save proof binding", () => {
       settings: { volume: 0.5 } as never, reason: null, stateChecksum: "1234abcd", structurePoints: 4,
       activePlanetId: "home", completedTechCount: 3, elapsedSeconds: 2, beltCount: 1,
       entityCount: 1, stateVersion: 46, savedAt: 1, slot: "main" as const,
-      kind: "primary" as const, mode: "normal" as const,
+      kind: "primary" as const, mode: "normal" as const, modeExplicit: true as const,
     };
     const reordered = await computeAuthoritativeSaveProofBindingSha256(proof, reorderedSeed);
     const changed = await computeAuthoritativeSaveProofBindingSha256({ ...proof, payloadSha256: "b".repeat(64) }, seed);

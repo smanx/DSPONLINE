@@ -6,6 +6,8 @@ import type {
 } from "./authoritativeSavePersistenceProtocol";
 import type {
   AuthoritativeSaveExpectedStateIdentity,
+  AuthoritativeSaveCheckpointOverlay,
+  AuthoritativeSaveEnvelopeTransfer,
   AuthoritativeSaveSerializationRequest,
   AuthoritativeSaveSerializationResponse,
   AuthoritativeSaveSerializationSummary,
@@ -17,10 +19,27 @@ const AUTHORITATIVE_SERIALIZATION_TIMEOUT_MS = 120_000;
 export interface AuthoritativeSerializedSavePayload {
   bytes: ArrayBuffer;
   sourceStateTransfer: ArrayBuffer;
+  sourceEnvelopeTransfer?: ArrayBuffer;
   proof: AuthoritativeSavePayloadProof;
   catalogSeed: AuthoritativeSaveCatalogSeed;
   summary: AuthoritativeSaveSerializationSummary;
   durationMs: number;
+}
+
+type AuthoritativeSaveSerializationSource =
+  | { kind: "state"; transfer: SimulationStateTransfer }
+  | { kind: "envelope"; transfer: AuthoritativeSaveEnvelopeTransfer };
+
+interface AuthoritativeSaveSerializationOptions {
+  savedAt?: number;
+  kind?: "primary" | "slot" | "snapshot";
+  slot?: "main" | 1 | 2 | 3;
+  reason?: string;
+  signal?: AbortSignal;
+  onProgress?: (progress: AuthoritativeSaveSerializationProgress) => void;
+  timeoutMs?: number;
+  expectedStateIdentity?: AuthoritativeSaveExpectedStateIdentity;
+  checkpointOverlay?: AuthoritativeSaveCheckpointOverlay;
 }
 
 export type AuthoritativeSaveSerializationProgress =
@@ -39,18 +58,9 @@ export class AuthoritativeSaveSerializationClientError extends Error {
   }
 }
 
-export function serializeAuthoritativeSaveStateTransferInWorker(
-  stateTransfer: SimulationStateTransfer,
-  options: {
-    savedAt?: number;
-    kind?: "primary" | "slot" | "snapshot";
-    slot?: "main" | 1 | 2 | 3;
-    reason?: string;
-    signal?: AbortSignal;
-    onProgress?: (progress: AuthoritativeSaveSerializationProgress) => void;
-    timeoutMs?: number;
-    expectedStateIdentity?: AuthoritativeSaveExpectedStateIdentity;
-  } = {},
+function serializeAuthoritativeSaveSourceInWorker(
+  source: AuthoritativeSaveSerializationSource,
+  options: AuthoritativeSaveSerializationOptions = {},
 ): Promise<AuthoritativeSerializedSavePayload> {
   const savedAt = options.savedAt ?? Date.now();
   const kind = options.kind ?? "primary";
@@ -79,6 +89,7 @@ export function serializeAuthoritativeSaveStateTransferInWorker(
     const id = 1;
     let settled = false;
     const timeoutMs = options.timeoutMs ?? AUTHORITATIVE_SERIALIZATION_TIMEOUT_MS;
+    const ownershipLost = () => source.transfer.buffer.byteLength === 0;
     const finish = (operation: () => void) => {
       if (settled) return;
       settled = true;
@@ -86,40 +97,47 @@ export function serializeAuthoritativeSaveStateTransferInWorker(
       options.signal?.removeEventListener("abort", abort);
       worker.onmessage = null;
       worker.onerror = null;
+      worker.onmessageerror = null;
       worker.terminate();
       operation();
     };
     const abort = () => finish(() => reject(new AuthoritativeSaveSerializationClientError(
-      "aborted", "authoritative save serialization 已取消",
+      "aborted", "authoritative save serialization 已取消", ownershipLost(),
     )));
     const timer = globalThis.setTimeout(() => finish(() => {
       options.onProgress?.({ stage: "failed", savedAt, reason: "timeout" });
-      reject(new AuthoritativeSaveSerializationClientError("timeout", `save Worker 超过 ${timeoutMs}ms 上限`));
+      reject(new AuthoritativeSaveSerializationClientError("timeout", `save Worker 超过 ${timeoutMs}ms 上限`, ownershipLost()));
     }), timeoutMs);
     options.signal?.addEventListener("abort", abort, { once: true });
     worker.onerror = (event) => finish(() => {
       options.onProgress?.({ stage: "failed", savedAt, reason: "worker-crash" });
-      reject(new AuthoritativeSaveSerializationClientError("worker-crash", event.message || "authoritative save serialization Worker 崩溃", stateTransfer.buffer.byteLength === 0));
+      reject(new AuthoritativeSaveSerializationClientError("worker-crash", event.message || "authoritative save serialization Worker 崩溃", ownershipLost()));
+    });
+    worker.onmessageerror = () => finish(() => {
+      options.onProgress?.({ stage: "failed", savedAt, reason: "message-error" });
+      reject(new AuthoritativeSaveSerializationClientError("protocol", "save Worker 返回了无法反序列化的响应", ownershipLost()));
     });
     worker.onmessage = (event: MessageEvent<AuthoritativeSaveSerializationResponse>) => {
       if (event.data.id !== id) return;
-      const { bytes, proof, catalogSeed, summary, sourceStateTransfer } = event.data;
-      if (sourceStateTransfer) stateTransfer.buffer = sourceStateTransfer;
+      const { bytes, proof, catalogSeed, summary, sourceStateTransfer, sourceEnvelopeTransfer } = event.data;
+      if (source.kind === "state" && sourceStateTransfer) source.transfer.buffer = sourceStateTransfer;
+      if (source.kind === "envelope" && sourceEnvelopeTransfer) source.transfer.buffer = sourceEnvelopeTransfer;
       if (event.data.error) {
-        finish(() => reject(new AuthoritativeSaveSerializationClientError("worker-operation", event.data.error!, stateTransfer.buffer.byteLength === 0)));
+        finish(() => reject(new AuthoritativeSaveSerializationClientError("worker-operation", event.data.error!, ownershipLost())));
         return;
       }
       if (!(bytes instanceof ArrayBuffer) || !proof || !catalogSeed || !summary ||
         !(sourceStateTransfer instanceof ArrayBuffer) ||
+        (source.kind === "envelope" && !(sourceEnvelopeTransfer instanceof ArrayBuffer)) ||
         proof.integrity !== "valid" || proof.byteLength !== bytes.byteLength ||
         proof.stateChecksum !== catalogSeed.stateChecksum || summary.stateChecksum !== catalogSeed.stateChecksum) {
-        finish(() => reject(new AuthoritativeSaveSerializationClientError("protocol", "save Worker authoritative proof 响应不完整", stateTransfer.buffer.byteLength === 0)));
+        finish(() => reject(new AuthoritativeSaveSerializationClientError("protocol", "save Worker authoritative proof 响应不完整", ownershipLost())));
         return;
       }
       finish(() => {
         const durationMs = Math.max(0, event.data.durationMs ?? 0);
         options.onProgress?.({ stage: "serialized", savedAt, bytes: bytes.byteLength, durationMs });
-        resolve({ bytes, sourceStateTransfer, proof, catalogSeed, summary, durationMs });
+        resolve({ bytes, sourceStateTransfer, ...(sourceEnvelopeTransfer ? { sourceEnvelopeTransfer } : {}), proof, catalogSeed, summary, durationMs });
       });
     };
     const request: AuthoritativeSaveSerializationRequest = {
@@ -129,20 +147,37 @@ export function serializeAuthoritativeSaveStateTransferInWorker(
       kind,
       slot,
       ...(options.reason ? { reason: options.reason } : {}),
-      stateTransfer,
+      ...(source.kind === "state"
+        ? { stateTransfer: source.transfer }
+        : { envelopeTransfer: source.transfer }),
       contentPackRegistry: loadContentPackRegistry(),
       includePayloadSha256: true,
       includeAuthoritativeProof: true,
       ...(options.expectedStateIdentity ? { expectedStateIdentity: options.expectedStateIdentity } : {}),
+      ...(options.checkpointOverlay ? { checkpointOverlay: options.checkpointOverlay } : {}),
     };
     try {
-      worker.postMessage(request, [stateTransfer.buffer]);
+      worker.postMessage(request, [source.transfer.buffer]);
     } catch (error) {
       finish(() => reject(new AuthoritativeSaveSerializationClientError(
-        "worker-operation", error instanceof Error ? error.message : "无法发送save Worker请求", false,
+        "worker-operation", error instanceof Error ? error.message : "无法发送save Worker请求", ownershipLost(),
       )));
     }
   });
+}
+
+export function serializeAuthoritativeSaveStateTransferInWorker(
+  stateTransfer: SimulationStateTransfer,
+  options: AuthoritativeSaveSerializationOptions = {},
+): Promise<AuthoritativeSerializedSavePayload> {
+  return serializeAuthoritativeSaveSourceInWorker({ kind: "state", transfer: stateTransfer }, options);
+}
+
+export function serializeAuthoritativeSaveEnvelopeTransferInWorker(
+  envelopeTransfer: AuthoritativeSaveEnvelopeTransfer,
+  options: AuthoritativeSaveSerializationOptions = {},
+): Promise<AuthoritativeSerializedSavePayload> {
+  return serializeAuthoritativeSaveSourceInWorker({ kind: "envelope", transfer: envelopeTransfer }, options);
 }
 
 /** Backward-compatible name; authoritative path always accepts a transferable state. */

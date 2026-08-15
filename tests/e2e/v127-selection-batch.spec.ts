@@ -5,7 +5,7 @@ test.use({ hasTouch: true });
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
   });
 });
@@ -290,3 +290,4 @@ test("next mobile selection keeps multiple nodes selected after a canvas refresh
   await page.waitForTimeout(400);
   await expect(page.locator(".mobile-mode-status--select")).toContainText("2 节点");
 });
+
