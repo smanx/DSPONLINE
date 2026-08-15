@@ -2093,7 +2093,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     simulationSaveBarrierDepthRef.current += 1;
     simulationCheckpointBarrierRef.current = true;
     try {
-      const saveState = requestedState ?? await requestAuthoritativeSimulationCheckpoint();
+      // Even an explicit replacement state (import/slot/cloud) must first
+      // drain an in-flight simulation submission. Otherwise its T1 payload
+      // could race an older Worker response and rebase the durable head onto
+      // the wrong revision.
+      const barrierState = await requestAuthoritativeSimulationCheckpoint();
+      const saveState = requestedState ?? barrierState;
       // The checkpoint Worker may resolve after pagehide. Do not turn that
       // late result into a new primary/IDB transaction; T0 remains the exact
       // recovery source for the next boot.
@@ -2190,7 +2195,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       simulationCheckpointBarrierRef.current = true;
     }
     try {
-      const saveState = state ?? await requestAuthoritativeSimulationCheckpoint();
+      const barrierState = await requestAuthoritativeSimulationCheckpoint();
+      const saveState = state ?? barrierState;
       if (lifecycleExitStartedRef.current) {
         return { success: false, message: "页面正在退出，已保留当前恢复边界", code: "conflict" };
       }
