@@ -5,6 +5,7 @@ import {
   createSimulationRuntimeDurableAppHead,
   createSimulationRuntimeDurablePrimaryCheckpoint,
   createSimulationRuntimeDurableUnsignedIntent,
+  type SimulationRuntimeDurableAppHead,
 } from "./simulationRuntimeDurableAppState";
 
 describe("simulation runtime durable App head", () => {
@@ -73,6 +74,39 @@ describe("simulation runtime durable App head", () => {
     expect(() => advanceSimulationRuntimeDurableAppHead(head, intent, {
       ...proof,
       primaryStateChecksum: "wrong-primary",
+    })).toThrow(/不匹配/);
+  });
+
+  it("advances a transfer-based recovery head on a matching transfer proof", () => {
+    // A durable post-operation rollover absorbs an oversized intent into a
+    // transfer checkpoint (source "transfer"). Subsequent journal-merge
+    // finalizes continue on that transfer head, whose proof carries no primary
+    // checksum binding; the App head must accept it without regressing to a
+    // false mismatch pause.
+    const transferHead: SimulationRuntimeDurableAppHead = {
+      baseIdentity,
+      sessionId: "transfer-head",
+      generation: 2,
+      sequence: 0,
+      stateRevision: 3,
+      registryFingerprint: registry.fingerprint,
+    };
+    const unsigned = createSimulationRuntimeDurableUnsignedIntent(transferHead, {
+      command: null, simulationSeconds: 1, wallSeconds: 1, multicore: undefined, approximate: false, registry, committedAtMs: 5,
+    });
+    expect(unsigned).toMatchObject({ sessionId: "transfer-head", generation: 2, sequence: 1, baseStateRevision: 3 });
+    const intent = { ...unsigned, intentSha256: "d".repeat(64) };
+    const transferProof = {
+      schemaVersion: 1 as const, sessionId: "transfer-head", generation: 2, sequence: 1, stateRevision: 4,
+      checkpointSource: "transfer" as const, journalSha256: "e".repeat(64), journalByteLength: 64,
+      pending: false, finalized: true, intentSha256: intent.intentSha256, resultStateRevision: 4,
+    };
+    expect(advanceSimulationRuntimeDurableAppHead(transferHead, intent, transferProof))
+      .toMatchObject({ generation: 2, sequence: 1, stateRevision: 4 });
+    // A transfer proof still must match session/generation/sequence/revision.
+    expect(() => advanceSimulationRuntimeDurableAppHead(transferHead, intent, {
+      ...transferProof,
+      resultStateRevision: 5,
     })).toThrow(/不匹配/);
   });
 

@@ -702,6 +702,7 @@ test("real large save keeps running interactions and steady Worker payloads boun
     };
     localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
     localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
+    localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     // Large-factory escape hatch: this must stop the Worker scan itself, not
     // merely hide alert badges after the projection reaches the UI.
     localStorage.setItem("dsp-idle-network.ui.factory-alerts.v1", "false");

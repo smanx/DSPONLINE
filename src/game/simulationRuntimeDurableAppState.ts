@@ -121,12 +121,14 @@ export function advanceSimulationRuntimeDurableAppHead(
   intent: SimulationRuntimeDurableOperationIntent,
   proof: SimulationRuntimeRecoveryDurableProof,
 ): SimulationRuntimeDurableAppHead {
+  const bindingMatches = proof.checkpointSource === "primary"
+    ? proof.primaryStateChecksum === head.baseIdentity.checksum && proof.primaryRevision === head.baseIdentity.revision
+    : proof.checkpointSource === "transfer";
   if (intent.sessionId !== head.sessionId || intent.generation !== head.generation ||
     intent.sequence !== head.sequence + 1 || intent.baseStateRevision !== head.stateRevision ||
     proof.sessionId !== intent.sessionId || proof.generation !== intent.generation ||
     proof.sequence !== intent.sequence || proof.intentSha256 !== intent.intentSha256 ||
-    proof.checkpointSource !== "primary" || proof.primaryStateChecksum !== head.baseIdentity.checksum ||
-    proof.primaryRevision !== head.baseIdentity.revision ||
+    !bindingMatches ||
     proof.pending || !proof.finalized || proof.resultStateRevision === undefined ||
     proof.stateRevision !== proof.resultStateRevision) {
     throw new Error("runtime recovery finalize proof 与 staged intent 不匹配");

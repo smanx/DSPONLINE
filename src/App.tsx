@@ -337,12 +337,13 @@ import type {
   SimulationRuntimeDurableAppHead,
 } from "./game/simulationRuntimeDurableAppState";
 import { createSimulationRuntimeDurablePrimaryCheckpoint } from "./game/simulationRuntimeDurableAppState";
-import type { SimulationRuntimeDurableOperationIntent } from "./game/simulationRuntimeDurableRecovery";
+import { computeSimulationRuntimeDurableBytesSha256, type SimulationRuntimeDurableOperationIntent, type SimulationRuntimeDurableTransferCheckpoint } from "./game/simulationRuntimeDurableRecovery";
 import {
   advanceSimulationRuntimeDurableAppHead,
   createSimulationRuntimeDurableUnsignedIntent,
 } from "./game/simulationRuntimeDurableAppState";
 import {
+  commitSimulationRuntimeRecoveryCheckpointInPersistenceWorker,
   finalizeSimulationRuntimeRecoveryIntentInPersistenceWorker,
   initializeSimulationRuntimeRecoveryInPersistenceWorker,
   stageUnsignedSimulationRuntimeRecoveryIntentInPersistenceWorker,
@@ -964,6 +965,7 @@ interface SimulationSubmission {
   multicore: MulticoreSimulationOptions | undefined;
   approximate: boolean;
   durableIntent?: SimulationRuntimeDurableOperationIntent;
+  requiresCheckpointBarrier?: boolean;
 }
 
 interface SimulationCheckpointAccumulator {
@@ -1491,6 +1493,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     checkpointChunks?: SimulationCheckpointAccumulator;
   } | null>(null);
   const dispatchSimulationCheckpointRef = useRef<() => void>(() => undefined);
+  const requestAuthoritativeSimulationCheckpointRef = useRef<() => Promise<GameState>>(() => Promise.resolve(loaded.state));
+  const persistDurablePrimaryCheckpointRef = useRef<((requestedState: GameState | undefined, kind: RuntimePersistenceKind) => Promise<SaveGameResult>)>(() => Promise.resolve({ success: false, message: "未就绪", code: "unavailable" }));
   const latestAuthoritativeCheckpointRef = useRef<GameState>(loaded.state);
   // A checkpoint buffer is transferable ownership, not a serializable cache.
   // It may be handed to the save worker only together with the exact decoded
@@ -2140,6 +2144,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         return;
       }
       submission.durableIntent = intent;
+      submission.requiresCheckpointBarrier = result.proof.requiresCheckpointBarrier === true;
       simulationRequestIdRef.current = request.id;
       simulationSubmissionRef.current = submission;
       durableRecoveryStageInFlightRef.current = false;
@@ -2297,6 +2302,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     queueMicrotask(() => dispatchSimulationCheckpointRef.current());
     return promise;
   }, [stateWithSimulationDebt]);
+  requestAuthoritativeSimulationCheckpointRef.current = requestAuthoritativeSimulationCheckpoint;
 
   const requestAuthoritativeDeferredTopLevelProjection = useCallback((): Promise<GameState> => {
     const existing = simulationCheckpointRequestRef.current;
@@ -2664,6 +2670,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       window.setTimeout(() => setRuntimePersistenceProgress((current) => current?.id === progressId ? null : current), 8_000);
     }
   }, [requestAuthoritativeSimulationCheckpoint, saveVerifiedPrimaryCheckpoint]);
+  persistDurablePrimaryCheckpointRef.current = persistDurablePrimaryCheckpoint;
 
   const persistPureIdleTerminalEnvelope = useCallback(async (
     record: PureIdleRecoveryRecord,
@@ -4014,6 +4021,136 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           return;
         }
         durableRecoveryFinalizeInFlightRef.current = event.data.id;
+        if (submission.requiresCheckpointBarrier === true) {
+          // The staged intent cannot fit into the bounded recovery journal as a
+          // merge. Absorb it through a durable post-operation checkpoint rollover
+          // instead of the journal-merge finalize path. The Worker has already
+          // computed this operation, so the checkpoint carries the authoritative
+          // state (including this result) and clears the pending intent. Heavy
+          // serialization is offloaded to the simulation/recovery Workers so the
+          // interaction budget is not violated on the UI thread.
+          void (async () => {
+            try {
+              // Reconstruct the authoritative post-operation state from the Worker
+              // response first so a subsequent authoritative checkpoint request has
+              // no durable command to stage (which would conflict with the pending
+              // intent we are about to absorb).
+              let confirmed = submission.state;
+              let projectionIndex = simulationProjectionIndexRef.current;
+              let responseAccepted = true;
+              if (!event.data.changed) {
+                if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
+              } else if (event.data.delta) {
+                if (submission.baseStateRevision === null || event.data.delta.baseRevision !== submission.baseStateRevision) {
+                  responseAccepted = false;
+                } else {
+                  confirmed = applySimulationStateDelta(submission.state, event.data.delta);
+                  simulationStateRevisionRef.current = event.data.delta.nextRevision;
+                  projectionIndex = createSimulationProjectionStateIndex(confirmed);
+                }
+              } else if (event.data.state) {
+                confirmed = event.data.state;
+                if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
+                projectionIndex = createSimulationProjectionStateIndex(confirmed);
+              } else if (event.data.projection) {
+                const applied = applySimulationProjectionToState(submission.state, event.data.projection!, projectionIndex);
+                confirmed = applied.state;
+                projectionIndex = applied.index;
+                if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
+              } else if (!event.data.commandApplied) {
+                responseAccepted = false;
+              }
+              if (!responseAccepted) throw new Error("durable 检查点吸收无法确认 Worker 响应");
+              const nextStateRevision = simulationStateRevisionRef.current;
+              const head = durableRecoveryHeadRef.current;
+              const intent = submission.durableIntent!;
+              if (!head || !intent) throw new Error("durable 检查点吸收缺少 recovery head/intent");
+              // Publish the reconstructed state into the refs so the authoritative
+              // checkpoint request sees no pending UI diff and does not stage a new
+              // durable command.
+              lastSimulationResultRef.current = confirmed;
+              simulationProjectionIndexRef.current = projectionIndex;
+              gameRef.current = confirmed;
+              simulationSubmissionRef.current = null;
+              durableRecoveryFinalizeInFlightRef.current = null;
+              // Ask the simulation Worker for an offloaded authoritative transfer.
+              const authoritative = await requestAuthoritativeSimulationCheckpointRef.current();
+              const transfer = latestAuthoritativeCheckpointTransferRef.current?.transfer;
+              if (!transfer || !(transfer.buffer instanceof ArrayBuffer) || transfer.byteLength <= 0) {
+                throw new Error("durable 检查点吸收缺少权威状态 transfer");
+              }
+              const storedSha256 = await computeSimulationRuntimeDurableBytesSha256(transfer.buffer);
+              const nextCheckpoint: SimulationRuntimeDurableTransferCheckpoint = {
+                schemaVersion: 1,
+                sessionId: intent.sessionId,
+                generation: intent.generation + 1,
+                lastSequence: intent.sequence,
+                stateRevision: nextStateRevision,
+                registryFingerprint: intent.registry.fingerprint,
+                registry: intent.registry,
+                committedAtMs: Date.now(),
+                baseIdentity: head.baseIdentity,
+                source: "transfer",
+                transfer: {
+                  protocolVersion: transfer.protocolVersion,
+                  encoding: "raw",
+                  buffer: transfer.buffer,
+                  storedByteLength: transfer.byteLength,
+                  originalByteLength: transfer.byteLength,
+                  storedSha256,
+                  originalSha256: storedSha256,
+                },
+              };
+              const status = getLocalSaveWriterStatus();
+              const rolled = await commitSimulationRuntimeRecoveryCheckpointInPersistenceWorker(
+                nextCheckpoint,
+                intent.generation,
+                { ownerId: status.writerId, fencingToken: status.fencingToken },
+                { intent, resultStateRevision: nextStateRevision },
+              );
+              if (!rolled.result.ok) throw new Error(rolled.result.message);
+              durableRecoveryHeadRef.current = {
+                baseIdentity: head.baseIdentity,
+                sessionId: nextCheckpoint.sessionId,
+                generation: nextCheckpoint.generation,
+                sequence: nextCheckpoint.lastSequence,
+                stateRevision: nextCheckpoint.stateRevision,
+                registryFingerprint: nextCheckpoint.registryFingerprint,
+              };
+              simulationStateRevisionRef.current = nextStateRevision;
+              simulationReplayJournalRef.current = [];
+              acceptFactoryAlertProjection(event.data.projection?.alerts, event.data.factoryAlertsGeneration);
+              const current = gameRef.current;
+              const rebaseConfirmedView = (view: GameState) => {
+                const pending = view === submission.state
+                  ? null
+                  : createSimulationCommandPatch(submission.state, view, nextStateRevision);
+                return pending ? applySimulationCommandPatch(confirmed, pending) : confirmed;
+              };
+              const next = rebaseConfirmedView(current);
+              publishRuntimeGame(next);
+              setNotice("超大模拟操作已通过 durable 检查点安全吸收，模拟继续运行");
+              window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+              return;
+            } catch (error) {
+              durableRecoveryFinalizeInFlightRef.current = null;
+              simulationSubmissionRef.current = null;
+              simulationRetrySecondsRef.current += submission.simulationSeconds;
+              simulationRetryWallSecondsRef.current += submission.wallSeconds;
+              simulationWorkerDisabledRef.current = true;
+              simulationWorkerRef.current = null;
+              setSimulationWorkerActive(false);
+              worker.terminate();
+              const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
+              latestAuthoritativeCheckpointRef.current = stopped;
+              lastSimulationResultRef.current = stopped;
+              gameRef.current = stopped;
+              setGame(stopped);
+              setNotice(`durable 回执检查点吸收失败（${error instanceof Error ? error.message : "未知错误"}），已暂停；刷新后精确恢复`);
+            }
+          })();
+          return;
+        }
         void finalizeSimulationRuntimeRecoveryIntentInPersistenceWorker(
           submission.durableIntent.sessionId,
           submission.durableIntent.generation,
