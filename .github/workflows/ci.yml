@@ -29,7 +29,9 @@ jobs:
       - run: npm --prefix server ci
       - run: npm run licenses:check
       - run: npm run typecheck
-      - run: npm test -- --maxWorkers=1
+      # Vitest 并行试跑（Ubuntu）：若出现 OOM/稳定性问题，回退为 --maxWorkers=1。
+      # 本地 Windows 仍保持 maxWorkers=1（vitest.config.ts），两者不冲突。
+      - run: npm test -- --maxWorkers=4
 
   server-ops-native:
     name: Server + Ops + Native
@@ -65,8 +67,8 @@ jobs:
       - run: npm --prefix server ci
       - run: npm run build
 
-  e2e:
-    name: E2E (Playwright)
+  e2e-shard-1:
+    name: E2E shard 1/2
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -76,5 +78,68 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
       - run: npx playwright install --with-deps chrome
-      - run: npm run test:e2e
+      - run: npm run test:e2e -- --shard=1/2
+      - name: Report slowest tests in this shard
+        if: always()
+        run: npm run test:report:slowest -- --limit 10
+      - name: Upload shard timing JSON
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-json-shard-1
+          path: test-results/playwright-report.json
+          if-no-files-found: ignore
+
+  e2e-shard-2:
+    name: E2E shard 2/2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+      - run: npx playwright install --with-deps chrome
+      - run: npm run test:e2e -- --shard=2/2
+      - name: Report slowest tests in this shard
+        if: always()
+        run: npm run test:report:slowest -- --limit 10
+      - name: Upload shard timing JSON
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-json-shard-2
+          path: test-results/playwright-report.json
+          if-no-files-found: ignore
+
+  e2e-report:
+    name: E2E slowest-tests summary
+    needs: [e2e-shard-1, e2e-shard-2]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          path: shard-reports
+      - name: Merge shard timing JSON and print top 20
+        run: node scripts/report-slowest-tests.mjs shard-reports/playwright-json-shard-1/playwright-report.json shard-reports/playwright-json-shard-2/playwright-report.json --limit 20

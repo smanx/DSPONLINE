@@ -33,6 +33,7 @@
     "test:unit:fast": "vitest run --maxWorkers=4",
     "test:changed": "node scripts/run-changed-tests.mjs",
     "test:e2e:fast": "playwright test --grep \"cloud|save|offline|idle|PWA|leaderboard\"",
+    "test:report:slowest": "node scripts/report-slowest-tests.mjs",
     "benchmark:logistics": "cross-env DSP_RUN_LOGISTICS_BENCHMARK=1 vitest run src/game/logisticsBenchmark.test.ts --reporter=verbose",
     "benchmark:refresh": "node scripts/measure-refresh-profiles.mjs",
     "benchmark:v106-belts": "cross-env DSP_RUN_V106_BELT_BENCHMARK=1 vitest run src/game/v106BeltBenchmark.test.ts --reporter=verbose",
