@@ -1,7 +1,22 @@
-# game-flow.spec.ts 拆分分析与方案（待执行）
+# game-flow.spec.ts 拆分分析与方案（已执行）
 
-> 目的：`tests/e2e/game-flow.spec.ts` 是 E2E 的最大单文件瓶颈（约 357KB / 105 个 test / 0 个 describe），即使 E2E 已开并行 worker，该文件仍只在单一 worker 上串行执行。本文档先做依赖分析并给出拆分方案；**实际拆分需按“独立任务”执行，不改变任何断言/测试语义**。
-> 状态：分析完成，待拆分执行（执行前需用户授权一次，因为会大幅改动测试文件布局）。
+> 目的：`tests/e2e/game-flow.spec.ts` 是 E2E 的最大单文件瓶颈（约 357KB / 105 个 test / 0 个 describe），即使 E2E 已开并行 worker，该文件仍只在单一 worker 上串行执行。
+> 状态：**已完成拆分并验证**（2026-08-17，分支 `codex/test-split-game-flow`）。测试逻辑零改写，仅做机械文件切分。
+
+## 0. 执行结果
+
+- 原文件拆分为 6 个分文件，`game-flow.spec.ts` 已删除：
+  - `game-flow-menu-cloud.spec.ts`（9 tests）
+  - `game-flow-onboarding-mobile.spec.ts`（16 tests）
+  - `game-flow-logistics.spec.ts`（19 tests）
+  - `game-flow-megastructure.spec.ts`（27 tests）
+  - `game-flow-canvas-settings.spec.ts`（24 tests）
+  - `game-flow-campaign-galaxy.spec.ts`（10 tests）
+- 验证：
+  - `npx playwright test --list`：总数 **413 tests / 70 files**（拆分前 413/65），game-flow 相关 **105**，数量一致 ✅
+  - 6 个分文件全量跑：**104 passed / 1 failed（2.2 分钟）**；失败项 `box selection copies...` 为 4-worker 并行下的偶发 5s 超时，**串行复跑通过（16.7s）** ✅
+  - 结论：105 个 test 语义完整保留；并行偶发超时是 E2E workers 提高后的已知观察（见 5.2）
+- 切分方式：**头部 44 行 + test 块之间的共享定义 gap（约 1543 行）完整复制到每个分文件**，test 块以“无缩进顶格 `test(` 开始、无缩进顶格 `});` 结束”为边界整块移动，零改写。
 
 ## 1. 当前结构事实
 
@@ -29,61 +44,44 @@
    - `test.beforeEach(...)`（含两个 title 白名单分支 + `addLocatorHandler`）
 4. **imports 纯净**：`engine` / `storage` / `settings-helpers` 均为纯导入。
 
-## 3. 拆分方案
+## 3. 拆分方案（实际执行方式）
 
-### 3.1 抽取共享 helper
+### 3.1 共享代码复制（非 helper 抽取）
 
-新建 `tests/e2e/game-flow-helpers.ts`：
+实际执行采用**更保守的复制方案**（避免 import/noUnusedLocals 风险）：
 
-```ts
-import { test, type Page, type TestInfo } from "@playwright/test";
+- 原文件第 1–44 行（imports + `installTestBootstrap` + `dismissOnboarding` + 两个 title 白名单 `Set` + `test.beforeEach`）作为共享头部，**完整复制**到每个分文件。
+- test 块之间的共享定义 gap（约 1543 行，含 `freshGame`、`createTouchPage`、`openInterstellarGame`、`openBlueprintStageGame`、`openCampaignEndgameStageGame` 等顶层函数/常量）同样**完整复制**到每个分文件。
+- 代价是每份文件有共享代码重复；后续可再独立抽取 helper 优化（不影响本次语义安全）。
 
-export async function installGameFlowBootstrap(page: Page) { /* 现 installTestBootstrap 原样移动 */ }
-export async function dismissGameFlowOnboarding(page: Page) { /* 现 dismissOnboarding 原样移动 */ }
-export async function beforeEachGameFlow(page: Page, testInfo: TestInfo) {
-  // 现 test.beforeEach 逻辑原样移动（含两个 title Set 与 addLocatorHandler）
-}
-```
+### 3.2 按功能域拆分（6 个文件，实际数量）
 
-各分文件统一：
+| 新文件 | test 数量 | 内容域 |
+| --- | --- | --- |
+| `game-flow-menu-cloud.spec.ts` | 9 | 菜单门、发布公告、运维面板、云账号安全、云存档冲突/上传、注册登录 |
+| `game-flow-onboarding-mobile.spec.ts` | 16 | 新手引导、基础采矿/建造、移动端操作 |
+| `game-flow-logistics.spec.ts` | 19 | 传送带、配方、设备升级、统计、管理 |
+| `game-flow-megastructure.spec.ts` | 27 | 建造自动化、能源、化工、星际物流、区域/蓝图 |
+| `game-flow-canvas-settings.spec.ts` | 24 | 画布工具、设置持久化、字体缩放、性能模式 |
+| `game-flow-campaign-galaxy.spec.ts` | 10 | 战役、银河排行、端局控制台、可访问性 |
 
-```ts
-test.beforeEach(async ({ page }, testInfo) => {
-  await beforeEachGameFlow(page, testInfo);
-});
-```
-
-### 3.2 按功能域拆分（6 个文件）
-
-| 新文件 | test 数量（估） | 行范围（现文件） | 内容域 |
-| --- | --- | --- | --- |
-| `game-flow-menu-cloud.spec.ts` | 9 | 45–626 | 菜单门、发布公告、运维面板、云账号安全、云存档冲突/上传、注册登录 |
-| `game-flow-onboarding.spec.ts` | 12 | 2138–2520 | 新手引导、基础采矿/建造/移动端操作 |
-| `game-flow-logistics.spec.ts` | 22 | 2658–3340 | 传送带、配方、设备升级、统计、管理 |
-| `game-flow-megastructure.spec.ts` | 24 | 3398–4600 | 建造自动化、能源、化工、星际物流、区域/蓝图 |
-| `game-flow-canvas-settings.spec.ts` | 20 | 4604–5708 | 画布工具、设置持久化、字体缩放、性能模式 |
-| `game-flow-campaign-galaxy.spec.ts` | 18 | 5746–6283+ | 战役、银河排行、端局控制台、可访问性 |
-
-> 实际分割时以“test 函数边界”为准，不按行硬切；每个 test 整体迁移，内部零修改。
+> 边界以“无缩进顶格 `test(` 开始、无缩进顶格 `});` 结束”为准；每个 test 整块迁移，内部零修改。
 
 ### 3.3 保持不变项
 
 - 105 个 test 的**标题、断言、seed、交互序列全部原样保留**。
-- title 白名单机制保留在 helper 中（标题不变，白名单无需改动）。
+- title 白名单机制原样复制（标题不变，白名单无需改动）。
 - `settings-helpers.ts` 等既有共享文件不碰。
 
-## 4. 执行步骤（拆分时按此做）
+## 4. 执行步骤（已按此完成）
 
-1. `git worktree` 或独立分支，基线：当前 HEAD。
-2. 创建 `game-flow-helpers.ts`，移动 2 个 helper + beforeEach 逻辑（仅 import 路径变化）。
-3. 按功能域创建 6 个分文件，**机械移动** `test(...)` 块（整块剪切粘贴，零改写）。
-4. 每个分文件加 `import` + `test.beforeEach(...)` 调用共享 helper。
-5. 删除旧 `game-flow.spec.ts`。
-6. 验证三关：
-   - `npx playwright test --list` 的 test 总数仍为 **105**（移动前后 diff 为 0）；
-   - 全量 E2E 通过数不变（当前 413 tests / 65 files → 拆分后 413 tests / 70 files）；
-   - `game-flow-*` 六个 spec 单独跑全部通过。
-7. 更新 `test:e2e:fast` 的 grep 清单（若需要），并更新本文档与 `RELEASE_RUNBOOK_CHECKS.md` 第 9 节。
+1. 独立分支 `codex/test-split-game-flow`，基线：当前 HEAD。
+2. 用切分脚本（`gen-game-flow-split.mjs`）按顶格边界切出 105 个 test 块，收集共享头部 + gap。
+3. 生成 6 个分文件（头部 + gap + 本组 test 块），删除旧 `game-flow.spec.ts`。
+4. 验证三关：
+   - `npx playwright test --list` 总数 413/70、game-flow 105（与移动前一致）；
+   - 6 个分文件全量 104/105 通过，唯一失败项串行复跑通过（并行偶发超时）；
+   - 拆分脚本已保留在 `artifacts/release-ops/1.0.44-3e580c715a5a/gen-game-flow-split.mjs` 供审计。
 
 ## 5. 风险与规避
 
