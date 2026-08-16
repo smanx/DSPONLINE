@@ -429,7 +429,7 @@ import {
   setCanvasPointerEdgeVelocity,
   stopCanvasPointerMotion as stopCanvasPointerMotionSession,
 } from "./hooks/canvasPointerMotion";
-import { readBlueprintAllowOverlapPreference, readCanvasDetailPreference, readConnectExpandAllPreference, readConnectionHitArea, readConnectionPointSize, readDefaultBeltLanesPreference, readFactoryAlertsPreference, readFullRealtimeSimulationPreference, readLargeSaveAutosaveThrottlePreference, readShowItemHoverPreference, readShowRunLogPreference, readThemePreference, writeBlueprintAllowOverlapPreference, writeCanvasDetailPreference, writeConnectExpandAllPreference, writeConnectionHitArea, writeConnectionPointSize, writeDefaultBeltLanesPreference, writeFactoryAlertsPreference, writeFullRealtimeSimulationPreference, writeLargeSaveAutosaveThrottlePreference, writeShowItemHoverPreference, writeShowRunLogPreference, writeThemePreference, type ConnectionHitArea, type ConnectionPointSize } from "./game/uiPreferences";
+import { readBlueprintAllowOverlapPreference, readCanvasDetailPreference, readConnectExpandAllPreference, readConnectionHitArea, readConnectionPointSize, readDefaultBeltLanesPreference, readFactoryAlertsPreference, readFullRealtimeSimulationPreference, readLargeSaveAutosaveThrottlePreference, readShowItemHoverPreference, readShowRunLogPreference, readThemePreference, readAllowEditsDuringSavePreference, writeBlueprintAllowOverlapPreference, writeCanvasDetailPreference, writeConnectExpandAllPreference, writeConnectionHitArea, writeConnectionPointSize, writeDefaultBeltLanesPreference, writeFactoryAlertsPreference, writeFullRealtimeSimulationPreference, writeLargeSaveAutosaveThrottlePreference, writeShowItemHoverPreference, writeShowRunLogPreference, writeThemePreference, writeAllowEditsDuringSavePreference, type ConnectionHitArea, type ConnectionPointSize } from "./game/uiPreferences";
 import type { CanvasDetailPreference } from "./game/canvasDensityPresentation";
 
 type InspectorTab = "inspect" | "fabricate";
@@ -1122,6 +1122,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [loaded] = useState(initialLoad);
   const [game, setGame] = useState(loaded.state);
   const [largeSaveAutosaveProtection, setLargeSaveAutosaveProtection] = useState(readLargeSaveAutosaveThrottlePreference);
+  const [allowEditsDuringSave, setAllowEditsDuringSave] = useState(readAllowEditsDuringSavePreference);
   const [persistedPrimaryBytes, setPersistedPrimaryBytes] = useState<number | null>(() => readVerifiedPrimaryByteLength(loaded.state.mode));
   const largeSaveAutosavePolicy: LargeSaveAutosavePolicy = useMemo(() => resolveLargeSaveAutosavePolicy({
     configuredIntervalSeconds: game.settings.autosaveIntervalSeconds,
@@ -1490,7 +1491,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const deferredDurableUiSubmissionRef = useRef<DeferredDurableUiSubmission | null>(null);
   const dispatchDurableUiCommandRef = useRef<() => void>(() => undefined);
   const durablePrimarySaveInFlightRef = useRef(false);
+  const allowEditsDuringSaveRef = useRef(allowEditsDuringSave);
+  allowEditsDuringSaveRef.current = allowEditsDuringSave;
+  const setAllowEditsDuringSavePreference = useCallback((enabled: boolean) => {
+    allowEditsDuringSaveRef.current = enabled;
+    setAllowEditsDuringSave(enabled);
+    writeAllowEditsDuringSavePreference(enabled);
+  }, []);
   const rejectPlayerStateEditDuringPrimarySave = useCallback((): boolean => {
+    if (allowEditsDuringSaveRef.current) return false;
     if (!durablePrimarySaveInFlightRef.current) return false;
     const rejection = "本次操作未应用；保存完成后即可继续编辑";
     setPrimarySaveRejectedEditCount((count) => count + 1);
@@ -2689,6 +2698,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         barrierState = await requestAuthoritativeSimulationCheckpoint();
       }
       const saveState = requestedState ?? barrierState;
+      const checkpointRevision = simulationStateRevisionRef.current;
       // The checkpoint Worker may resolve after pagehide. Do not turn that
       // late result into a new primary/IDB transaction; T0 remains the exact
       // recovery source for the next boot.
@@ -2715,7 +2725,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       if (head.baseIdentity.mode !== mode) throw new Error("durable mode 与主存档不匹配");
       if (simulationStateRevisionRef.current !== head.stateRevision) {
-        throw new Error("模拟 revision 与 durable recovery head 不一致，已阻止滚动基线");
+        // 开启“保存期间允许继续编辑”后，保存过程中产生的编辑会把 UI/Worker
+        // revision 推到 checkpoint 之前。此时 head 落后是预期的可追赶状态：
+        // 用保存时的 checkpointRevision 滚动，下一次保存自然追平，不阻断游戏。
+        if (!allowEditsDuringSaveRef.current) {
+          throw new Error("模拟 revision 与 durable recovery head 不一致，已阻止滚动基线");
+        }
       }
       const fence = { ownerId: status.writerId, fencingToken: status.fencingToken };
       // The persistence Worker performs a fenced stale-base replacement as a
@@ -2726,7 +2741,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const checkpoint = createSimulationRuntimeDurablePrimaryCheckpoint({
         baseIdentity: identity,
         sessionId: `roll_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
-        stateRevision: simulationStateRevisionRef.current,
+        stateRevision: checkpointRevision,
         registry: contentPackRuntimeSnapshotRef.current,
         committedAtMs: identity.savedAt,
       });
@@ -2741,7 +2756,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         stateRevision: checkpoint.stateRevision,
         registryFingerprint: checkpoint.registryFingerprint,
       };
-      simulationStateRevisionRef.current = checkpoint.stateRevision;
+      if (simulationStateRevisionRef.current < checkpoint.stateRevision) {
+        simulationStateRevisionRef.current = checkpoint.stateRevision;
+      }
       latestAuthoritativeCheckpointRef.current = saveState;
       lastSimulationResultRef.current = saveState;
       simulationReplayJournalRef.current = [];
@@ -2759,6 +2776,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "failed", startedAt, message: failure.message });
       recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "failed" });
       if (kind === "autosave") completeRuntimeTransition("autosave", "save-failed");
+      if (allowEditsDuringSaveRef.current) {
+        // 保存失败时不再回滚/丢弃玩家在保存期间已接受的编辑；
+        // 保留当前 UI 与 durable 队列，提示玩家导出或重试。
+        setNotice(`${failure.message}；当前编辑已保留，可继续游戏或立即导出`);
+        return failure;
+      }
       const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
       latestAuthoritativeCheckpointRef.current = stopped;
       lastSimulationResultRef.current = stopped;
@@ -11191,6 +11214,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             factoryAlertsEnabled={factoryAlertsEnabled}
             largeSaveAutosaveProtection={largeSaveAutosaveProtection}
             largeSaveAutosavePolicy={largeSaveAutosavePolicy}
+            allowEditsDuringSave={allowEditsDuringSave}
+            onAllowEditsDuringSaveChange={setAllowEditsDuringSavePreference}
             blueprintAllowOverlap={blueprintAllowOverlap}
             canvasDetailPreference={canvasDetailPreference}
             canvasDetailStage={canvasDetailStage}
