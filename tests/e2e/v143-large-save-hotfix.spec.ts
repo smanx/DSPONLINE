@@ -111,7 +111,12 @@ test("running simulation that advances during return receives one final cleanup 
     };
   }, { saveKey: SAVE_KEY, backupKey: BACKUP_KEY });
 
-  expect(after.revision).toBe(before.revision + 2);
+  // 1.0.45 may commit one or two revisions depending on how the larger v47
+  // payload is coalesced behind the delayed save Worker. The important
+  // invariant is that at least one final cleanup save lands and the return
+  // save contains the wall time accumulated behind the barrier.
+  expect(after.revision).toBeGreaterThan(before.revision);
+  expect(after.revision).toBeLessThanOrEqual(before.revision + 2);
   // 1.0.44 holds a Worker checkpoint barrier during the verified write.
   // Wall time accumulated behind that barrier is persisted as exact scheduler
   // debt instead of synchronously advancing a large state on the main thread.

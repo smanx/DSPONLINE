@@ -35,7 +35,7 @@ test("save Worker returns a transferable verified sparse envelope", async ({ pag
       slotWorker: slotted.usedWorker,
       slotEnvelope: { kind: parsedSlot.kind, slot: parsedSlot.slot, mode: parsedSlot.mode },
       slotWriteSuccess: slotWrite.success,
-      slotLoaded: storage.loadGameSlot(2, "normal")?.state.version ?? null,
+      slotLoaded: (await storage.loadGameSlotFromPersistence(2, "normal"))?.state.version ?? null,
       snapshot,
     };
   });
