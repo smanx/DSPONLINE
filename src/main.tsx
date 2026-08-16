@@ -4,7 +4,7 @@ import "./styles.css";
 import "./theme.css";
 import { installAnalytics } from "./game/analytics";
 import { installClientMonitoring } from "./game/monitoring";
-import { finishNativeLaunch, initializeNativeRuntime, isNativeApp } from "./nativeApp";
+import { getDesktopBridge } from "./desktop";
 import { registerPwa } from "./pwa";
 import "./styles/native-app.css";
 import "./styles/dynamic-import-recovery.css";
@@ -20,7 +20,16 @@ import { initializeDocumentTheme } from "./game/uiPreferences";
 // GameState theme is still read for old saves, but it is no longer the source
 // of the initial document color and therefore cannot cause a dark flash.
 initializeDocumentTheme();
-const nativeRuntime = initializeNativeRuntime();
+const startupPlatform = __APP_PLATFORM__ === "android"
+  ? "android"
+  : getDesktopBridge() ? "desktop" : "web";
+document.documentElement.dataset.appPlatform = startupPlatform;
+// Keep the Android bridge outside the static startup closure. Platform data is
+// set synchronously above so native styles apply before the first React paint.
+const nativeRuntime = __APP_PLATFORM__ === "android"
+  ? importWithRecovery(() => import("./nativeApp"), "Android 原生运行时")
+  : Promise.resolve(null);
+const nativeInitialization = nativeRuntime.then((native) => native?.initializeNativeRuntime());
 initializeDocumentLocale();
 installClientMonitoring();
 const adminRoute = /^\/admin\/?$/.test(window.location.pathname);
@@ -32,9 +41,9 @@ async function mountApplication(): Promise<void> {
     ? await importWithRecovery(() => import("./components/AdminDashboard"), "管理后台模块").then(({ AdminDashboard }) => <AdminDashboard />)
     : await importWithRecovery(() => import("./GameLauncher"), "游戏启动模块").then(({ App }) => <App />);
   createRoot(document.getElementById("root")!).render(<StrictMode><AppLocaleProvider>{application}</AppLocaleProvider></StrictMode>);
-  await nativeRuntime.catch(() => undefined);
+  await nativeInitialization.catch(() => undefined);
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-  await finishNativeLaunch();
+  await nativeRuntime.then((native) => native?.finishNativeLaunch()).catch(() => undefined);
 }
 
 void mountApplication().catch(() => {
@@ -57,4 +66,4 @@ void mountApplication().catch(() => {
   root.append(panel);
 });
 
-if (import.meta.env.PROD && !isNativeApp()) window.addEventListener("load", () => void registerPwa());
+if (import.meta.env.PROD && startupPlatform === "web") window.addEventListener("load", () => void registerPwa());
