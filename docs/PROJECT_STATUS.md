@@ -2,7 +2,7 @@
 
 > **1.0.43 香港 Web 稳定热修（2026-08-14，已发布）**：香港 Web current 已原子切换到不可变 `web-1.0.43-fceca3eda51c` / Build ID `1.0.43+fceca3eda51c`，previous 为 `web-1.0.42-c24e6247d257`；香港 API 保持 `api-1.0.42-c24e6247d257`，上海 Web/API、上海下载页、Android/Windows stable 均保持 1.0.42。运行时/测试树 `6c2df9686031` 在不升级 GameState v46、envelope v2、cloud schema v7、SQLite layout v2 或 IndexedDB records 的前提下，将 v46 线路迁移降为保持原顺序的 O(E+B) 索引/分区，使用 Worker 完整检查导入/云恢复，并修复立即保存重复持久化、受控返回 cleanup 和增产剂 1 亿上限重载截断。最终源码/制品为 clean `fceca3eda51cf7e488e176e23c6119ba104b77fd`；旧 `1.0.43-a47eb33d0b84` 永久作废。两次受保护切换分别因物理绑定探针 TLS 超时和继承 manifest MIME 的错误预期安全回滚到 1.0.42；第三次 generation 13 切换、真实附件导入/保存/返回、PWA、健康和约 1 小时 47 分观察通过，API/数据库/上海/原生/下载页/玩家数据均未修改。完整证据见 [候选记录](./releases/1.0.43-candidate.md)、[Release Agent 交接](./RELEASE_HANDOFF_1.0.43.md) 与 [正式发布记录](./releases/1.0.43.md)。
 
-> **当前生产与开发基线（2026-08-15）**：香港 Web 为 `1.0.43+fceca3eda51c`；香港 API、上海 Web/API、上海下载 stable 与 Android/Windows stable 均为 1.0.42。Android 继续为长期证书签名的 `1.0.42 / 1000042`，Windows setup 继续明确 `NotSigned`。GameState v46、envelope v2、云 schema v7、SQLite layout v2 不变；两地数据库独立且没有恢复或迁移，排行榜历史没有修改。香港直接 Web 回滚目标为 1.0.42；公开 `/canary/previous/` 仍保留不可变 1.0.37。1.0.44 应从本文档收口提交继续开发，但产品运行时边界以 `fceca3e` 制品与 `6c2df96` runtime/test tree 为准。
+> **当前生产与开发基线（2026-08-17）**：香港 Web 为 `1.0.44+3e580c715a5a`，香港 API、上海 Web/API、上海下载 stable 与 Android/Windows stable 均为 1.0.44。香港 Web/API 原子切换后为 generation 14（slot green / 4322），上海为 generation 5（slot blue / 4321）；发布代理分别 forward 到 `api-1.0.44-3e580c715a5a`，活动 API `NRestarts=0`，pending switch 为空。Android 继续为长期证书签名的 `1.0.44 / 1000044`，Windows setup 继续明确 `NotSigned`。GameState v46、envelope v2、云 schema v7、SQLite layout v2 不变；两地数据库独立且没有恢复或迁移，排行榜历史没有修改。完整证据见 [releases/1.0.44.md](./releases/1.0.44.md)。
 
 > **1.0.44 P0：超大存档运行态仍不可接受**。1.0.43 只收敛迁移/导入初次进入、手动保存与返回主页的重复持久化路径，不代表超大工厂主动模拟已经流畅。正式 36.7 MB 附件旅程中，受控 Continue→Pause 往返仍耗时 `20,887 ms`，Long Task 峰值为 `20,291 ms`；玩家也独立反馈运行时接近不可玩。这是 1.0.43 的明确残余风险，必须在 1.0.44 以 P0 继续处理，不能用本次发布状态或导入/保存改善宣称“全部卡顿已解决”。
 
@@ -116,7 +116,7 @@
 
 > 香港正式节点已按 verified backup → dry-run → stopped-service transaction → post-check 顺序完成一次排行榜完整性处置。只删除 1 条公开 submission 并写入 1 条内部限制；账号、主云档、历史正文和其他同名账号均未删除或改写。上海没有执行该数据处置。
 
-> 香港 Web current 为 `web-1.0.43-fceca3eda51c`，公网 Build ID 为 `1.0.43+fceca3eda51c`；香港 API、上海 Web/API、上海下载站与原生 stable 仍为 1.0.42。香港 generation 13 的直接 Web previous 为 `web-1.0.42-c24e6247d257`，API `NRestarts=0`；公开 `/canary/previous/` 仍为不可变 1.0.37。代码回滚只切不可变 Web 目录，不能恢复数据库。完整 1.0.43 生产证据见 [releases/1.0.43.md](./releases/1.0.43.md)，1.0.42 双节点/原生/下载历史见 [releases/1.0.42.md](./releases/1.0.42.md)。
+> 香港 Web current 为 `web-1.0.44-3e580c715a5a`，公网 Build ID 为 `1.0.44+3e580c715a5a`；香港 API、上海 Web/API、上海下载站与原生 stable 均为 1.0.44。香港 generation 14 的直接 Web previous 为 `web-1.0.43-fceca3eda51c`，API previous 为 `api-1.0.42-c24e6247d257`，`NRestarts=0`；公开 `/canary/previous/` 仍为不可变 1.0.37。代码回滚只切不可变 Web/API 目录，不能恢复数据库。完整 1.0.44 生产证据见 [releases/1.0.44.md](./releases/1.0.44.md)，1.0.43 Web-only 历史见 [releases/1.0.43.md](./releases/1.0.43.md)。
 
 ### `1.0.16` 存档冻结修复（双节点已上线）
 
