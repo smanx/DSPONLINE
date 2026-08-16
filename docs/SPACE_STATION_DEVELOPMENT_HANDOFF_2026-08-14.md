@@ -1,17 +1,19 @@
 # 全星系空间站扩展开发交接
 
 > 日期：2026-08-14；开发门禁完成：2026-08-15
-> 状态：隔离功能分支，未合并、未部署、未发布
-> 工作树：`D:\GameDev\DSPidle2-space-station`
-> 分支：`codex/space-station-expansion`
+> 状态：已合并进 1.0.45 候选分支，未部署、未发布
+> 原工作树：`D:\GameDev\DSPidle2-space-station`
+> 原分支：`codex/space-station-expansion`
+> 合并分支：`codex/1.0.45-space-station`（基于 1.0.44 release candidate）
 > 起始基线：`7393a7f18c66823bae00ae06093eb32e582a96e7`
 > 产品需求：[全星系空间站扩展设计与开发计划](./feedback/2026-08-14-全星系空间站扩展设计与开发计划.md)
+> 发布交接：[RELEASE_HANDOFF_1.0.45.md](./RELEASE_HANDOFF_1.0.45.md)
 
 ## 1. 交付结论
 
 本分支已经实现设计计划 M1-M5 的代码范围：全存档唯一空间站、三阶段施工、行星货运终端、量子库存手动交付、每日合同、徽记/声望、纯装饰画布、公共只读主页、独立隐私、收藏与固定通讯信号。星环、自由留言、交易、赠礼、实时在线和社交奖励均未实现，也不属于本次范围。
 
-这是供后续版本合并的开发成果，不是可以直接发布的候选。分支一旦保存普通档就会写出 GameState v47，因此设计计划 M0 的跨端兼容桥接仍是正式启用前的硬门禁。
+本分支已合并进 1.0.45 候选（`codex/1.0.45-space-station`），并补上了 M0 兼容桥接代码开关。正式发布前仍需 Release Agent 完成跨端桥接 rollout、全量 Playwright、真实 Linux、原生签名和隔离数据库演练。
 
 ## 2. 已实现范围
 

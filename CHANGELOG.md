@@ -4,6 +4,13 @@ All notable player-facing changes are recorded here. Game-state migration versio
 
 ## [Unreleased]
 
+### 1.0.45（候选）
+
+- 新增全星系唯一空间站：三阶段建设、轨道货运终端、量子手动交付、每日出口合同、轨道徽记/声望、装饰画布、公开只读主页与轻社交。
+- 普通存档升级到 GameState v47；服务端升级到 cloud schema v8 / SQLite layout v3。
+- 新增 M0 兼容桥接开关：`VITE_SPACE_STATION_ENABLED=false` 可构建不升级 v46 的桥接版。
+- 更新 Android 版本为 `1.0.45 / 1000045`。
+
 ## [1.0.39] - 2026-08-11
 
 - 服务端接受 1.0.38 合法 v46 稀疏传送带默认值和实体默认交互锁字段，同时继续拒绝显式空值、错误类型、非法范围与损坏 checksum；上传正文、云 revision、历史和下载内容不被规范化或改写。

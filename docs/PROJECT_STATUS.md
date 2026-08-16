@@ -1,10 +1,11 @@
 # DSP极简网络项目现状
 
+> **1.0.45 空间站扩展候选（2026-08-17，开发完成未发布）**：分支 `codex/1.0.45-space-station` 已从 1.0.44 release candidate 合并 `codex/space-station-expansion`，完成 M0-M5：全星系唯一空间站、三阶段建设、轨道货运终端、量子手动交付、每日合同、徽记/声望、装饰、公开主页和轻社交。版本为 `1.0.45 / Android 1000045`；默认启用并写入 GameState v47 / cloud schema v8 / SQLite layout v3。M0 桥接开关已实现：`VITE_SPACE_STATION_ENABLED=false` 可构建不升级 v46 的桥接版。完整交接见 [RELEASE_HANDOFF_1.0.45.md](./RELEASE_HANDOFF_1.0.45.md)。
 
 > **1.0.43 香港 Web 稳定热修（2026-08-14，已发布）**：香港 Web current 已原子切换到不可变 `web-1.0.43-fceca3eda51c` / Build ID `1.0.43+fceca3eda51c`，previous 为 `web-1.0.42-c24e6247d257`；香港 API 保持 `api-1.0.42-c24e6247d257`，上海 Web/API、上海下载页、Android/Windows stable 均保持 1.0.42。运行时/测试树 `6c2df9686031` 在不升级 GameState v46、envelope v2、cloud schema v7、SQLite layout v2 或 IndexedDB records 的前提下，将 v46 线路迁移降为保持原顺序的 O(E+B) 索引/分区，使用 Worker 完整检查导入/云恢复，并修复立即保存重复持久化、受控返回 cleanup 和增产剂 1 亿上限重载截断。最终源码/制品为 clean `fceca3eda51cf7e488e176e23c6119ba104b77fd`；旧 `1.0.43-a47eb33d0b84` 永久作废。两次受保护切换分别因物理绑定探针 TLS 超时和继承 manifest MIME 的错误预期安全回滚到 1.0.42；第三次 generation 13 切换、真实附件导入/保存/返回、PWA、健康和约 1 小时 47 分观察通过，API/数据库/上海/原生/下载页/玩家数据均未修改。完整证据见 [候选记录](./releases/1.0.43-candidate.md)、[Release Agent 交接](./RELEASE_HANDOFF_1.0.43.md) 与 [正式发布记录](./releases/1.0.43.md)。
 
 
-> **全星系空间站隔离开发（未合并、未发布）**：工作树 `D:\GameDev\DSPidle2-space-station`、分支 `codex/space-station-expansion` 在 1.0.42 源码基线上实现了全存档唯一空间站、三阶段施工、每行星唯一轨道货运终端、量子手动交付、3+1 每日合同、徽记/声望、纯装饰画布、公开只读主页及收藏/预设通讯信号。该分支写出 `GameState v47`，服务端开发态为 cloud schema v8 / SQLite layout v3；它不代表当前生产或 1.0.43 基线，且在 Web、Windows、Android 兼容桥接完成前禁止进入稳定发布。范围、冲突热点和后续合并门禁见 [空间站开发交接](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md)。
+> **历史：全星系空间站隔离开发分支（已合并进 1.0.45）**：原工作树 `D:\GameDev\DSPidle2-space-station`、分支 `codex/space-station-expansion` 在 1.0.42 源码基线上实现了全存档唯一空间站、三阶段施工、每行星唯一轨道货运终端、量子手动交付、3+1 每日合同、徽记/声望、纯装饰画布、公开只读主页及收藏/预设通讯信号。该分支写出 `GameState v47`，服务端开发态为 cloud schema v8 / SQLite layout v3；它不代表当前生产或 1.0.43 基线，且在 Web、Windows、Android 兼容桥接完成前禁止进入稳定发布。范围、冲突热点和后续合并门禁见 [空间站开发交接](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md)。
 
 > **当前生产与开发基线（2026-08-14）**：香港已经发布 `1.0.41+2e43f5644241` P0 热修，云 revision 裁剪从同步全库正文扫描改为事务触及 checksum 的定向回收；维护锁已解除，telemetry 202 熔断仍独立保留。微型黑洞显式运行字段也已上线，但无法无歧义判断既有 `true/true` 是玩家主动暂停还是历史异常，因此不自动开启玩家黑洞。上海仍是原始 1.0.41，原生 stable 未随热修改变。完整生产证据见 [1.0.41 发布记录](./releases/1.0.41.md)。1.0.42 已把该香港热修源码作为运行时父级，禁止回退到原始 `32daa4f…`。
 

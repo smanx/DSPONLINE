@@ -56,6 +56,40 @@ const release1043Copy = {
   },
 } as const;
 
+const release1045Copy = {
+  date: { "zh-CN": "2026年8月17日", en: "August 17, 2026" },
+  title: { "zh-CN": "全星系空间站扩展", en: "Global Orbital Station Expansion" },
+  summary: {
+    "zh-CN": "1.0.45 加入全星系唯一空间站：三阶段建设、轨道货运终端、量子手动交付、每日出口合同、徽记与声望、装饰画布，以及脱敏公开主页和轻社交。普通存档升级到 GameState v47，服务端升级到 cloud schema v8 / SQLite layout v3；同时提供 M0 桥接开关，可构建不升级 v46 的兼容版本。",
+    en: "Version 1.0.45 adds a single global orbital station: three-stage construction, planetary cargo terminals, manual quantum deliveries, daily export contracts, marks and reputation, a decoration canvas, plus a sanitized public profile and light social features. Normal saves upgrade to GameState v47 and the server moves to cloud schema v8 / SQLite layout v3. An M0 bridge switch is included so a compatible build can keep v46 saves unchanged.",
+  },
+  stationTitle: { "zh-CN": "全星系唯一空间站", en: "One orbital station for the whole save" },
+  stationDescription: {
+    "zh-CN": "空间站不属于任何单一行星；普通档首次生产宇宙矩阵后获得建设资格，按轨道核心、物资出口港、展示舱段依次施工。速通模式不开放。",
+    en: "The station is not tied to a single planet. Normal saves become eligible after the first universe matrix is produced, then build through core, export dock, and showcase stages. Speedrun mode is excluded.",
+  },
+  contractsTitle: { "zh-CN": "出口合同与双轨经济", en: "Export contracts and dual-track economy" },
+  contractsDescription: {
+    "zh-CN": "每日 3 份普通合同和 1 份特殊合同，最多同时接受 3 份；可通过轨道货运终端或量子库存手动交付。轨道徽记用于购买装饰，空间站声望只增不减并决定等级与容量。",
+    en: "Each day offers three normal contracts and one special contract with up to three active. Delivery uses cargo terminals or manual quantum inventory. Orbital marks buy decorations, while reputation only grows and drives station level and capacity.",
+  },
+  publicTitle: { "zh-CN": "脱敏公开主页与轻社交", en: "Sanitized public profile and light social" },
+  publicDescription: {
+    "zh-CN": "登录玩家可发布只读空间站主页，公开安全聚合指标、布局和精选成就，不暴露完整存档、库存或账号隐私；支持独立隐私开关、幂等收藏和固定通讯信号。",
+    en: "Signed-in players can publish a read-only station page with safe aggregate metrics, layout, and featured achievements, without exposing full saves, inventory, or account privacy. Independent privacy, idempotent favorites, and preset signals are included.",
+  },
+  bridgeTitle: { "zh-CN": "M0 兼容桥接", en: "M0 compatibility bridge" },
+  bridgeDescription: {
+    "zh-CN": "默认写入 GameState v47；设置 `VITE_SPACE_STATION_ENABLED=false` 可构建桥接版，读取 v46 时继续写 v46，读取 v47 时原样保留。",
+    en: "v47 is written by default. Set `VITE_SPACE_STATION_ENABLED=false` to build a bridge version that keeps v46 saves on v46 and preserves existing v47 saves.",
+  },
+  compatibilityTitle: { "zh-CN": "存档与在线协议版本升级", en: "Save and online protocol versions" },
+  compatibilityDescription: {
+    "zh-CN": "本版升级 GameState v47、cloud schema v8 与 SQLite layout v3；发布前必须先完成跨端桥接 rollout，回滚目标必须是能读取 v47 的桥接版。",
+    en: "This release upgrades GameState to v47, cloud schema to v8, and SQLite layout to v3. Cross-client bridge rollout must complete before stable release, and the rollback target must be a v47-capable bridge build.",
+  },
+} as const;
+
 const currentCopy = {
   date: { "zh-CN": "2026年8月15日", en: "August 15, 2026" },
   title: { "zh-CN": "超大工厂运行态与保存性能优化", en: "Large-factory Runtime and Save Performance" },
@@ -249,8 +283,12 @@ function message(locale: AppLocale, key: CopyKey): string {
   return copy[key][locale];
 }
 
-function currentMessage(locale: AppLocale, key: keyof typeof currentCopy): string {
+function release1044Message(locale: AppLocale, key: keyof typeof currentCopy): string {
   return currentCopy[key][locale];
+}
+
+function currentMessage(locale: AppLocale, key: keyof typeof release1045Copy): string {
+  return release1045Copy[key][locale];
 }
 
 function release1043Message(locale: AppLocale, key: keyof typeof release1043Copy): string {
@@ -264,16 +302,33 @@ function release1042Message(locale: AppLocale, key: keyof typeof release1042Copy
 /** Stable-key release copy; current text does not use the legacy DOM translation bridge. */
 export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteRecord {
   return {
-    id: "2026-08-15-v1.0.44",
+    id: "2026-08-17-v1.0.45",
     date: currentMessage(locale, "date"),
-    version: "1.0.44",
+    version: "1.0.45",
     title: currentMessage(locale, "title"),
     summary: currentMessage(locale, "summary"),
     items: [
-      { id: "worker-owned-large-save-runtime", title: currentMessage(locale, "runtimeTitle"), description: currentMessage(locale, "runtimeDescription") },
-      { id: "startup-recovery-and-projection", title: currentMessage(locale, "saveTitle"), description: currentMessage(locale, "saveDescription") },
-      { id: "command-palette-large-factory", title: currentMessage(locale, "macroTitle"), description: currentMessage(locale, "macroBroadcastDescription") },
-      { id: "save-compatibility", title: currentMessage(locale, "compatibilityTitle"), description: currentMessage(locale, "compatibilityDescription") },
+      { id: "global-orbital-station", title: currentMessage(locale, "stationTitle"), description: currentMessage(locale, "stationDescription") },
+      { id: "contracts-and-economy", title: currentMessage(locale, "contractsTitle"), description: currentMessage(locale, "contractsDescription") },
+      { id: "public-profile-and-social", title: currentMessage(locale, "publicTitle"), description: currentMessage(locale, "publicDescription") },
+      { id: "m0-bridge", title: currentMessage(locale, "bridgeTitle"), description: currentMessage(locale, "bridgeDescription") },
+      { id: "version-upgrade", title: currentMessage(locale, "compatibilityTitle"), description: currentMessage(locale, "compatibilityDescription") },
+    ],
+  };
+}
+
+export function getReleaseNotes1044(locale: AppLocale): LocalizedReleaseNoteRecord {
+  return {
+    id: "2026-08-15-v1.0.44",
+    date: release1044Message(locale, "date"),
+    version: "1.0.44",
+    title: release1044Message(locale, "title"),
+    summary: release1044Message(locale, "summary"),
+    items: [
+      { id: "worker-owned-large-save-runtime", title: release1044Message(locale, "runtimeTitle"), description: release1044Message(locale, "runtimeDescription") },
+      { id: "startup-recovery-and-projection", title: release1044Message(locale, "saveTitle"), description: release1044Message(locale, "saveDescription") },
+      { id: "command-palette-large-factory", title: release1044Message(locale, "macroTitle"), description: release1044Message(locale, "macroBroadcastDescription") },
+      { id: "save-compatibility", title: release1044Message(locale, "compatibilityTitle"), description: release1044Message(locale, "compatibilityDescription") },
     ],
   };
 }

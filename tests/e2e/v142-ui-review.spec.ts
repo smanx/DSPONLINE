@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
+const RELEASE_NOTE_ID = "2026-08-17-v1.0.45";
 
 function uiReviewFixture() {
   return ({ releaseNoteId, fontScale }: { releaseNoteId: string; fontScale: number }) => {
@@ -520,13 +520,13 @@ test("release notes preserve close and acknowledge actions at 360 by 480 and 200
   });
   const dialog = page.locator(".release-notes-dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog).toHaveAttribute("aria-label", "超大工厂运行态与保存性能优化");
-  await expect(dialog.locator(".release-notes-version strong")).toHaveText("1.0.44");
-  await expect(dialog.locator(".release-notes-scroll li")).toHaveCount(4);
-  await expect(dialog).toContainText("大存档全程由 Worker 作为权威");
-  await expect(dialog).toContainText("启动恢复与读取按需投影");
-  await expect(dialog).toContainText("超大工厂命令面板更流畅");
-  await expect(dialog).toContainText("存档与在线协议保持兼容");
+  await expect(dialog).toHaveAttribute("aria-label", "全星系空间站扩展");
+  await expect(dialog.locator(".release-notes-version strong")).toHaveText("1.0.45");
+  await expect(dialog.locator(".release-notes-scroll li")).toHaveCount(5);
+  await expect(dialog).toContainText("全星系唯一空间站");
+  await expect(dialog).toContainText("出口合同与双轨经济");
+  await expect(dialog).toContainText("脱敏公开主页与轻社交");
+  await expect(dialog).toContainText("M0 兼容桥接");
   const close = dialog.getByRole("button", { name: /关闭/ }).first();
   const acknowledge = dialog.getByRole("button", { name: /我知道了|开始/ }).last();
   for (const action of [close, acknowledge]) {

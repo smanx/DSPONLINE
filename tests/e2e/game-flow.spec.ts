@@ -7,7 +7,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-15-v1.0.44");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.45");
     }
   });
 }
@@ -163,17 +163,18 @@ test("dated release notes appear once and remain available from both settings sc
 
   const releaseNotes = page.locator(".release-notes-dialog");
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes).toHaveAttribute("aria-label", "超大工厂运行态与保存性能优化");
-  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.44");
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
-  await expect(releaseNotes).toContainText("大存档全程由 Worker 作为权威");
-  await expect(releaseNotes).toContainText("启动恢复与读取按需投影");
-  await expect(releaseNotes).toContainText("超大工厂命令面板更流畅");
-  await expect(releaseNotes).toContainText("存档与在线协议保持兼容");
+  await expect(releaseNotes).toHaveAttribute("aria-label", "全星系空间站扩展");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.45");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
+  await expect(releaseNotes).toContainText("全星系唯一空间站");
+  await expect(releaseNotes).toContainText("出口合同与双轨经济");
+  await expect(releaseNotes).toContainText("脱敏公开主页与轻社交");
+  await expect(releaseNotes).toContainText("M0 兼容桥接");
 
   await releaseNotes.getByRole("button", { name: "查看历史版本" }).click();
   const releaseHistory = releaseNotes.getByRole("navigation", { name: "版本列表" });
   await expect(releaseHistory).toBeVisible();
+  await releaseNotes.getByRole("button", { name: "下一页版本" }).click();
   await releaseHistory.getByRole("button", { name: /1\.0\.42 · 界面适配、存档恢复与规则更新/ }).click();
   await expect(releaseNotes).toHaveAttribute("aria-label", "界面适配、存档恢复与规则更新");
   await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.42");
@@ -191,9 +192,9 @@ test("dated release notes appear once and remain available from both settings sc
   await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-history-1440.png", fullPage: true });
   await releaseNotes.getByRole("button", { name: "查看历史版本" }).click();
   await releaseNotes.getByRole("button", { name: "返回当前版本" }).click();
-  await expect(releaseNotes).toHaveAttribute("aria-label", "超大工厂运行态与保存性能优化");
-  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.44");
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
+  await expect(releaseNotes).toHaveAttribute("aria-label", "全星系空间站扩展");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.45");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
   await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v143-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -231,16 +232,16 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-15-v1.0.44");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-17-v1.0.45");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年8月15日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年8月17日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes).toHaveAttribute("aria-label", "超大工厂运行态与保存性能优化");
-  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.44");
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
+  await expect(releaseNotes).toHaveAttribute("aria-label", "全星系空间站扩展");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.45");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
   await page.locator(".start-menu-primary").click();
@@ -250,9 +251,9 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(operations.getByRole("button", { name: "查看版本更新记录" })).toBeVisible();
   await operations.getByRole("button", { name: "查看版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes).toHaveAttribute("aria-label", "超大工厂运行态与保存性能优化");
-  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.44");
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
+  await expect(releaseNotes).toHaveAttribute("aria-label", "全星系空间站扩展");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.45");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v143-844x390.png", fullPage: true });
@@ -2871,7 +2872,7 @@ test("purple matrix industry exposes its full recipe and four-color research loo
   const researchSpeed = page.locator(".technology-node").filter({ has: page.getByText("科研速度 I", { exact: true }) });
   await researchSpeed.click();
   await expect(page.locator(".research-focus")).toContainText("科研速度 I");
-  await expect(page.locator(".research-cost-list > span")).toHaveCount(4);
+  await expect(page.locator(".research-cost-list > span")).toHaveCount(5);
   await page.screenshot({ path: "artifacts/qa/purple-technology-1440.png", fullPage: true });
 });
 
@@ -4630,7 +4631,7 @@ test("box selection copies, pastes, moves and upgrades a production blueprint", 
   await page.getByLabel("复制所选为蓝图").click();
   await expect(page.locator(".blueprint-placement-cursor")).toContainText("蓝图 01");
   await page.locator(".react-flow__pane").click({ position: { x: 700, y: 100 } });
-  await expect(page.locator(".machine-node")).toHaveCount(4);
+  await expect(page.locator(".machine-node")).toHaveCount(5);
   await expect(page.locator(".react-flow__edge")).toHaveCount(2);
   await expect(page.locator(".game-notice")).toContainText("部署完成");
 

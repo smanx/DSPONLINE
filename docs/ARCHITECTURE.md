@@ -1,5 +1,6 @@
 # 系统架构
 
+> **1.0.45 空间站扩展候选（2026-08-17）**：`codex/1.0.45-space-station` 已合并 `codex/space-station-expansion`，启用 GameState v47 / cloud schema v8 / SQLite layout v3。默认开启全星系空间站；M0 桥接开关 `VITE_SPACE_STATION_ENABLED=false` 可构建不升级 v46 的桥接版。完整发布交接见 [RELEASE_HANDOFF_1.0.45.md](./RELEASE_HANDOFF_1.0.45.md)。
 
 > **1.0.44 本地存档目录开发态（未发布）**：IndexedDB 继续使用 version 2 与同一个 `records` store，存档正文仍是既有 `value: string`。每份正文旁增加小型 catalog side-record，和 payload/revision 在同一事务提交并绑定精确 UTF-8 byte length、正文 checksum 与 revision。启动只枚举 key 和读取小记录，禁止 `records.getAll()`；主页持有 handle/summary 而不保留 raw，只有玩家选择继续、槽位或恢复源后才逐份读取并在 inspection Worker 做完整解析和 checksum 核对。旧记录按 key 一次一份在 catalog Worker 完整 `JSON.parse` 后后台建索引，写入前再次读取并核对原文与 revision；Worker 不可用只允许带诊断的同步兼容回退。主档损坏仍按 primary → backup → snapshot 的既有顺序惰性回退，原 writer lease、fencing、CAS、冲突双副本与逐字读回合同不变；正文 LRU 只保留最多两个显式选中的 payload，主页 idle 为零。存档索引与云账号面板都位于动态加载边界，避免把 catalog builder 或云端管理代码重新并入菜单静态闭包。
 
@@ -8,7 +9,7 @@
 > **1.0.43 超大存档热修候选（2026-08-14，未部署）**：`storage.ts` 在补齐历史初始矿脉后建立 first-match 实体索引与独立 first-match 物质投递枢纽索引，保持“全量端口归一 → 全量线路过滤 → 退款”三阶段和原始数组顺序；accepted/rejected 按对象 occurrence 分区，避免重复 belt id 被误去重，黑洞端口仍只在端点/行星校验通过后按首条有效线占用。`saveInspection.ts` 负责主线程 Worker 调度，Worker 自身只导入纯检查路径，避免构建入口环；无 Worker 时回退同一 `inspectSave`。备份对旧主档只做一次完整结构检查，再以绑定原文的 `{ raw, checksumValid }` proof 配合逐字持久读回，既不弱化完整性，也不在 IDB flush 期间保留迁移后的大对象图。立即保存只走一次 verified commit；返回主页以 game identity、pending debt、submission id 和 viewport signature 判断是否需要最终 cleanup。协议与数据库版本均不变。
 
 
-> **全星系空间站扩展是隔离开发态，不是发布基线。** 分支 `codex/space-station-expansion` 使用 `GameState v47 / envelope v2 / cloud schema v8 / SQLite layout v3`；当前生产与并行 1.0.43 工作仍应按各自文档判断。正式合并前必须重新编号任何已被占用的版本，并完成 Web、Windows、Android 前向读取桥接。
+> **全星系空间站扩展已合并进 1.0.45 候选。** 原 `codex/space-station-expansion` 基于 1.0.42；合并后已重新基于 1.0.44 release candidate，并保留 GameState v47 / envelope v2 / cloud schema v8 / SQLite layout v3。M0 前向读取桥接已通过代码开关实现，正式发布前仍需 release agent 完成跨端 rollout 门禁。
 
 
 
@@ -20,7 +21,7 @@
 
 > **1.0.38 正式基线（2026-08-11）**：保存/云上传/离线/纯挂机采用 Worker 权威序列化与可转移缓冲区，传送带、生产、电力和量子物流复用稳定运行时批次，持久存档使用兼容的稀疏 v46 JSON；1.0.37 的资源目录修复、离线决策、科技树和星图批量入口继续全量保留。正式构建继续使用 `GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`，没有数据库或排行榜迁移；两地直接代码回滚为完整 1.0.37。
 
-## 全星系空间站扩展边界（隔离开发）
+## 全星系空间站扩展边界（1.0.45）
 
 - 新玩法只写 `GameState.orbitalStation`，不会读取、迁移或清空历史 `systemSpaceStations`、`galacticHubNetwork` 或银河出口记录。速通模式得到规范空状态且没有入口。
 - 三阶段成本快照、合同板、徽记/声望、装饰收藏、布局、档案和独立视口属于全局空间站；四个输入口、绑定、缓存、分配游标和累计上传属于各行星 `orbital_cargo_terminal` 实体。
@@ -30,7 +31,7 @@
 - SQLite layout v3 将 `station_profiles`、`station_favorites`、`station_signals`、`station_moderation` 与 `app_state`、云存档正文分离；v2→v3 迁移不重写云 payload/blob 行。
 - 公开主页可见性与 `leaderboardVisible` 独立。收藏、通讯信号和访问不进入 GameState、模拟哈希、奖励或排行榜公式。
 
-完整模块所有权、迁移与合并门禁见 [空间站开发交接](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md)。
+完整模块所有权、迁移与合并门禁见 [空间站开发交接](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md) 与 [1.0.45 发布交接](./RELEASE_HANDOFF_1.0.45.md)。
 
 ## 1. 总体拓扑
 

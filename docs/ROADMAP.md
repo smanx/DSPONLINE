@@ -1,14 +1,14 @@
 # 公开测试版后续路线图
 
-## 全星系空间站扩展（隔离开发完成度，尚未进入发布线）
+## 全星系空间站扩展（1.0.45 候选，开发合并完成）
 
+- [x] M0：兼容桥接开关与新状态骨架；`VITE_SPACE_STATION_ENABLED=false` 可构建不升级 v46 的桥接版。
 - [x] M1-M3：全局空间站状态、三阶段建设、轨道货运终端、量子手动交付、每日合同、双轨经济、装饰收藏与独立画布。
 - [x] M4-M5：脱敏公开快照、独立隐私、排行榜访问入口、只读直达页、收藏、固定通讯信号、管理撤下和独立 SQLite 表。
-- [ ] 把并行 1.0.43 存档优化合并到共同主线后重新基于最新版本，解决 `types/storage/App/server/index/save-field-contract/package` 冲突并重新编号版本。
-- [ ] 先交付并覆盖验证一个能读取和原样保留新状态、但不启用写入的 Web/Windows/Android 兼容桥接版本；桥接完成前不得开放空间站。
-- [ ] 在最终合并提交上重跑高风险发布矩阵、原生覆盖升级、真实设备和隔离 SQLite 迁移；没有独立发布授权不得部署。
+- [x] 基于最新 1.0.44 release candidate 完成合并，解决 `types/storage/App/server/index/save-field-contract/package` 冲突并统一为 GameState v47 / cloud schema v8 / SQLite layout v3。
+- [ ] Release Agent 完成跨端桥接 rollout、全量 Playwright、真实 Linux / 原生签名 / 覆盖升级和隔离 SQLite 迁移后发布。
 
-实现交接见 [SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md)。星环仍不在本轮范围。
+实现交接见 [SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md) 与 [RELEASE_HANDOFF_1.0.45.md](./RELEASE_HANDOFF_1.0.45.md)。星环仍不在本轮范围。
 
 > **方向变更（2026-07-31，历史决策）**：终局物流性能工作改为量子物流网络；当时开发状态为 GameState v44。当前 1.0.40 候选继续使用 GameState v46，有效资产的 v43 空间站实验存档仍不迁入共享池，传统物流站升级入口继续作为兼容面维护。详见 [量子物流网络开发 Agent 提示词](./QUANTUM_LOGISTICS_NETWORK_AGENT_PROMPT.md)。
 

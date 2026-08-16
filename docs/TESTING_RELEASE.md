@@ -1,5 +1,6 @@
 # 测试与发布基线
 
+> **1.0.45 空间站扩展候选门禁（2026-08-17，合并后）**：`codex/1.0.45-space-station` 合并完成。当前工作树实测：typecheck ✅；production build ✅；Vitest 168 文件通过 / 7 跳过、1406 项通过 / 20 跳过 / 0 失败；server 357 通过 / 2 跳过 + station-profile 3/3；ops 56 通过 / 6 跳过；native 24/24；空间站 E2E 5/5。全量 Playwright 以发布 agent 最终门禁结果为准。详见 [RELEASE_HANDOFF_1.0.45.md](./RELEASE_HANDOFF_1.0.45.md)。
 
 > **测试运行优化（2026-08-17）**：为缩短全量测试时间，已启用 E2E 并行 worker（本地 4 / CI 2）、server 测试并发 4、ops 测试并发 2，并把 `ci.yml` 拆为 `unit` / `server-ops-native` / `build` / `e2e` 四个并行 job。新增快速脚本：`npm run test:quick`、`npm run test:unit:fast`、`npm run test:changed`、`npm run test:e2e:fast`；Playwright 报告升级为 `list + html + json`（`playwright-report/`、`test-results/playwright-report.json`）。Vitest 因 Windows 大套件内存崩溃约束仍保持 `maxWorkers=1`；发布门禁 `release-gate.yml` 保持全量串行保证确定性。完整说明见 [RELEASE_RUNBOOK_CHECKS.md](./RELEASE_RUNBOOK_CHECKS.md) 第 9 节。
 
@@ -8,7 +9,7 @@
 > `1.0.43` 超大存档热修已完成香港 Web-only 稳定发布：最终 clean source `fceca3eda51cf7e488e176e23c6119ba104b77fd`，runtime/test tree `6c2df9686031fa1db68b1d862f33364cbbae95a6`，Build ID `1.0.43+fceca3eda51c`。完整 Vitest 为 1,238/18、同 runtime/test tree 完整 Chromium 为 356/8、0 失败；final-tip clean build 为 1,929 modules，production-preview PWA 3/3，Web 归档 122/122。只读真实附件 36,704,109 bytes 的初次检查 437 ms，本机/生产 UI 旅程验证导入预览、确认进入、manual revision/backup、受控返回和重载正确性；源 bytes/SHA 前后不变。香港 generation 13 current 为 `web-1.0.43-fceca3eda51c`，previous 为 1.0.42；API、数据库、上海、原生、下载页和玩家生产数据均未修改。注意：受控 Continue→Pause 仍耗时 20,887 ms，Long Task 峰值 20,291 ms，运行态近乎不可玩的反馈未由 1.0.43 解决，已升级为 1.0.44 P0。
 
 
-> **全星系空间站隔离开发门禁（2026-08-15，未合并、未发布）**：分支 `codex/space-station-expansion` 在独立工作树完成 GameState v47 / cloud schema v8 / SQLite layout v3 的 M1-M5 实现。最终 typecheck 与 production build 通过，Vite 1,938 模块，startup 187,053 B gzip、menu 283,308 B、forbidden 0；Vitest 145 文件通过/6 文件跳过、1,269/18；server 核心 357/2 加空间站 3/3；ops 55/6；native 24/24；125 个运行时许可证；完整 Chromium 358/9（367 总项、991.1 秒），全部 0 失败。空间站专项 5/5 已包含桌面/移动、公开直达和隐私覆盖。展开 API 包以临时 SQLite 启动，账号归档兼容 schema 7/8。全部写测试使用合成账号和临时库，没有生产、玩家存档、部署或原生发布操作；真实 Linux、跨端兼容桥接、Firefox/WebKit、PWA production-preview 与签名制品仍须在最终合并候选重跑。详见 [空间站开发交接](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md)。
+> **历史：全星系空间站隔离开发门禁（已合并进 1.0.45）**：原分支 `codex/space-station-expansion` 在独立工作树完成 GameState v47 / cloud schema v8 / SQLite layout v3 的 M1-M5 实现。最终 typecheck 与 production build 通过，Vite 1,938 模块，startup 187,053 B gzip、menu 283,308 B、forbidden 0；Vitest 145 文件通过/6 文件跳过、1,269/18；server 核心 357/2 加空间站 3/3；ops 55/6；native 24/24；125 个运行时许可证；完整 Chromium 358/9（367 总项、991.1 秒），全部 0 失败。空间站专项 5/5 已包含桌面/移动、公开直达和隐私覆盖。展开 API 包以临时 SQLite 启动，账号归档兼容 schema 7/8。全部写测试使用合成账号和临时库，没有生产、玩家存档、部署或原生发布操作；真实 Linux、跨端兼容桥接、Firefox/WebKit、PWA production-preview 与签名制品仍须在最终合并候选重跑。详见 [空间站开发交接](./SPACE_STATION_DEVELOPMENT_HANDOFF_2026-08-14.md)。
 
 
 

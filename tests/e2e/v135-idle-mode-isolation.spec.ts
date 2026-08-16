@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
+const RELEASE_NOTE_ID = "2026-08-17-v1.0.45";
 
 async function prepare(page: import("@playwright/test").Page): Promise<void> {
   await page.addInitScript((releaseNoteId) => {
