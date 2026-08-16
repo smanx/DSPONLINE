@@ -111,6 +111,8 @@ test("verified primary saves use IndexedDB and selected snapshots can be managed
   await page.goto("/?menu=1&storageMigration=production");
   await page.getByRole("button", { name: /开始游戏/ }).click();
   await expect(page.locator(".factory-canvas")).toBeVisible();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"))).toBeNull();
   await expect.poll(() => page.evaluate(async () => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -141,9 +143,12 @@ test("verified primary saves use IndexedDB and selected snapshots can be managed
   await expect(manualRows).toHaveCount(0);
 
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload") !== null)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload"))).toBeNull();
   await page.reload();
   await expect(page.locator(".start-menu")).toBeVisible();
+  await page.locator(".start-menu-primary").click();
+  await expect(page.locator(".factory-canvas")).toBeVisible();
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload"))).toBeNull();
 });
 

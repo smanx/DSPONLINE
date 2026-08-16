@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { createInitialState, placeBuilding, setEntityRecipe } from "../../src/game/engine";
+import { serializeEnvelope } from "../../src/game/storage";
 
 const RELEASE_NOTE_ID = "2026-08-15-v1.0.44";
 
@@ -71,6 +73,41 @@ async function openGame(page: Page, path = "/") {
   await expect(page.locator(".factory-canvas")).toBeVisible();
 }
 
+function createDurableLockFixture(): string {
+  let state = createInitialState(101_440);
+  state.paused = true;
+  state.construction.arc_smelter = 1;
+  state.research.completedTechIds = [...new Set([...state.research.completedTechIds, "electromagnetism"])];
+  state = placeBuilding(state, "arc_smelter", { x: 40, y: -180 });
+  const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter");
+  if (!smelter) throw new Error("durable lock fixture did not create a smelter");
+  smelter.id = "smelter";
+  state = setEntityRecipe(state, smelter.id, "magnet");
+  state.entities.find((entity) => entity.id === smelter.id)!.inputs.iron_ore = 10_000;
+  return serializeEnvelope(state, Date.now(), "primary", undefined, undefined, "main");
+}
+
+async function seedDurableLockState(page: Page): Promise<void> {
+  const saveRaw = createDurableLockFixture();
+  await page.addInitScript(({ releaseNoteId, initialSaveRaw }) => {
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", releaseNoteId);
+    window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
+    window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, completedEvents: [], skipped: true }));
+    window.localStorage.setItem("dsp-idle-network.save.v1", initialSaveRaw);
+  }, { releaseNoteId: RELEASE_NOTE_ID, initialSaveRaw: saveRaw });
+}
+
+async function enterDurableGame(page: Page): Promise<void> {
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.getByRole("button", { name: "进入工厂", exact: true }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
+  await dismissOnboarding(page);
+  await expect(page.locator(".factory-canvas")).toBeVisible();
+}
+
 function rgbLuminance(value: string): number {
   const channels = value.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
   return channels.reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
@@ -125,9 +162,12 @@ test("exact-value tooltip and classic progress share one visible value", async (
 });
 
 test("building lock persists, protects commands and turns a body drag into canvas pan", async ({ page }) => {
-  await seedUiState(page);
+  await seedDurableLockState(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await openGame(page);
+  await page.goto("/?menu=1");
+  await enterDurableGame(page);
+  const shell = page.locator(".game-shell");
+  const recoverySequence = Number(await shell.getAttribute("data-runtime-recovery-sequence"));
   let smelter = page.locator('.react-flow__node[data-id="smelter"]');
   await smelter.locator(".factory-node__header").click();
   await page.getByLabel("锁定所选建筑").click();
@@ -143,14 +183,9 @@ test("building lock persists, protects commands and turns a body drag into canva
   await page.mouse.move(box!.x + box!.width / 2 + 90, box!.y + Math.min(box!.height - 20, 82) + 35, { steps: 8 });
   await page.mouse.up();
   await expect.poll(() => page.locator(".react-flow__viewport").getAttribute("style")).not.toBe(beforeViewport);
-
-  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
-  await expect.poll(() => page.evaluate(() => {
-    const payload = JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1") ?? "{}");
-    return payload.state?.entities?.find((entity: { id: string }) => entity.id === "smelter")?.interactionLocked;
-  })).toBe(true);
+  await expect.poll(async () => Number(await shell.getAttribute("data-runtime-recovery-sequence")), { timeout: 15_000 }).toBeGreaterThan(recoverySequence);
   await page.reload();
-  await dismissOnboarding(page);
+  await enterDurableGame(page);
   smelter = page.locator('.react-flow__node[data-id="smelter"]');
   await expect(smelter.locator(".factory-node--locked")).toBeVisible();
   await smelter.locator(".factory-node__header").click();

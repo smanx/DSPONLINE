@@ -47,13 +47,17 @@ test("an orphaned time-warp budget is converted to one ordinary offline interval
 
   const persisted = await page.evaluate(async () => {
     const storage = await import("/src/game/storage.ts");
-    const loaded = storage.loadGameDeferredOffline();
+    const localStore = await import("/src/game/localSaveStore.ts");
+    const raw = await localStore.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    const inspection = raw ? storage.inspectSave(raw) : null;
+    if (!inspection?.state) throw new Error("durable primary save is missing after offline settlement");
+    const state = inspection.state;
     return {
-      elapsedSeconds: loaded.state.elapsedSeconds,
-      enabled: loaded.state.timeWarp.enabled,
-      pendingWallSeconds: loaded.state.timeWarp.pendingWallSeconds,
-      pendingSimulationSeconds: loaded.state.timeWarp.pendingSimulationSeconds,
-      currentRunStartedAt: loaded.state.idleSettlement.currentRunStartedAt,
+      elapsedSeconds: state.elapsedSeconds,
+      enabled: state.timeWarp.enabled,
+      pendingWallSeconds: state.timeWarp.pendingWallSeconds,
+      pendingSimulationSeconds: state.timeWarp.pendingSimulationSeconds,
+      currentRunStartedAt: state.idleSettlement.currentRunStartedAt,
     };
   });
   expect(persisted.enabled).toBe(false);
@@ -103,11 +107,16 @@ test("an unavailable recovery journal offers explicit checkpoint recovery and pr
   await recovery.getByRole("button", { name: "恢复检查点并快速结算" }).click();
   await expect(page.locator(".game-shell")).toBeVisible({ timeout: 60_000 });
   const settled = await page.evaluate(async () => {
-    const loaded = (await import("/src/game/storage.ts")).loadGameDeferredOffline();
+    const storage = await import("/src/game/storage.ts");
+    const localStore = await import("/src/game/localSaveStore.ts");
+    const raw = await localStore.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    const inspection = raw ? storage.inspectSave(raw) : null;
+    if (!inspection?.state) throw new Error("durable primary save is missing after recovery settlement");
+    const state = inspection.state;
     return {
-      elapsedSeconds: loaded.state.elapsedSeconds,
-      pendingWallSeconds: loaded.state.timeWarp.pendingWallSeconds,
-      pendingSimulationSeconds: loaded.state.timeWarp.pendingSimulationSeconds,
+      elapsedSeconds: state.elapsedSeconds,
+      pendingWallSeconds: state.timeWarp.pendingWallSeconds,
+      pendingSimulationSeconds: state.timeWarp.pendingSimulationSeconds,
     };
   });
   expect(settled.pendingWallSeconds).toBe(0);

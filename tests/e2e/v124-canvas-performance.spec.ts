@@ -1,8 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { selectSettingsCategory } from "./settings-helpers";
 
-function seedDensePausedFactory() {
-  return () => {
+function seedDensePausedFactory(canvasDetail: "minimal" | null = null) {
     const entities = Array.from({ length: 80 }, (_, index) => ({
       id: `canvas-machine-${index}`,
       kind: "machine",
@@ -57,25 +56,26 @@ function seedDensePausedFactory() {
     window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
     window.localStorage.setItem("dsp-idle-network.endgame-extreme-ack.v1", "true");
     window.localStorage.removeItem("dsp-idle-network.canvas-performance-features.v1");
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
-  };
+    if (canvasDetail) window.localStorage.setItem("dsp-idle-network.ui.canvas-detail.v1", canvasDetail);
+  window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
 }
 
 test("extreme canvas uses true node LOD, batch lines and independent SVG fallback", async ({ page }) => {
   const runtimeErrors: string[] = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
-  await page.addInitScript(seedDensePausedFactory());
+  await page.addInitScript(seedDensePausedFactory, "minimal");
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
 
   const shell = page.locator(".game-shell");
   const canvas = page.locator(".factory-canvas");
   await expect(shell).toHaveAttribute("data-endgame-extreme", "true");
+  await expect(shell).toHaveAttribute("data-canvas-detail-stage", "compact");
   await expect(canvas).toHaveAttribute("data-batch-renderer", "true");
   await expect(canvas).toHaveAttribute("data-minimap-throttled", "true");
   await expect(page.locator("canvas.canvas-belt-layer")).toBeVisible();
   await expect(page.locator(".canvas-minimap-snapshot canvas")).toBeVisible();
-  await expect(page.locator(".factory-node-lod--medium").first()).toBeVisible();
+  await expect(page.locator(".factory-node-compact").first()).toBeVisible();
 
   const readBatch = () => page.locator("canvas.canvas-belt-layer").evaluate((element) => {
     const canvasElement = element as HTMLCanvasElement;
@@ -105,7 +105,7 @@ test("extreme canvas uses true node LOD, batch lines and independent SVG fallbac
   const firstNode = page.locator(".react-flow__node").first();
   await firstNode.click();
   await expect(firstNode).toHaveClass(/selected/);
-  await expect(firstNode.locator(".factory-node-lod")).toHaveCount(0);
+  await expect(firstNode.locator(".factory-node-compact")).toHaveCount(0);
   await expect(firstNode.locator(".machine-node")).toBeVisible();
   const viewportBefore = await page.locator(".react-flow__viewport").getAttribute("style");
 
@@ -126,7 +126,7 @@ test("extreme canvas uses true node LOD, batch lines and independent SVG fallbac
 });
 
 test("turning extreme mode off restores full visuals without writing a GameState field", async ({ page }) => {
-  await page.addInitScript(seedDensePausedFactory());
+  await page.addInitScript(seedDensePausedFactory);
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/");
   await page.locator(".react-flow__node").first().click();
@@ -151,7 +151,7 @@ test("turning extreme mode off restores full visuals without writing a GameState
 });
 
 test("performance monitoring samples paused canvas percentiles and render attribution on demand", async ({ page }) => {
-  await page.addInitScript(seedDensePausedFactory());
+  await page.addInitScript(seedDensePausedFactory);
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/");
   await page.getByLabel("打开设置").click();
@@ -171,7 +171,7 @@ test("performance monitoring samples paused canvas percentiles and render attrib
 });
 
 test("minimap throttle can independently fall back without resetting the viewport", async ({ page }) => {
-  await page.addInitScript(seedDensePausedFactory());
+  await page.addInitScript(seedDensePausedFactory);
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/");
   const minimapCanvas = page.locator(".canvas-minimap-snapshot canvas");
@@ -209,7 +209,7 @@ test("canvas failures automatically restore the complete React Flow renderers", 
       return original.apply(this, args as never);
     } as typeof HTMLCanvasElement.prototype.getContext;
   });
-  await page.addInitScript(seedDensePausedFactory());
+  await page.addInitScript(seedDensePausedFactory);
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/");
 

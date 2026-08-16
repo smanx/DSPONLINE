@@ -34,7 +34,7 @@ export function MobileGameShell({ enabled, layout, game, alertCount, planetAlert
   onOpenCommandPalette: () => void;
   onBack: () => void;
   onTogglePause: () => void;
-  onPlanetChange: (planetId: PlanetId) => void;
+  onPlanetChange: (planetId: PlanetId) => boolean;
   onConfirmExit: () => void;
   onDismissExit: () => void;
   onRequestExit: () => void;

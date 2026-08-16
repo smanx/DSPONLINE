@@ -535,9 +535,14 @@ function useThrottledRuntimeShellGame(game: GameState, immediate = false): GameS
   const latestRef = useRef(game);
   const timerRef = useRef<number | null>(null);
   latestRef.current = game;
+  const cargoChanged = snapshot.cargo?.itemId !== game.cargo?.itemId ||
+    snapshot.cargo?.amount !== game.cargo?.amount ||
+    snapshot.cargo?.origin?.kind !== game.cargo?.origin?.kind ||
+    snapshot.cargo?.origin?.id !== game.cargo?.origin?.id;
+  const publishImmediately = immediate || cargoChanged;
 
   useEffect(() => {
-    if (immediate) {
+    if (publishImmediately) {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
       timerRef.current = null;
       setSnapshot(game);
@@ -548,12 +553,15 @@ function useThrottledRuntimeShellGame(game: GameState, immediate = false): GameS
       timerRef.current = null;
       setSnapshot(latestRef.current);
     }, 750);
-  }, [game, immediate]);
+  }, [game, publishImmediately]);
 
   useEffect(() => () => {
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
   }, []);
-  return immediate ? game : snapshot;
+  return publishImmediately ? game : snapshot;
 }
 
 // Run-log visibility is a presentation preference. Keep safety-critical
@@ -968,6 +976,12 @@ interface SimulationSubmission {
   requiresCheckpointBarrier?: boolean;
 }
 
+interface DeferredDurableUiSubmission {
+  request: SimulationWorkerRequest;
+  submission: SimulationSubmission;
+  onFailure: (error: unknown) => void;
+}
+
 interface SimulationCheckpointAccumulator {
   base: Omit<GameState, "entities" | "belts"> | null;
   entityCount: number;
@@ -1268,6 +1282,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [rewardFlights, setRewardFlights] = useState<RewardFlight[]>([]);
   const [planetTransition, setPlanetTransition] = useState<PlanetTransition | null>(null);
   const [simulationWorkerActive, setSimulationWorkerActive] = useState(false);
+  const [initialSimulationWorkerReady, setInitialSimulationWorkerReady] = useState(() => typeof Worker === "undefined");
   const [simulationWorkerGeneration, setSimulationWorkerGeneration] = useState(0);
   const [pageHidden, setPageHidden] = useState(document.visibilityState === "hidden");
   const [lowFrameRateMode, setLowFrameRateMode] = useState(false);
@@ -1412,7 +1427,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   } | null>(null);
   const blockCanvasTouchRef = useRef(false);
   const syntheticTouchCancelRef = useRef(false);
-  const connectRequestRef = useRef<(connection: Connection, tier?: BeltTier) => void>(() => undefined);
+  const connectRequestRef = useRef<(connection: Connection, tier?: BeltTier) => boolean>(() => false);
   const connectionDraftRef = useRef<ConnectionDraft | null>(null);
   const connectionCandidateNodeIdRef = useRef<string | null>(null);
   const suppressConnectionClickRef = useRef(false);
@@ -1458,6 +1473,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const durableRecoveryFinalizeReadyRef = useRef<number | null>(null);
   const durableRecoveryStageInFlightRef = useRef(false);
   const durableRecoveryStageRequestRef = useRef<{ simulationSeconds: number; wallSeconds: number } | null>(null);
+  // The initial simulation Worker install has the same state as the verified
+  // recovery head, but it can still be awaiting its first response when the
+  // player performs an edit. Stage that edit immediately, then post it only
+  // after the install response has made the Worker ready to advance.
+  const deferredDurableUiSubmissionRef = useRef<DeferredDurableUiSubmission | null>(null);
   const dispatchDurableUiCommandRef = useRef<() => void>(() => undefined);
   const durablePrimarySaveInFlightRef = useRef(false);
   const rejectPlayerStateEditDuringPrimarySave = useCallback((): boolean => {
@@ -1725,8 +1745,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   });
   useEffect(() => {
     const canvas = factoryCanvasRef.current;
-    const flow = canvas?.querySelector<HTMLElement>(".react-flow") ?? canvas;
-    if (!flow || typeof ResizeObserver === "undefined") return;
+    if (!canvas || typeof ResizeObserver === "undefined") return;
     let frame = 0;
     const observer = new ResizeObserver(([entry]) => {
       const nextSize = { width: entry.contentRect.width, height: entry.contentRect.height };
@@ -1753,12 +1772,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         void setViewport(preserved, { duration: 0 });
       });
     });
-    observer.observe(flow);
+    observer.observe(canvas);
     return () => {
       window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [coarsePointer, nextMobileShell, setViewport]);
+  }, [coarsePointer, initialSimulationWorkerReady, nextMobileShell, setViewport]);
 
   useEffect(() => {
     if (mobilePerformanceMode || nextMobileShell) setMinimapCollapsed(true);
@@ -1865,7 +1884,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       gameRef.current = next;
       setGame(next);
       if (durableRecoveryLifecycleRef.current === "active") {
-        window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+        dispatchDurableUiCommandRef.current();
       }
     };
     void refresh();
@@ -2100,7 +2119,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         return false;
       }
     }
-    if (durableRecoveryStageInFlightRef.current || simulationSubmissionRef.current) {
+    const activeSubmission = simulationSubmissionRef.current;
+    const canDeferBehindInitialInstall = activeSubmission?.kind === "initialize";
+    if (durableRecoveryStageInFlightRef.current || (activeSubmission && !canDeferBehindInitialInstall)) {
       onStageFailure(new Error("已有 durable simulation operation 正在等待回执"));
       return false;
     }
@@ -2145,17 +2166,33 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       submission.durableIntent = intent;
       submission.requiresCheckpointBarrier = result.proof.requiresCheckpointBarrier === true;
-      simulationRequestIdRef.current = request.id;
-      simulationSubmissionRef.current = submission;
       durableRecoveryStageInFlightRef.current = false;
       durableRecoveryStageRequestRef.current = null;
+      const activeInitialInstall = simulationSubmissionRef.current;
       const worker = simulationWorkerRef.current;
+      if (activeInitialInstall?.kind === "initialize" || !worker) {
+        // Strict Mode can replace the first state-transfer request while the
+        // persistence Worker is staging. Keep the intent behind whichever
+        // initial install currently owns the simulation Worker. A cleanup gap
+        // also keeps the intent pending for the replacement install.
+        deferredDurableUiSubmissionRef.current = {
+          request,
+          submission,
+          onFailure: onStageFailure,
+        };
+        return;
+      }
+      if (simulationSubmissionRef.current) throw new Error("durable stage 完成时模拟 Worker 已切换到其他操作");
       if (!worker || simulationWorkerDisabledRef.current) throw new Error("模拟 Worker 在 durable stage 后不可用");
+      simulationRequestIdRef.current = request.id;
+      simulationSubmissionRef.current = submission;
       worker.postMessage(request);
     }).catch((error) => {
       durableRecoveryStageInFlightRef.current = false;
       durableRecoveryStageRequestRef.current = null;
-      simulationSubmissionRef.current = null;
+      if (simulationSubmissionRef.current === submission) {
+        simulationSubmissionRef.current = null;
+      }
       onStageFailure(error);
     });
     return true;
@@ -2163,7 +2200,29 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const dispatchDurableUiCommand = useCallback(() => {
     if (lifecycleExitStartedRef.current || durableRecoveryLifecycleRef.current !== "active" ||
-      durableRecoveryStageInFlightRef.current || simulationSubmissionRef.current) return;
+      durableRecoveryStageInFlightRef.current) return;
+    const deferred = deferredDurableUiSubmissionRef.current;
+    if (deferred) {
+      const activeSubmission = simulationSubmissionRef.current;
+      if (activeSubmission?.kind === "initialize") return;
+      if (activeSubmission) return;
+      const worker = simulationWorkerRef.current;
+      if (!worker || simulationWorkerDisabledRef.current) return;
+      deferredDurableUiSubmissionRef.current = null;
+      simulationRequestIdRef.current = deferred.request.id;
+      simulationSubmissionRef.current = deferred.submission;
+      try {
+        worker.postMessage(deferred.request);
+      } catch (error) {
+        if (simulationSubmissionRef.current === deferred.submission) {
+          simulationSubmissionRef.current = null;
+        }
+        deferred.onFailure(error);
+      }
+      return;
+    }
+    const activeSubmission = simulationSubmissionRef.current;
+    if (activeSubmission && activeSubmission.kind !== "initialize") return;
     const worker = simulationWorkerRef.current;
     const head = durableRecoveryHeadRef.current;
     const confirmed = lastSimulationResultRef.current ?? latestAuthoritativeCheckpointRef.current;
@@ -2576,7 +2635,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const startedAt = performance.now();
     const progressId = runtimePersistenceProgressIdRef.current + 1;
     runtimePersistenceProgressIdRef.current = progressId;
+    if (kind === "autosave") beginRuntimeTransition("autosave");
     setRuntimePersistenceProgress({ id: progressId, kind, phase: "checkpoint", startedAt, message: "正在等待 durable 模拟检查点…" });
+    recordRuntimeTransitionPhase("persistence-phase", startedAt, 0, { kind, phase: "checkpoint" });
     simulationSaveBarrierDepthRef.current += 1;
     simulationCheckpointBarrierRef.current = true;
     try {
@@ -2603,10 +2664,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         return { success: false, message: "页面正在退出，已保留 durable recovery 供下次精确恢复", code: "conflict" };
       }
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在验证 T1 主存档并滚动 recovery…" });
+      recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "serialize-write-readback" });
       const result = await saveVerifiedPrimaryCheckpoint(saveState);
       if (lifecycleExitStartedRef.current) return lifecycleSealedSaveResult();
       if (!result.success) {
+        setSaveFailure(result);
         setRuntimePersistenceProgress({ id: progressId, kind, phase: "failed", startedAt, message: result.message });
+        recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "failed" });
+        if (kind === "autosave") completeRuntimeTransition("autosave", "save-failed");
         return result;
       }
       const mode = saveState.mode === "speedrun" ? "speedrun" : "normal";
@@ -2649,11 +2714,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       lastSimulationResultRef.current = saveState;
       simulationReplayJournalRef.current = [];
       if (result.bytes !== undefined) setPersistedPrimaryBytes(result.bytes);
+      setSaveFailure(null);
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "complete", startedAt, message: "durable 主存档检查点已完成" });
+      recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "complete" });
+      if (kind === "autosave") completeRuntimeTransition("autosave", "save-complete", {
+        durationMs: Math.max(0, performance.now() - startedAt),
+      });
       return result;
     } catch (error) {
       const failure: SaveGameResult = { success: false, message: error instanceof Error ? error.message : "durable 主存档检查点失败", code: "unavailable" };
+      setSaveFailure(failure);
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "failed", startedAt, message: failure.message });
+      recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "failed" });
+      if (kind === "autosave") completeRuntimeTransition("autosave", "save-failed");
       const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
       latestAuthoritativeCheckpointRef.current = stopped;
       lastSimulationResultRef.current = stopped;
@@ -3225,7 +3298,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const next = setPaused(gameRef.current, !gameRef.current.paused);
     publishRuntimeGame(next, true);
     if (durableRecoveryLifecycleRef.current === "active") {
-      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+      dispatchDurableUiCommandRef.current();
     }
     setNotice(wasPaused ? "模拟已继续" : "模拟已暂停");
   }, [invalidateFactoryAlertProjection, publishRuntimeGame, rejectPlayerStateEditDuringPrimarySave]);
@@ -3330,7 +3403,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       gameRef.current = next;
       setGame(next);
       if (durableRecoveryLifecycleRef.current === "active") {
-        window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+        dispatchDurableUiCommandRef.current();
       }
       setNotice("速通工厂纯挂机已开始，工厂画布已冻结");
       return;
@@ -3340,7 +3413,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     gameRef.current = next;
     setGame(next);
     if (!pureIdleMacroActiveRef.current && durableRecoveryLifecycleRef.current === "active") {
-      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+      dispatchDurableUiCommandRef.current();
     }
     pureIdleActiveRef.current = false;
     setPureIdleRecoveryContinueState(false);
@@ -3676,11 +3749,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if ("vibrate" in navigator && typeof navigator.vibrate === "function") navigator.vibrate(tone === "warning" ? [12, 18, 12] : 10);
   }, []);
 
-  const commitGame = useCallback((updater: (current: GameState) => GameState) => {
-    if (rejectPlayerStateEditDuringPrimarySave()) return;
+  const commitGame = useCallback((updater: (current: GameState) => GameState): boolean => {
+    if (rejectPlayerStateEditDuringPrimarySave()) return false;
     const current = gameRef.current;
     const next = updater(current);
-    if (next === current) return;
+    if (next === current) return false;
     undoStackRef.current.push(current);
     if (undoStackRef.current.length > HISTORY_LIMIT) undoStackRef.current.shift();
     redoStackRef.current = [];
@@ -3693,12 +3766,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     // on the stale T0 recovery head.
     publishRuntimeGame(next, true);
     if (durableRecoveryLifecycleRef.current === "active") {
-      // React may defer the functional updater until after the current
-      // microtask checkpoint. A zero-delay task observes the committed
-      // gameRef; the previous microtask could see the old state and silently
-      // leave a player edit outside the WAL before the next simulation slice.
-      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+      // The mutation has already updated gameRef synchronously. Start its
+      // durable stage in the same player-action turn so a page reload cannot
+      // cancel the only opportunity to create the recovery pending intent.
+      dispatchDurableUiCommandRef.current();
     }
+    return true;
   }, [publishRuntimeGame, rejectPlayerStateEditDuringPrimarySave]);
 
   const persistPlanetViewport = useCallback((planetId: PlanetId, viewport: CanvasViewport) => {
@@ -3728,7 +3801,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         viewportOnlyGameStateRef.current = next;
         publishRuntimeGame(next, true);
         if (durableRecoveryLifecycleRef.current === "active") {
-          window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+          dispatchDurableUiCommandRef.current();
         }
       }, 160);
       pendingPlanetViewportRef.current.set(planetId, { viewport: normalized, timer });
@@ -3755,7 +3828,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     publishRuntimeGame(previous, true);
     invalidateFactoryAlertProjection();
     if (durableRecoveryLifecycleRef.current === "active") {
-      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+      dispatchDurableUiCommandRef.current();
     }
   }, [invalidateFactoryAlertProjection, publishRuntimeGame, rejectPlayerStateEditDuringPrimarySave]);
 
@@ -3770,7 +3843,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     publishRuntimeGame(next, true);
     invalidateFactoryAlertProjection();
     if (durableRecoveryLifecycleRef.current === "active") {
-      window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+      dispatchDurableUiCommandRef.current();
     }
   }, [invalidateFactoryAlertProjection, publishRuntimeGame, rejectPlayerStateEditDuringPrimarySave]);
 
@@ -3783,6 +3856,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   useEffect(() => {
     if (typeof Worker === "undefined") {
       simulationWorkerDisabledRef.current = true;
+      setInitialSimulationWorkerReady(true);
       if (gameRef.current.timeWarp.enabled) {
         abortPureIdleForWorkerFailure("当前环境不支持模拟 Worker，纯挂机已安全停止并暂停模拟");
       }
@@ -3794,8 +3868,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     simulationWorkerRegistryFingerprintRef.current = null;
     const worker = new Worker(new URL("./game/simulation.worker.ts", import.meta.url), { type: "module", name: "factory-simulation" });
     simulationWorkerRef.current = worker;
-    setSimulationWorkerActive(true);
+    let installedSubmission: SimulationSubmission | null = null;
     worker.onmessage = (event: MessageEvent<SimulationWorkerResponse>) => {
+      if (simulationWorkerRef.current !== worker) return;
       const authorityReplacement = simulationAuthorityReplacementRef.current;
       if (authorityReplacement?.id === event.data.id) {
         if (event.data.checkpointStateChunk) {
@@ -4130,7 +4205,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               const next = rebaseConfirmedView(current);
               publishRuntimeGame(next);
               setNotice("超大模拟操作已通过 durable 检查点安全吸收，模拟继续运行");
-              window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+              dispatchDurableUiCommandRef.current();
               return;
             } catch (error) {
               durableRecoveryFinalizeInFlightRef.current = null;
@@ -4261,11 +4336,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(stopped);
           gameRef.current = stopped;
           setGame(stopped);
+          setInitialSimulationWorkerReady(true);
           setNotice("模拟 Worker 无法完成精确恢复，已回到最近检查点并暂停模拟");
           return;
         }
         simulationStateRevisionRef.current = event.data.stateRevision;
         if (submission.kind === "recovery-initialize") {
+          setInitialSimulationWorkerReady(true);
           queueMicrotask(() => dispatchSimulationRecoveryRef.current());
           return;
         }
@@ -4276,6 +4353,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         }
         if (!event.data.checkpoint) {
           simulationRecoveryRef.current = null;
+          setInitialSimulationWorkerReady(true);
           setNotice("模拟 Worker 恢复检查点缺失，已暂停等待手动保存");
           setGame((current) => {
             const stopped = setPaused(current, true);
@@ -4308,6 +4386,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           gameRef.current = authoritative;
           setGame(authoritative);
           setSimulationWorkerActive(true);
+          setInitialSimulationWorkerReady(true);
           setNotice("模拟 Worker 已从精确检查点恢复，未完成时间已保留");
           if (simulationCheckpointRequestRef.current) {
             simulationCheckpointRequestRef.current.id = null;
@@ -4319,6 +4398,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           lastSimulationResultRef.current = stopped;
           gameRef.current = stopped;
           setGame(stopped);
+          setInitialSimulationWorkerReady(true);
           setNotice("模拟 Worker 恢复数据校验失败，已回到最近检查点并暂停模拟");
         }
         return;
@@ -4444,6 +4524,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         };
         const next = rebaseConfirmedView(current);
         publishRuntimeGame(next);
+        if (submission.kind === "initialize") {
+          setSimulationWorkerActive(true);
+          setInitialSimulationWorkerReady(true);
+        }
       }
       recordRuntimeTransitionPhase("worker-response-setGame", responseApplyStartedAt, performance.now() - responseApplyStartedAt, {
         changed: event.data.changed,
@@ -4454,13 +4538,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         queueMicrotask(() => dispatchSimulationCheckpointRef.current());
       }
       if (durableRecoveryLifecycleRef.current === "active") {
-        // React may defer the response setState updater. A task observes the
-        // rebased gameRef and drains any player edit that arrived while this
-        // Worker request or its WAL finalize was in flight.
-        window.setTimeout(() => dispatchDurableUiCommandRef.current(), 0);
+        // Worker response handling has already rebased gameRef. Dispatch the
+        // next pending UI command before returning to the event loop, which
+        // also releases an intent staged behind the initial Worker install.
+        dispatchDurableUiCommandRef.current();
       }
     };
     worker.onerror = () => {
+      if (simulationWorkerRef.current !== worker) return;
+      setInitialSimulationWorkerReady(true);
       const submission = simulationSubmissionRef.current;
       if (submission?.state.timeWarp.enabled || gameRef.current.timeWarp.enabled) {
         abortPureIdleForWorkerFailure("模拟 Worker 异常，纯挂机已安全停止；未完成预算没有计入收益");
@@ -4535,12 +4621,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       simulationRequestIdRef.current = request.id;
       lastSimulationResultRef.current = null;
       simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(initialState);
-    simulationSubmissionRef.current = {
-      id: request.id,
-      kind: recovering ? "recovery-initialize" : "initialize",
-      baseState: initialState,
-      state: initialState,
-      command: null,
+      installedSubmission = {
+        id: request.id,
+        kind: recovering ? "recovery-initialize" : "initialize",
+        baseState: initialState,
+        state: initialState,
+        command: null,
         simulationSeconds: 0,
         wallSeconds: 0,
         registryFingerprint: registrySnapshot.fingerprint,
@@ -4551,18 +4637,24 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         multicore: undefined,
         approximate: false,
       };
+      simulationSubmissionRef.current = installedSubmission;
       worker.postMessage(request, [stateTransfer.buffer]);
     } catch {
-      simulationSubmissionRef.current = null;
+      if (installedSubmission && simulationSubmissionRef.current === installedSubmission) {
+        simulationSubmissionRef.current = null;
+      }
       simulationWorkerDisabledRef.current = true;
-      simulationWorkerRef.current = null;
+      if (simulationWorkerRef.current === worker) simulationWorkerRef.current = null;
       setSimulationWorkerActive(false);
+      setInitialSimulationWorkerReady(true);
       worker.terminate();
     }
     return () => {
       worker.terminate();
-      simulationWorkerRef.current = null;
-      simulationSubmissionRef.current = null;
+      if (simulationWorkerRef.current === worker) simulationWorkerRef.current = null;
+      if (installedSubmission && simulationSubmissionRef.current === installedSubmission) {
+        simulationSubmissionRef.current = null;
+      }
     };
   }, [abortPureIdleForWorkerFailure, acceptFactoryAlertProjection, publishRuntimeGame, publishTimeWarpComputeState, simulationWorkerGeneration]);
 
@@ -5395,8 +5487,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const before = gameRef.current;
     const next = dropCargoToTray(before);
     if (next === before) return;
-    commitGame(() => next);
-    recordBasicOnboardingEvent("cargo-stowed");
+    if (commitGame(() => next)) recordBasicOnboardingEvent("cargo-stowed");
   }, [commitGame]);
 
   const handleDraggedItemToTray = useCallback((itemId: ItemId, sourceKind: DraggedItemSourceKind, sourceId?: string) => {
@@ -5406,8 +5497,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       ? moveEntityOutputToTray(before, sourceId, itemId)
       : moveEntityInputToTray(before, sourceId, itemId);
     if (next === before) return;
-    commitGame(() => next);
-    recordBasicOnboardingEvent("cargo-stowed");
+    if (commitGame(() => next)) recordBasicOnboardingEvent("cargo-stowed");
   }, [commitGame]);
 
   const expandEntityGroup = useCallback((entityId: string, requestedCount = 1, point?: { x: number; y: number }) => {
@@ -5435,7 +5525,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     const nextEntity = next.entities.find((candidate) => candidate.id === entityId)!;
     const count = nextEntity.kind === "vein" ? nextEntity.minerCount : nextEntity.machineCount;
-    commitGame((state) => addUnitToEntityGroup(state, entityId, amount));
+    if (!commitGame(() => next)) return undefined;
     if (entity.kind !== "vein") recordBasicOnboardingEvent("building-stacked");
     if (point) spawnInteractionBurst(point.x, point.y, `扩建 +${amount} · ×${count}`, "positive");
     playTone("place");
@@ -5452,6 +5542,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const expandPlacedEntity = useCallback((entityId: string, requestedCount: PlacementCount) => {
     const keepContinuous = ctrlHeldRef.current;
     const result = expandEntityGroup(entityId, keepContinuous ? 1 : requestedCount);
+    if (result === undefined) return;
     if (!result) {
       continuousPlacementRef.current = null;
       setPlacement(null);
@@ -5548,11 +5639,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     commitGame((current) => setEntityGenerationPriority(current, entityId, priority));
   }, [commitGame]);
 
-  const onPlanetChange = useCallback((planetId: PlanetId) => {
+  const onPlanetChange = useCallback((planetId: PlanetId): boolean => {
+    const current = gameRef.current;
+    const cargo = current.cargo;
+    const previousPlanetId = current.activePlanetId;
+    if (previousPlanetId === planetId) return true;
+    const nextPlanetState = setActivePlanet(current, planetId);
+    if (nextPlanetState === current) return false;
+    const leavingViewport = { ...viewportRef.current };
+    const next = {
+      ...nextPlanetState,
+      planetViewports: { ...nextPlanetState.planetViewports, [previousPlanetId]: leavingViewport },
+    };
+    if (!commitGame(() => next)) return false;
+
     onMiningStop();
-    const cargo = gameRef.current.cargo;
-    const previousPlanetId = gameRef.current.activePlanetId;
-    if (previousPlanetId === planetId) return;
     flowStore.getState().cancelConnection();
     flowStore.setState({ connectionClickStartHandle: null });
     clickConnectionPreviewRef.current = null;
@@ -5562,18 +5663,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setClickConnectionSnapPoint(null);
     updateConnectionDraft(null);
     setConnectionHint(null);
-    const leavingViewport = { ...viewportRef.current };
-    const destinationViewport = gameRef.current.planetViewports[planetId] ?? { x: 510, y: 250, zoom: 0.84 };
-    if (!gameRef.current.settings.reducedMotion) setPlanetTransition({ id: Date.now(), from: previousPlanetId, to: planetId });
+    const destinationViewport = next.planetViewports[planetId] ?? { x: 510, y: 250, zoom: 0.84 };
+    if (!current.settings.reducedMotion) setPlanetTransition({ id: Date.now(), from: previousPlanetId, to: planetId });
     playTone("travel");
-    commitGame((current) => {
-      const withViewport = {
-        ...current,
-        planetViewports: { ...current.planetViewports, [current.activePlanetId]: leavingViewport },
-      };
-      const next = setActivePlanet(withViewport, planetId);
-      return next;
-    });
     selectedEntityIdsRef.current = [];
     selectedBeltIdRef.current = null;
     selectedBeltIdsRef.current = [];
@@ -5594,13 +5686,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setViewportZoom(destinationViewport.zoom);
     setPendingBlueprintViewport({ ...destinationViewport });
     setMinimapViewport({ ...destinationViewport });
-    setViewport(destinationViewport, { duration: gameRef.current.settings.reducedMotion ? 0 : 180 });
+    setViewport(destinationViewport, { duration: current.settings.reducedMotion ? 0 : 180 });
     if (cargo) {
       const titanium = cargo.itemId === "titanium_ore" || cargo.itemId === "titanium_ingot";
-      setNotice(`${titanium ? "托钛天王" : "手提星际运输"}：${ITEMS[cargo.itemId].name} ×${cargo.amount} 已抵达${getPlanetDisplayName(gameRef.current, planetId)}`);
+      setNotice(`${titanium ? "托钛天王" : "手提星际运输"}：${ITEMS[cargo.itemId].name} ×${cargo.amount} 已抵达${getPlanetDisplayName(next, planetId)}`);
     } else {
-      setNotice(`已切换至${getPlanetDisplayName(gameRef.current, planetId)}`);
+      setNotice(`已切换至${getPlanetDisplayName(next, planetId)}`);
     }
+    return true;
   }, [commitGame, flowStore, onMiningStop, playTone, setNodes, setViewport, updateConnectionDraft]);
 
   const onExploreSystem = useCallback((systemId: StarSystemId) => {
@@ -5948,7 +6041,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const focusPlacedEntity = useCallback((entityId: string) => {
     const entity = gameRef.current.entities.find((candidate) => candidate.id === entityId);
     if (!entity) return;
-    if (gameRef.current.activePlanetId !== entity.planetId) onPlanetChange(entity.planetId);
+    if (gameRef.current.activePlanetId !== entity.planetId && !onPlanetChange(entity.planetId)) return;
     setSelectedEntityIds([entityId]);
     setSelectedBeltId(null);
     setSelectedBeltIds([]);
@@ -5965,13 +6058,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setNotice(`${ITEMS[itemId].name}在${getPlanetDisplayName(gameRef.current, planetId)}没有可定位的生产设备`);
       return;
     }
+    if (gameRef.current.activePlanetId !== planetId && !onPlanetChange(planetId)) return;
     closeAllWorkspaces();
     setCommandPaletteOpen(false);
     setMobilePanel(null);
     setHighlightedTaskId(null);
     setFocusedBeltNetworkId(null);
     setProductionLineFocus({ ...location, itemId, activeIndex: 0 });
-    if (gameRef.current.activePlanetId !== planetId) onPlanetChange(planetId);
     if (nextMobileShell) mobileNavigation.goFactory();
     window.setTimeout(() => focusEntityIds(location.producerEntityIds), gameRef.current.settings.reducedMotion ? 0 : 50);
     setNotice(`已定位${getPlanetDisplayName(gameRef.current, planetId)}的${ITEMS[itemId].name}产线 · ${location.producerEntityIds.length} 个生产节点`);
@@ -6022,7 +6115,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setNotice(check.label);
       return;
     }
-    commitGame((current) => setBeltLaneCount(current, beltId, targetLanes));
+    const next = setBeltLaneCount(gameRef.current, beltId, targetLanes);
+    if (!commitGame(() => next)) return;
     setNotice(`并联线路已调整为 ×${targetLanes} · ${check.label}`);
     playTone(check.delta > 0 ? "confirm" : "remove");
   }, [commitGame, playTone]);
@@ -6087,7 +6181,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const snapshot = analyzeBeltNetwork(gameRef.current, beltId);
     if (!snapshot) return;
     const destination = planetId ?? snapshot.planetId;
-    if (gameRef.current.activePlanetId !== destination) onPlanetChange(destination);
+    if (gameRef.current.activePlanetId !== destination && !onPlanetChange(destination)) return;
     setFocusedBeltNetworkId(beltId);
     setHighlightedTaskId(null);
     setSelectedBeltId(beltId);
@@ -6100,7 +6194,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [focusEntityIds, onPlanetChange]);
 
   const openCanvasBookmark = useCallback((bookmark: CanvasBookmark) => {
-    if (gameRef.current.activePlanetId !== bookmark.planetId) onPlanetChange(bookmark.planetId);
+    if (gameRef.current.activePlanetId !== bookmark.planetId && !onPlanetChange(bookmark.planetId)) return;
     setStatisticsOpen(false);
     setFocusedBeltNetworkId(null);
     setHighlightedTaskId(null);
@@ -6109,7 +6203,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [onPlanetChange, setViewport]);
 
   const selectAlert = useCallback((alert: FactoryAlert) => {
-    if (gameRef.current.activePlanetId !== alert.planetId) onPlanetChange(alert.planetId);
+    if (gameRef.current.activePlanetId !== alert.planetId && !onPlanetChange(alert.planetId)) return;
     setSelectedEntityIds([alert.entityId]);
     setSelectedBeltId(null);
     setSelectedBeltIds([]);
@@ -6125,7 +6219,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [focusEntityIds, onPlanetChange, playTone]);
 
   const focusStellarStation = useCallback((entityId: string, planetId: PlanetId) => {
-    if (gameRef.current.activePlanetId !== planetId) onPlanetChange(planetId);
+    if (gameRef.current.activePlanetId !== planetId && !onPlanetChange(planetId)) return;
     setSelectedEntityIds([entityId]);
     setSelectedBeltId(null);
     setSelectedBeltIds([]);
@@ -6198,8 +6292,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return;
     }
     if (navigation.kind === "galactic") {
-      setStatisticsFocusTab("galaxy");
       void openCommandWorkspace("statistics");
+      setStatisticsFocusTab("galaxy");
       setNotice("已打开银河工业控制台");
       return;
     }
@@ -6211,7 +6305,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     const entity = gameRef.current.entities.find((candidate) => candidate.buildingId === navigation.buildingId);
     if (entity) {
-      if (gameRef.current.activePlanetId !== entity.planetId) onPlanetChange(entity.planetId);
+      if (gameRef.current.activePlanetId !== entity.planetId && !onPlanetChange(entity.planetId)) return;
       setSelectedEntityIds([entity.id]);
       setSelectedBeltId(null);
       setInspectorTab("inspect");
@@ -6241,7 +6335,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return;
     }
     if (stepId === "basic-place-stack") {
-      if (gameRef.current.activePlanetId !== "home") onPlanetChange("home");
+      if (gameRef.current.activePlanetId !== "home" && !onPlanetChange("home")) return;
       setPlacement("wind_turbine");
       setPlacementCount(1);
       if (nextMobileShell) mobileNavigation.goFactory();
@@ -6264,7 +6358,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setNotice("选择一项可研究科技加入队列");
       return;
     }
-    if (gameRef.current.activePlanetId !== "home") onPlanetChange("home");
+    if (gameRef.current.activePlanetId !== "home" && !onPlanetChange("home")) return;
     if (stepId === "mine") {
       setSelectedEntityIds(["vein_iron"]);
       window.setTimeout(() => focusEntityIds(["vein_iron"]), 40);
@@ -6323,6 +6417,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const saveSummaryRefreshIdRef = useRef(0);
   const saveImportInspectionGenerationRef = useRef(0);
+  const saveImportCommitInFlightRef = useRef(false);
   const refreshSaveData = useCallback(async () => {
     const refreshId = ++saveSummaryRefreshIdRef.current;
     const summaries = await getSaveSummariesInWorker(gameRef.current.mode);
@@ -6361,6 +6456,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [playTone, requestAuthoritativeSimulationCheckpoint]);
 
   const importSave = useCallback(async (raw: string) => {
+    if (saveImportCommitInFlightRef.current) {
+      setNotice("当前存档正在导入，请等待写入完成");
+      return;
+    }
     const generation = ++saveImportInspectionGenerationRef.current;
     setImportPreview(null);
     setPendingImportState(null);
@@ -6398,41 +6497,64 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   const confirmImport = useCallback(async () => {
-    if (!pendingImportState) return;
-    if (pendingImportState.mode !== gameRef.current.mode) {
-      setNotice(`模式不匹配：当前是${gameRef.current.mode === "speedrun" ? "速通" : "普通"}模式，不能直接导入${pendingImportState.mode === "speedrun" ? "速通" : "普通"}存档`);
+    const importedState = pendingImportState;
+    const importedPreview = importPreview;
+    if (!importedState || !importedPreview || saveImportCommitInFlightRef.current) return;
+    if (importedState.mode !== gameRef.current.mode) {
+      setNotice(`模式不匹配：当前是${gameRef.current.mode === "speedrun" ? "速通" : "普通"}模式，不能直接导入${importedState.mode === "speedrun" ? "速通" : "普通"}存档`);
       playTone("alert");
       return;
     }
-    const importCheckpoint = await requestAuthoritativeSimulationCheckpoint();
-    if (lifecycleExitStartedRef.current) {
-      setNotice("页面正在退出，导入未执行");
-      return;
-    }
-    await saveGameSnapshotVerified(importCheckpoint, "导入外部存档前");
-    if (lifecycleExitStartedRef.current) {
-      setNotice("页面正在退出，导入未执行");
-      return;
-    }
-    const result = await persistPrimarySave(pendingImportState);
-    if (lifecycleExitStartedRef.current) {
-      setNotice("页面正在退出，导入未执行");
-      return;
-    }
-    if (!result.success) {
-      setNotice(result.message);
+    const generation = saveImportInspectionGenerationRef.current;
+    const restoreImportPreview = (message: string) => {
+      if (generation !== saveImportInspectionGenerationRef.current || lifecycleExitStartedRef.current) return;
+      setImportPreview(importedPreview);
+      setPendingImportState(importedState);
+      setPendingImportRaw(null);
+      setImportRescueArmed(false);
+      setNotice(message);
       playTone("alert");
-      return;
-    }
-    restoreGame(pendingImportState);
-    void refreshSaveData();
+    };
+    saveImportCommitInFlightRef.current = true;
     setImportPreview(null);
     setPendingImportState(null);
     setPendingImportRaw(null);
     setImportRescueArmed(false);
-    setNotice("存档导入完成，已自动创建回滚快照");
-    playTone("complete");
-  }, [pendingImportState, persistPrimarySave, playTone, refreshSaveData, requestAuthoritativeSimulationCheckpoint, restoreGame]);
+    setNotice("正在导入存档并创建回滚快照…");
+    try {
+      const importCheckpoint = await requestAuthoritativeSimulationCheckpoint();
+      if (lifecycleExitStartedRef.current) {
+        setNotice("页面正在退出，导入未执行");
+        return;
+      }
+      const snapshot = await saveGameSnapshotVerified(importCheckpoint, "导入外部存档前");
+      if (lifecycleExitStartedRef.current) {
+        setNotice("页面正在退出，导入未执行");
+        return;
+      }
+      if (!snapshot) {
+        restoreImportPreview("导入前回滚快照写入失败，原存档保持不变");
+        return;
+      }
+      const result = await persistPrimarySave(importedState);
+      if (lifecycleExitStartedRef.current) {
+        setNotice("页面正在退出，导入未执行");
+        return;
+      }
+      if (!result.success) {
+        restoreImportPreview(result.message);
+        return;
+      }
+      restoreGame(importedState);
+      void refreshSaveData();
+      setNotice("存档导入完成，已自动创建回滚快照");
+      playTone("complete");
+    } catch (error) {
+      restoreImportPreview(error instanceof Error ? `存档导入失败：${error.message}` : "存档导入失败");
+    } finally {
+      saveImportCommitInFlightRef.current = false;
+    }
+  }, [importPreview, pendingImportState, persistPrimarySave, playTone, refreshSaveData, requestAuthoritativeSimulationCheckpoint, restoreGame]);
 
   const confirmImportRescue = useCallback(() => {
     if (!importPreview?.repairable || importPreview.valid || !pendingImportRaw) return;
@@ -7275,6 +7397,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   useEffect(() => {
     if (nodeDragActiveRef.current) return;
     const frame = window.requestAnimationFrame(() => {
+      if (nodeDragActiveRef.current) return;
       const derivationStartedAt = performance.now();
       canvasNodeCommitStartedAtRef.current = derivationStartedAt;
       const setNodesStartedAt = derivationStartedAt;
@@ -7878,6 +8001,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const onConnectStart = useCallback((event: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
     if (clickConnectionPreviewRef.current) return;
+    clickConnectionSucceededRef.current = false;
     dragConnectionStartRef.current = getEventPoint(event);
     beginConnectionDraft(params);
   }, [beginConnectionDraft]);
@@ -8018,7 +8142,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       playTone("alert");
       return;
     }
-    commitGame(() => result.state);
+    if (!commitGame(() => result.state)) return;
     setSelectedEntityIds([]);
     setSelectedBeltId(result.beltIds.at(-1) ?? null);
     setSelectedBeltIds(result.beltIds);
@@ -8152,20 +8276,26 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (!state.isValid && draft && releaseHandle) {
       const snappedConnection = connectionFromDraft(draft, releaseHandle);
       if (isValidConnection(snappedConnection)) {
-        updateConnectionDraft(null);
-        setClickConnectionSnapPoint(null);
-        connectRequestRef.current(snappedConnection, draft.tier);
-        setConnectionHint({ label: `${draft.itemId ? ITEMS[draft.itemId].name : "物资"}运输线已建立`, tone: "ready" });
+        if (connectRequestRef.current(snappedConnection, draft.tier)) {
+          clickConnectionSucceededRef.current = false;
+          updateConnectionDraft(null);
+          setClickConnectionSnapPoint(null);
+          setConnectionHint({ label: `${draft.itemId ? ITEMS[draft.itemId].name : "物资"}运输线已建立`, tone: "ready" });
+        }
         return;
       }
     }
-    updateConnectionDraft(null);
-    setClickConnectionSnapPoint(null);
     if (state.isValid) {
+      if (!clickConnectionSucceededRef.current) return;
+      clickConnectionSucceededRef.current = false;
+      updateConnectionDraft(null);
+      setClickConnectionSnapPoint(null);
       const itemId = parseHandleItem(state.fromHandle?.id) ?? draft?.itemId ?? null;
       setConnectionHint(itemId ? { label: `${ITEMS[itemId].name}运输线已建立`, tone: "ready" } : null);
       return;
     }
+    updateConnectionDraft(null);
+    setClickConnectionSnapPoint(null);
     const fromItem = parseHandleItem(state.fromHandle?.id) ?? draft?.itemId ?? null;
     const toItem = parseHandleItem(state.toHandle?.id);
     const fromNodeId = state.fromNode?.id ?? draft?.nodeId;
@@ -8230,9 +8360,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     let succeeded = clickConnectionSucceededRef.current;
     if (!succeeded && connection && isValidConnection(connection)) {
-      connectRequestRef.current(connection, preview.draft.tier);
-      succeeded = true;
+      succeeded = connectRequestRef.current(connection, preview.draft.tier);
     }
+    if (connection && isValidConnection(connection) && !succeeded) return;
     clickConnectionPreviewRef.current = null;
     clickConnectionSucceededRef.current = false;
     setClickConnectionPreview(null);
@@ -8279,13 +8409,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     playTone("alert");
   }, [activateBatchConnectionMode, addBatchConnection, coarsePointer, isValidConnection, playTone, spawnInteractionBurst, updateConnectionDraft]);
 
-  const onConnect = useCallback((connection: Connection, lockedTier?: BeltTier) => {
+  const onConnect = useCallback((connection: Connection, lockedTier?: BeltTier): boolean => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
     const targetItem = parseHandleItem(connection.targetHandle);
     if (!connection.source || !connection.target || !sourceItem ||
       (!isUniversalInputHandle(connection.targetHandle) && sourceItem !== targetItem)) {
       setNotice("运输线两端必须使用同一种物品");
-      return;
+      return false;
     }
     const activeTier = lockedTier ?? connectionDraftRef.current?.tier ?? resolveConnectionBeltTier(gameRef.current, beltTierMode, beltTier, connection.source, sourceItem);
     const constructionId = getBeltConstructionId(activeTier);
@@ -8295,7 +8425,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const available = Math.max(0, Math.floor(gameRef.current.construction[constructionId] ?? 0));
       setNotice(`施工托盘不足：Mk.${tierName} 传送带需要 ${requestedLanes}，现有 ${available}，缺少 ${requestedLanes - available}`);
       setInspectorTab("fabricate");
-      return;
+      return false;
     }
     const targetPortIndex = parseTargetPortIndex(connection.targetHandle);
     const matchingEndpoint = gameRef.current.belts.find((belt) =>
@@ -8303,7 +8433,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       belt.targetPortIndex === targetPortIndex);
     if (matchingEndpoint && matchingEndpoint.tier !== activeTier) {
       setNotice(`已有并行线路使用 Mk.${matchingEndpoint.tier === 3 ? "III" : matchingEndpoint.tier === 2 ? "II" : "I"}，请手动选择同级传送带`);
-      return;
+      return false;
     }
     const before = gameRef.current;
     const source = before.entities.find((entity) => entity.id === connection.source);
@@ -8323,11 +8453,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setConnectionHint({ label: `未建立 · ${reason}`, tone: "blocked" });
       spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "连接失败", "warning");
       playTone("alert");
-      return;
+      return false;
     }
-    if (clickConnectionPreviewRef.current) clickConnectionSucceededRef.current = true;
+    if (!commitGame(() => result.state)) return false;
+    clickConnectionSucceededRef.current = true;
     flowStore.getState().resetSelectedElements();
-    commitGame(() => result.state);
     setSelectedEntityIds([]);
     setSelectedBeltId(result.beltId);
     setSelectedBeltIds([result.beltId]);
@@ -8340,6 +8470,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setNotice(`${ITEMS[sourceItem].name}运输线已建立 · Mk.${tierName} · 并联 ×${requestedLanes}`);
     spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "运输线已建立", "positive");
     playTone("connect");
+    return true;
   }, [beltTier, beltTierMode, coarsePointer, commitGame, flowStore, mobileNavigation.openSheet, nextMobileShell, playTone, spawnInteractionBurst]);
 
   useEffect(() => { connectRequestRef.current = onConnect; }, [onConnect]);
@@ -8368,7 +8499,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       return added;
     }
-    connectRequestRef.current(connection, preview.draft.tier);
+    const committed = connectRequestRef.current(connection, preview.draft.tier);
+    if (!committed) return true;
     flowStore.getState().cancelConnection();
     flowStore.setState({ connectionClickStartHandle: null });
     clickConnectionPreviewRef.current = null;
@@ -8512,6 +8644,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       const keepContinuous = nextMobileShell ? mobileContinuousPlacement : event.ctrlKey || ctrlHeldRef.current;
       const result = expandEntityGroup(node.id, keepContinuous ? 1 : placementCount, { x: event.clientX, y: event.clientY });
+      if (result === undefined) return;
       if (!result) {
         continuousPlacementRef.current = null;
         setPlacement(null);
@@ -8867,6 +9000,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const continuousTarget = (nextMobileShell ? mobileContinuousPlacement : event.ctrlKey || ctrlHeldRef.current) ? continuousPlacementRef.current : null;
       if (continuousTarget && continuousTarget.buildingId === placement && continuousTarget.planetId === gameRef.current.activePlanetId) {
         const result = expandEntityGroup(continuousTarget.entityId, 1, { x: event.clientX, y: event.clientY });
+        if (result === undefined) return;
         if (!result) {
           continuousPlacementRef.current = null;
           setPlacement(null);
@@ -8895,11 +9029,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         playTone("alert");
         return;
       }
+      const placedEntityId = `entity_${gameRef.current.nextId}`;
+      if (!commitGame(() => placedState)) return;
       playTone("place");
       trackAnalyticsEvent("building_place", placementCount);
       spawnInteractionBurst(event.clientX, event.clientY, "建筑已放置", "positive");
-      const placedEntityId = `entity_${gameRef.current.nextId}`;
-      commitGame((current) => placeBuilding(current, placement, position, placementCount));
       recordBasicOnboardingEvent("building-placed");
       if (placementCount > 1) recordBasicOnboardingEvent("building-stacked");
       const keepContinuous = nextMobileShell ? mobileContinuousPlacement : event.ctrlKey || ctrlHeldRef.current;
@@ -8934,13 +9068,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return;
     }
     const position = snapFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
-    if (placeBuilding(gameRef.current, buildingId, position, placementCount) !== gameRef.current) {
-      playTone("place");
-      trackAnalyticsEvent("building_place", placementCount);
-      recordBasicOnboardingEvent("building-placed");
-      if (placementCount > 1) recordBasicOnboardingEvent("building-stacked");
-    }
-    commitGame((current) => placeBuilding(current, buildingId, position, placementCount));
+    const placedState = placeBuilding(gameRef.current, buildingId, position, placementCount);
+    if (!commitGame(() => placedState)) return;
+    playTone("place");
+    trackAnalyticsEvent("building_place", placementCount);
+    recordBasicOnboardingEvent("building-placed");
+    if (placementCount > 1) recordBasicOnboardingEvent("building-stacked");
     setPlacement(null);
   }, [commitGame, placementCount, playTone, screenToFlowPosition]);
 
@@ -9124,7 +9257,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       playTone("alert");
       return { ok: false, error };
     }
-    if (next !== before) commitGame(() => next);
+    if (next === before) return { ok: true };
+    if (!commitGame(() => next)) return { ok: false, error: "权威主存档保存中，本次堆叠调整未提交" };
     if (check.delta > 0 && entity?.kind !== "vein") recordBasicOnboardingEvent("building-stacked");
     setNotice(`${getBuilding(check.constructionId).name}堆叠已调整为 ×${target.toLocaleString("zh-CN")}`);
     return { ok: true };
@@ -9179,7 +9313,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       playTone("alert");
       return;
     }
-    commitGame((current) => craftConstructionWithUpstream(current, buildingId, batches));
+    if (!commitGame(() => after)) return;
     recordBasicOnboardingEvent("construction-crafted");
     const consumed = plan.consumedItems.map((item) => `${ITEMS[item.itemId].name}×${item.amount}`);
     const consumedLabel = consumed.length > 3 ? `${consumed.slice(0, 3).join("、")}等${consumed.length}种材料` : consumed.join("、");
@@ -9231,7 +9365,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       playTone("alert");
       return;
     }
-    commitGame((current) => handcraftRecipeWithUpstream(current, recipeId, batches));
+    if (!commitGame(() => after)) return;
     const produced = plan.outputAmount;
     const recursiveLabel = plan.decisions.length > 1 ? ` · 递归加工 ${plan.decisions.length - 1} 段` : "";
     setNotice(`${RECIPES[recipeId]?.name ?? "物品"}已制造 ×${produced}（${plan.batches} 批）${recursiveLabel}`);
@@ -9474,6 +9608,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   // Canvas hit-testing, so this only removes needless off-screen work.
   const renderedFlowNodes = canvasFlowFullyDeferred ? EMPTY_FACTORY_FLOW_NODES : nodes;
   const renderedFlowEdges = canvasFlowFullyDeferred ? EMPTY_FACTORY_FLOW_EDGES : edges;
+
+  if (!initialSimulationWorkerReady) {
+    return <main className="game-shell game-shell--runtime-loading" data-simulation-worker="initializing">
+      <div className="workspace-loading" role="status"><i /><span>正在验证工厂运行时</span></div>
+    </main>;
+  }
 
   return (
     <ItemReferenceActionsProvider actions={itemReferenceActions} enabled={showItemHover}>
@@ -10063,7 +10203,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                 return;
               }
               if (factoryCanvasRef.current) factoryCanvasRef.current.dataset.dragOverlapBlocked = "false";
-              commitGame((current) => moveEntities(current, positions));
+              if (!commitGame((current) => moveEntities(current, positions))) {
+                restoreCanvasEntityPositions();
+                return;
+              }
               window.requestAnimationFrame(() => {
                 connectionHandleSpatialIndexRef.current = buildConnectionHandleSpatialIndex(viewportRef.current);
               });
@@ -10730,8 +10873,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               const before = gameRef.current;
               const next = selectTechnology(before, techId);
               if (next === before) return;
+              if (!commitGame(() => next)) return;
               trackAnalyticsEvent("research_queue");
-              commitGame(() => next);
               recordBasicOnboardingEvent("research-selected");
             }}
             onPauseResearch={() => {
@@ -10846,7 +10989,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setStarMapOpen(false)}
             onExplore={onExploreSystem}
             onColonize={onColonizePlanet}
-            onTravel={(planetId) => { onPlanetChange(planetId); setStarMapOpen(false); }}
+            onTravel={(planetId) => {
+              const changed = onPlanetChange(planetId);
+              if (changed) setStarMapOpen(false);
+              return changed;
+            }}
             onRoleChange={(planetId: PlanetId, role: PlanetIndustryRole) => commitGame((current) => setPlanetIndustryRole(current, planetId, role))}
             onPlanetMetadataChange={(planetId, metadata) => commitGame((current) => setPlanetDisplayMetadata(current, planetId, metadata))}
             onSystemNameChange={(systemId, customName) => commitGame((current) => setStarSystemDisplayName(current, systemId, customName))}

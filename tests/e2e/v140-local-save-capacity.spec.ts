@@ -44,7 +44,10 @@ test("capacity panel separates modes and requests persistent storage without blo
   await usage.getByRole("button", { name: "请求保护" }).click();
   await expect(usage).toContainText("浏览器持久存储：浏览器未授予");
   await operations.getByRole("button", { name: "立即保存" }).click();
-  await expect(page.locator(".game-notice")).toContainText("主存档已保存");
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-persistence-kind", "manual");
+  await expect(shell).toHaveAttribute("data-persistence-phase", "complete", { timeout: 30_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false", { timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 

@@ -104,7 +104,7 @@ function getStellarStationSlot(game: GameState, entityId: string, slotIndex: num
 
 interface IndustryConsoleProps {
   game: GameState;
-  onTravel: (planetId: PlanetId) => void;
+  onTravel: (planetId: PlanetId) => boolean;
   onRoleChange: (planetId: PlanetId, role: PlanetIndustryRole) => void;
   onStationPriorityChange: (entityId: string, slotIndex: number, priority: LogisticsPriority) => void;
   onStationMinimumLoadChange: (entityId: string, slotIndex: number, minimumLoad: StationMinimumLoad) => void;
@@ -366,7 +366,7 @@ export function StarMapWorkspace({
   onClose: () => void;
   onExplore: (systemId: StarSystemId) => void;
   onColonize: (planetId: PlanetId) => void;
-  onTravel: (planetId: PlanetId) => void;
+  onTravel: (planetId: PlanetId) => boolean;
   onRoleChange: (planetId: PlanetId, role: PlanetIndustryRole) => void;
   onPlanetMetadataChange: (planetId: PlanetId, metadata: { customName: string; note: string; tags: string[] }) => void;
   onSystemNameChange: (systemId: StarSystemId, customName: string) => void;

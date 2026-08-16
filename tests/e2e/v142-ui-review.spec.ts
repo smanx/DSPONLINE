@@ -523,9 +523,9 @@ test("release notes preserve close and acknowledge actions at 360 by 480 and 200
   await expect(dialog).toHaveAttribute("aria-label", "超大工厂运行态与保存性能优化");
   await expect(dialog.locator(".release-notes-version strong")).toHaveText("1.0.44");
   await expect(dialog.locator(".release-notes-scroll li")).toHaveCount(4);
-  await expect(dialog).toContainText("超大线路迁移改为线性处理");
-  await expect(dialog).toContainText("导入与云端恢复不再冻结界面");
-  await expect(dialog).toContainText("立即保存与返回主页避免重复落盘");
+  await expect(dialog).toContainText("大存档全程由 Worker 作为权威");
+  await expect(dialog).toContainText("启动恢复与读取按需投影");
+  await expect(dialog).toContainText("超大工厂命令面板更流畅");
   await expect(dialog).toContainText("存档与在线协议保持兼容");
   const close = dialog.getByRole("button", { name: /关闭/ }).first();
   const acknowledge = dialog.getByRole("button", { name: /我知道了|开始/ }).last();

@@ -53,7 +53,8 @@ test("building buffer presets and custom validation persist independently", asyn
     await store.flushLocalSaveWrites();
     return store.getPrimaryLocalSaveRevision();
   })).toBe(initialRevision + 1);
-  await expect(page.locator(".game-notice")).toContainText("主存档已保存");
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-persistence-phase", "complete");
+  await expect(page.locator("[data-persistence-progress]")).toContainText("存档已验证完成");
 
   await operations.getByRole("tab", { name: "设置" }).click();
   await selectSettingsCategory(operations, "终局性能", "performance");
@@ -115,7 +116,8 @@ test("building buffer presets and custom validation persist independently", asyn
     await store.flushLocalSaveWrites();
     return store.getPrimaryLocalSaveRevision();
   })).toBe(beforeManualSave.revision + 1);
-  await expect(page.locator(".game-notice")).toContainText("主存档已保存");
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-persistence-phase", "complete");
+  await expect(page.locator("[data-persistence-progress]")).toContainText("存档已验证完成");
 
   const afterManualSave = await page.evaluate(async ({ saveKey, backupKey }) => {
     const store = await import("/src/game/localSaveStore.ts");
@@ -127,7 +129,7 @@ test("building buffer presets and custom validation persist independently", asyn
     return {
       backend: store.getLocalSaveBackend(),
       raw,
-      cacheRaw: store.getLocalSaveValue(saveKey),
+      rawCacheEntries: store.getLocalSaveRawCacheSize(),
       backup: await store.readPersistedLocalSaveValue(backupKey),
       revision: store.getPrimaryLocalSaveRevision(),
       legacyMain: window.localStorage.getItem(saveKey),
@@ -136,7 +138,7 @@ test("building buffer presets and custom validation persist independently", asyn
     };
   }, { saveKey: SAVE_KEY, backupKey: BACKUP_KEY });
   expect(afterManualSave.backend).toBe("indexeddb");
-  expect(afterManualSave.cacheRaw).toBe(afterManualSave.raw);
+  expect(afterManualSave.rawCacheEntries).toBe(0);
   expect(afterManualSave.backup).toBe(beforeManualSave.raw);
   expect(afterManualSave.revision).toBe(beforeManualSave.revision + 1);
   expect(afterManualSave.legacyMain).toBeNull();
@@ -149,10 +151,10 @@ test("building buffer presets and custom validation persist independently", asyn
     proliferatorBufferLimit: 100_000_000,
   });
 
-  // Reload exercises the real pagehide emergency mirror and startup
-  // reconciliation path. The verified values must survive and the same-writer
-  // mirror must be cleared without producing a conflict.
-  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+  // The direct-bypass fixture uses the normal verified-save flow rather than
+  // StartMenu's durable recovery checkpoint, so pagehide retains its
+  // emergency-mirror coverage.
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false })));
   await expect.poll(() => page.evaluate(async () => {
     const coordination = await import("/src/game/localSaveCoordination.ts");
     const mirrorKeys = coordination.localSaveEmergencyMirrorKeys("normal");
@@ -173,14 +175,14 @@ test("building buffer presets and custom validation persist independently", asyn
     if (!raw) return null;
     return {
       backend: store.getLocalSaveBackend(),
-      cacheMatches: store.getLocalSaveValue(saveKey) === raw,
+      rawCacheEntries: store.getLocalSaveRawCacheSize(),
       settings: JSON.parse(raw).state.settings,
       emergencyPayload: window.localStorage.getItem(mirrorKeys.payload),
       emergencyMetadata: window.localStorage.getItem(mirrorKeys.metadata),
     };
   }, { saveKey: SAVE_KEY })).toMatchObject({
     backend: "indexeddb",
-    cacheMatches: true,
+    rawCacheEntries: expect.any(Number),
     settings: {
       productionBufferLimit: 100_000_000,
       logisticsBufferLimit: 100_000,
@@ -190,6 +192,7 @@ test("building buffer presets and custom validation persist independently", asyn
     emergencyPayload: null,
     emergencyMetadata: null,
   });
+  expect(await page.evaluate(async () => (await import("/src/game/localSaveStore.ts")).getLocalSaveRawCacheSize())).toBeLessThanOrEqual(2);
 
   await page.getByLabel("打开设置").click();
   operations = page.getByRole("dialog", { name: "运营中心" });

@@ -69,7 +69,10 @@ async function seedVisualFactory(page: Page, options: { fontScale?: number; extr
       window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
       window.sessionStorage.setItem(fixtureSessionKey, "1");
     }
-    if (extreme) window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
+    if (extreme) {
+      window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
+      window.localStorage.setItem("dsp-idle-network.ui.canvas-detail.v1", "minimal");
+    }
   }, { fontScale: options.fontScale ?? 1, extreme: options.extreme ?? false, releaseNoteId: RELEASE_NOTE_ID, fixtureSessionKey: VISUAL_FIXTURE_SESSION_KEY });
 }
 
@@ -351,17 +354,21 @@ test("light theme uses semantic surfaces for settings, saves, factory and inspec
   await page.screenshot({ path: "artifacts/qa/ui-2026-08-04/B11-carried-cargo-tray-after.png", fullPage: true });
 });
 
-test("extreme LOD titles identify output and side panels collapse without clearing selection", async ({ page }) => {
+test("extreme LOD compact labels and side panels preserve selection", async ({ page }) => {
   await seedVisualFactory(page, { extreme: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   await openFactory(page);
-  const compactSmelter = page.locator('.react-flow__node[data-id="visual-smelter"] .factory-node-lod');
+  const compactSmelter = page.locator('.react-flow__node[data-id="visual-smelter"] .factory-node-compact');
   await expect(compactSmelter).toBeVisible();
-  await expect(compactSmelter.locator(".factory-node__header strong")).toHaveText("铁块");
-  await expect(compactSmelter.locator(".factory-node__header span")).toContainText("熔炉");
+  await expect(compactSmelter).toHaveAttribute("data-node-lod", "compact");
+  await expect(compactSmelter).toHaveAttribute("title", "电弧熔炉 ×2");
+  await expect(compactSmelter).toHaveAttribute("aria-label", /电弧熔炉/);
+  await expect(compactSmelter.locator("strong")).toHaveText("熔炉");
   await page.screenshot({ path: "artifacts/qa/ui-2026-08-04/E1-endgame-node-title-after.png", fullPage: true });
 
-  await compactSmelter.locator(".factory-node__header").click();
+  await page.locator('.react-flow__node[data-id="visual-smelter"]').evaluate((element) => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+  });
   await page.getByRole("button", { name: "边缘按钮：收起左侧物资面板" }).click();
   await page.getByRole("button", { name: "边缘按钮：收起右侧检查器面板" }).click();
   await expect(page.locator(".game-shell")).toHaveClass(/sidebar-left-collapsed/);

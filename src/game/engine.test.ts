@@ -2663,7 +2663,8 @@ describe("factory simulation", () => {
     expect(photonReceiver.powerOutputKw).toBe(RAY_RECEIVER_CAPACITY_KW);
 
     state = setEntityRecipe(state, receiver.id, "ray_power");
-    expect(state.entities.find((entity) => entity.id === receiver.id)?.powerOutputKw).toBe(0);
+    expect(state.entities.find((entity) => entity.id === receiver.id)?.powerOutputKw).toBe(RAY_RECEIVER_CAPACITY_KW);
+    expect(getDysonEngineeringSnapshot(state, "helios").rayGenerationKw).toBe(RAY_RECEIVER_CAPACITY_KW);
     state = advanceSimulation(state, 0.1);
     const powerReceiver = state.entities.find((entity) => entity.id === receiver.id)!;
     expect(state.planetMetrics.home.rayGenerationKw).toBe(RAY_RECEIVER_CAPACITY_KW);

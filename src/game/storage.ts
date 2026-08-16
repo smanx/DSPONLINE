@@ -4081,11 +4081,18 @@ function removeAutomaticSnapshotsForQuotaRetry(mode: SaveMode = "normal"): numbe
   return removeStoredSnapshots(oldestFirst);
 }
 
-function nextSnapshotSequence(mode: SaveMode = "normal"): number {
-  const sequenceKey = snapshotSequenceKey(mode);
-  const previous = Number(getLocalSaveValue(sequenceKey) ?? 0);
-  const next = Number.isFinite(previous) ? Math.max(0, Math.floor(previous)) + 1 : 1;
-  setLocalSaveValue(sequenceKey, String(next));
+const snapshotSequenceAllocation = new Map<SaveMode, { savedAt: number; sequence: number }>();
+
+function nextSnapshotSequence(mode: SaveMode, savedAt: number): number {
+  const prefix = `${snapshotSavePrefix(mode)}.${savedAt}-`;
+  const persistedMaximum = listSnapshotKeys(mode).reduce((maximum, key) => {
+    if (!key.startsWith(prefix)) return maximum;
+    const sequence = Number(key.slice(prefix.length));
+    return Number.isSafeInteger(sequence) && sequence >= 0 ? Math.max(maximum, sequence) : maximum;
+  }, 0);
+  const allocated = snapshotSequenceAllocation.get(mode);
+  const next = Math.max(persistedMaximum, allocated?.savedAt === savedAt ? allocated.sequence : 0) + 1;
+  snapshotSequenceAllocation.set(mode, { savedAt, sequence: next });
   return next;
 }
 
@@ -4195,7 +4202,7 @@ async function processDeferredAutomaticSnapshot(): Promise<void> {
     if (activePrimarySave || activePrimaryRequest || pendingPrimarySaves.size > 0) return;
     const identityAfterSerialization = getVerifiedPrimaryLocalSaveIdentity(mode);
     if (!identityAfterSerialization || !sameVerifiedPrimaryIdentity(identityAfterSerialization, job.primaryIdentity)) return;
-    const sequence = nextSnapshotSequence(mode);
+    const sequence = nextSnapshotSequence(mode, savedAt);
     const id = `${savedAt}-${sequence}`;
     const key = `${snapshotSavePrefix(mode)}.${id}`;
     const writer = getLocalSaveWriterStatus();
@@ -4285,7 +4292,7 @@ export function saveGameSnapshot(state: GameState, reason = "自动快照"): Sav
   try {
     const mode = saveModeForState(state);
     const savedAt = Date.now();
-    const sequence = nextSnapshotSequence(mode);
+    const sequence = nextSnapshotSequence(mode, savedAt);
     const id = `${savedAt}-${sequence}`;
     const key = `${snapshotSavePrefix(mode)}.${id}`;
     const raw = serializeEnvelope(state, savedAt, "snapshot", reason);
@@ -4302,7 +4309,7 @@ export function saveGameSnapshot(state: GameState, reason = "自动快照"): Sav
 export async function saveGameSnapshotVerified(state: GameState, reason = "自动快照"): Promise<SaveSnapshotSummary | null> {
   const mode = saveModeForState(state);
   const savedAt = Date.now();
-  const sequence = nextSnapshotSequence(mode);
+  const sequence = nextSnapshotSequence(mode, savedAt);
   const id = `${savedAt}-${sequence}`;
   const key = `${snapshotSavePrefix(mode)}.${id}`;
   try {

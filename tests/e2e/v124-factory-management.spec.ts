@@ -168,6 +168,12 @@ async function dragConnect(page: Page) {
   await page.mouse.up();
 }
 
+async function selectFactoryNode(page: Page, id: string) {
+  const header = page.locator(`.react-flow__node[data-id="${id}"] .factory-node__header`);
+  await expect(header).toBeVisible();
+  await header.dispatchEvent("click", { button: 0 });
+}
+
 function blueprintFile(name: string, machineCount = 1) {
   return {
     name: `${name}.dspblueprint.json`,
@@ -191,7 +197,7 @@ test("one-hundred-million additions are blocked while a historical safe stack su
   await openFixture(page);
   await page.locator(".react-flow__controls-fitview").click();
 
-  await page.locator('.react-flow__node[data-id="stack_limit"] .factory-node__header').click();
+  await selectFactoryNode(page, "stack_limit");
   const inspector = page.locator(".inspector-panel");
   const target = inspector.getByLabel("建筑堆叠目标数量");
   await expect(target).toHaveValue("100000000");
@@ -202,13 +208,13 @@ test("one-hundred-million additions are blocked while a historical safe stack su
   await expect(inspector.getByRole("alert")).toContainText("1 至 100,000,000");
   await expect(inspector.getByRole("alert")).toContainText("历史超限数量只允许降低");
 
-  await page.locator('.react-flow__node[data-id="stack_history"] .factory-node__header').click();
+  await selectFactoryNode(page, "stack_history");
   await expect(inspector.getByLabel("建筑堆叠目标数量")).toHaveValue("100000001");
   await page.getByLabel("保存并返回主菜单").click();
   await expect(page.locator(".start-menu")).toBeVisible();
   await page.getByRole("button", { name: /继续游戏/ }).click();
   await expect(page.locator('.react-flow__node[data-id="stack_history"]')).toBeVisible();
-  await page.locator('.react-flow__node[data-id="stack_history"] .factory-node__header').click();
+  await selectFactoryNode(page, "stack_history");
   await expect(page.locator(".inspector-panel").getByLabel("建筑堆叠目标数量")).toHaveValue("100000001");
 });
 

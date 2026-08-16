@@ -115,6 +115,20 @@ export async function prepareSimulationRuntimeStartupRecovery(input: {
   if (input.source !== "primary") return { state: input.state, offlineSeconds: 0, candidate: null };
   input.onProgress?.({ phase: "identity", message: "正在核对主存档与 durable recovery 基线…" });
   await initializeLocalSaveStore();
+  // A legacy or repaired envelope has been normalized in memory, but its
+  // persisted bytes cannot prove compatibility with any pre-existing WAL.
+  // Settle its original wall-time interval first, then promote it through the
+  // normal verified-primary path before creating a fresh recovery baseline.
+  if (input.inspection.integrity !== "valid") {
+    const offlineWindow = computeSimulationRuntimeStartupOfflineWindow({
+      savedAtMs: input.savedAtMs,
+      nowMs: Date.now(),
+      paused: input.state.paused,
+      replayedWallSeconds: 0,
+      maxOfflineSeconds: getOfflineSimulationLimitSeconds(input.state),
+    });
+    return { state: input.state, offlineSeconds: offlineWindow.offlineSeconds, candidate: null };
+  }
   const baseIdentity = verifySelectedPrimaryIdentity(input.inspection, input.mode);
   // A payload migrated from the pre-coordination localStorage backend has an
   // exact catalog/checksum identity but no durable revision yet.  Versions

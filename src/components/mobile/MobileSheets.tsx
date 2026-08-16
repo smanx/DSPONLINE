@@ -80,7 +80,7 @@ function PlanetSheet({ game, planetAlertCounts, snap, onSnap, onPlanetChange, on
   planetAlertCounts: Partial<Record<PlanetId, number>>;
   snap: MobileSheetSnap;
   onSnap: (snap: MobileSheetSnap) => void;
-  onPlanetChange: (planetId: PlanetId) => void;
+  onPlanetChange: (planetId: PlanetId) => boolean;
   onOpenStarMap: () => void;
   onClose: () => void;
 }) {
@@ -94,7 +94,9 @@ function PlanetSheet({ game, planetAlertCounts, snap, onSnap, onPlanetChange, on
           const metrics = getPlanetMetrics(game, planet.id);
           const devices = game.entities.reduce((sum, entity) => entity.planetId === planet.id ? sum + entity.machineCount + entity.minerCount : sum, 0);
           const issues = planetAlertCounts[planet.id] ?? 0;
-          return <button className={active ? "active" : ""} type="button" aria-pressed={active} key={planet.id} onClick={() => { onPlanetChange(planet.id); onClose(); }}>
+          return <button className={active ? "active" : ""} type="button" aria-pressed={active} key={planet.id} onClick={() => {
+            if (onPlanetChange(planet.id)) onClose();
+          }}>
             <i style={{ color: planet.color }}><Orbit size={21} /></i>
             <span><strong>{getPlanetDisplayName(game, planet.id)}</strong><small>{planet.code} · {planet.environment}</small></span>
             <em>{devices} 台<br />供电 {Math.round(metrics.powerFactor * 100)}%</em>
@@ -148,7 +150,7 @@ export function MobileSheets({ game, planetAlertCounts, overlay, tools, toolActi
   factoryActions: MobileFactorySheetActions;
   onSheetSnap: (snap: MobileSheetSnap) => void;
   onClose: () => void;
-  onPlanetChange: (planetId: PlanetId) => void;
+  onPlanetChange: (planetId: PlanetId) => boolean;
   onOpenStarMap: () => void;
   onConfirmExit: () => void;
   onDismissExit: () => void;

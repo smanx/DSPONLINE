@@ -60,6 +60,15 @@ async function seedFactory(page: Page, fixture: "smelters" | "storage-network" =
   await expect(page.locator(".game-shell")).toBeVisible();
 }
 
+async function readPersistedPrimaryState(page: Page) {
+  return page.evaluate(async () => {
+    const { resolveMenuContinueSave } = await import("/src/game/savePreviewPayload.ts");
+    const selected = await resolveMenuContinueSave("normal");
+    if (!selected?.inspection.state) throw new Error("persisted primary save is unavailable");
+    return selected.inspection.state;
+  });
+}
+
 test("connection point preference changes visual scale and hit configuration", async ({ page }) => {
   await seedFactory(page);
   await page.getByLabel("打开设置").click();
@@ -97,9 +106,9 @@ for (const fontScale of [0.8, 1, 1.25, 1.5, 2] as const) {
 
 test("continuous connection mode previews multiple targets and commits them atomically", async ({ page }) => {
   await seedFactory(page, "storage-network");
-  const seeded = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
+  const seeded = (await readPersistedPrimaryState(page)).entities
     .filter((entity) => entity.buildingId === "storage_mk1")
-    .map((entity) => ({ id: entity.id, itemId: entity.storedItemId, outputs: entity.outputs })));
+    .map((entity) => ({ id: entity.id, itemId: entity.storedItemId, outputs: entity.outputs }));
   expect(seeded).toHaveLength(3);
   expect(seeded[0]).toMatchObject({ itemId: "iron_ore", outputs: { iron_ore: 100 } });
   for (const entity of seeded) await expect(page.locator(`.react-flow__node[data-id="${entity.id}"]`)).toBeVisible();
@@ -119,29 +128,25 @@ test("continuous connection mode previews multiple targets and commits them atom
   if (!secondBox) throw new Error("second continuous target has no geometry");
   await page.mouse.click(secondBox.x + secondBox.width / 2, secondBox.y + secondBox.height / 2);
   await expect(preview).toContainText("2 条");
-  const before = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.construction.conveyor_belt_mk1);
+  const before = (await readPersistedPrimaryState(page)).construction.conveyor_belt_mk1;
   await preview.getByRole("button", { name: "确认连接" }).click();
   await expect(preview).toHaveCount(0);
   await expect(page.locator(".react-flow__edge")).toHaveCount(2);
   await page.getByLabel("保存并返回主菜单").click();
   await expect(page.locator(".start-menu")).toBeVisible();
-  const after = await page.evaluate(async () => {
-    const state = (await import("/src/game/storage.ts")).loadGame().state;
-    return { belts: state.belts.length, construction: state.construction.conveyor_belt_mk1 };
-  });
+  const afterState = await readPersistedPrimaryState(page);
+  const after = { belts: afterState.belts.length, construction: afterState.construction.conveyor_belt_mk1 };
   expect(after).toEqual({ belts: 2, construction: before - 2 });
 });
 
 test("cumulative material shortage blocks the whole preview before any belt or stock changes", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.ui.default-belt-lanes.v1", "10"));
   await seedFactory(page, "storage-network");
-  const ids = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
+  const ids = (await readPersistedPrimaryState(page)).entities
     .filter((entity) => entity.buildingId === "storage_mk1")
-    .map((entity) => entity.id));
-  const before = await page.evaluate(async () => {
-    const state = (await import("/src/game/storage.ts")).loadGame().state;
-    return { belts: state.belts, construction: state.construction.conveyor_belt_mk1 };
-  });
+    .map((entity) => entity.id);
+  const beforeState = await readPersistedPrimaryState(page);
+  const before = { belts: beforeState.belts, construction: beforeState.construction.conveyor_belt_mk1 };
   await page.getByLabel("连续拉线模式").click();
   await page.locator(`.react-flow__node[data-id="${ids[0]}"] .factory-handle--output`).first().click({ force: true });
   await page.locator(`.react-flow__node[data-id="${ids[1]}"] .factory-handle--input`).first().click({ force: true });
@@ -152,21 +157,19 @@ test("cumulative material shortage blocks the whole preview before any belt or s
   await expect(preview.getByRole("button", { name: "确认连接" })).toBeDisabled();
   await expect(page.locator(".react-flow__edge")).toHaveCount(0);
   await preview.getByRole("button", { name: "取消" }).click();
-  await expect.poll(() => page.evaluate(async () => {
-    const state = (await import("/src/game/storage.ts")).loadGame().state;
+  await expect.poll(async () => {
+    const state = await readPersistedPrimaryState(page);
     return { belts: state.belts, construction: state.construction.conveyor_belt_mk1 };
-  })).toEqual(before);
+  }).toEqual(before);
 });
 
 test("Ctrl starts a continuous preview and Enter commits without holding the modifier", async ({ page }) => {
   await seedFactory(page, "storage-network");
-  const ids = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
+  const ids = (await readPersistedPrimaryState(page)).entities
     .filter((entity) => entity.buildingId === "storage_mk1")
-    .map((entity) => entity.id));
-  const before = await page.evaluate(async () => {
-    const state = (await import("/src/game/storage.ts")).loadGame().state;
-    return { belts: state.belts.length, construction: state.construction.conveyor_belt_mk1 };
-  });
+    .map((entity) => entity.id);
+  const beforeState = await readPersistedPrimaryState(page);
+  const before = { belts: beforeState.belts.length, construction: beforeState.construction.conveyor_belt_mk1 };
 
   await page.locator(`.react-flow__node[data-id="${ids[0]}"] .factory-handle--output`).first().click({ force: true });
   await page.locator(`.react-flow__node[data-id="${ids[1]}"] .factory-handle--input`).first().click({ force: true, modifiers: ["Control"] });
@@ -183,22 +186,18 @@ test("Ctrl starts a continuous preview and Enter commits without holding the mod
   await expect(page.locator(".react-flow__edge")).toHaveCount(2);
   await page.getByLabel("保存并返回主菜单").click();
   await expect(page.locator(".start-menu")).toBeVisible();
-  const after = await page.evaluate(async () => {
-    const state = (await import("/src/game/storage.ts")).loadGame().state;
-    return { belts: state.belts.length, construction: state.construction.conveyor_belt_mk1 };
-  });
+  const afterState = await readPersistedPrimaryState(page);
+  const after = { belts: afterState.belts.length, construction: afterState.construction.conveyor_belt_mk1 };
   expect(after).toEqual({ belts: before.belts + 2, construction: before.construction - 2 });
 });
 
 test("Escape cancels the whole continuous preview without changing belts or materials", async ({ page }) => {
   await seedFactory(page, "storage-network");
-  const ids = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
+  const ids = (await readPersistedPrimaryState(page)).entities
     .filter((entity) => entity.buildingId === "storage_mk1")
-    .map((entity) => entity.id));
-  const before = await page.evaluate(async () => {
-    const state = (await import("/src/game/storage.ts")).loadGame().state;
-    return { belts: state.belts, construction: state.construction.conveyor_belt_mk1 };
-  });
+    .map((entity) => entity.id);
+  const beforeState = await readPersistedPrimaryState(page);
+  const before = { belts: beforeState.belts, construction: beforeState.construction.conveyor_belt_mk1 };
 
   await page.getByLabel("连续拉线模式").click();
   await page.locator(`.react-flow__node[data-id="${ids[0]}"] .factory-handle--output`).first().click({ force: true });
@@ -207,10 +206,10 @@ test("Escape cancels the whole continuous preview without changing belts or mate
   await page.keyboard.press("Escape");
   await expect(page.getByLabel("连续拉线预览")).toHaveCount(0);
   await expect(page.locator(".react-flow__edge")).toHaveCount(0);
-  await expect.poll(() => page.evaluate(async () => {
-    const state = (await import("/src/game/storage.ts")).loadGame().state;
+  await expect.poll(async () => {
+    const state = await readPersistedPrimaryState(page);
     return { belts: state.belts, construction: state.construction.conveyor_belt_mk1 };
-  })).toEqual(before);
+  }).toEqual(before);
 });
 
 test("next mobile UI exposes equivalent confirm, clear, and undo controls", async ({ page }) => {
@@ -238,8 +237,8 @@ test("a mobile long press on an output port enters continuous connection without
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.mobile-ui.v1", "next"));
   await seedFactory(page, "storage-network");
-  const sourceId = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
-    .find((entity) => entity.buildingId === "storage_mk1" && entity.storedItemId === "iron_ore")?.id ?? null);
+  const sourceId = (await readPersistedPrimaryState(page)).entities
+    .find((entity) => entity.buildingId === "storage_mk1" && entity.storedItemId === "iron_ore")?.id ?? null;
   expect(sourceId).not.toBeNull();
   const source = page.locator(`.react-flow__node[data-id="${sourceId}"] .factory-handle--output`).first();
   const bounds = await source.boundingBox();

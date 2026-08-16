@@ -6,6 +6,7 @@ import {
   createAutomaticRefreshState,
   getWorkDisplayProgress,
   interpolateProductionProgress,
+  reconcileWorkDisplaySnapshot,
   resolveProductionRefreshInterval,
   updateAutomaticRefreshState,
 } from "./productionRefresh";
@@ -50,6 +51,23 @@ describe("production refresh policy", () => {
     expect(getWorkDisplayProgress({ ...base, mode: "level" }, 9_000)).toBe(0.25);
     expect(getWorkDisplayProgress({ ...base, mode: "cycle", active: false }, 9_000)).toBe(0.25);
     expect(getWorkDisplayProgress({ ...base, mode: "indeterminate" }, 9_000)).toBe(0.25);
+  });
+
+  it("keeps an active cycle visually continuous across a sparse snapshot", () => {
+    const previous = {
+      mode: "cycle" as const,
+      semanticKey: "machine:magnet",
+      snapshotProgress: 0.67,
+      publishedAtMs: 1_000,
+      cyclesPerSecond: 2 / 3,
+      effectiveSimulationMultiplier: 1,
+      active: true,
+    };
+    const reconciled = reconcileWorkDisplaySnapshot(previous, { ...previous, snapshotProgress: 0.22 }, 1_100);
+    expect(reconciled).toBe(previous);
+    expect(getWorkDisplayProgress(reconciled, 1_100)).toBeGreaterThan(0.67);
+    const paused = reconcileWorkDisplaySnapshot(previous, { ...previous, snapshotProgress: 0.22, active: false }, 1_100);
+    expect(paused.snapshotProgress).toBe(0.22);
   });
 
   it("keeps the one-hour simulation hash identical for every visual refresh profile", () => {

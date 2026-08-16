@@ -367,7 +367,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
   );
 }
 
-export function PlanetNavigator({ game, onPlanetChange }: { game: GameState; onPlanetChange: (planetId: PlanetId) => void }) {
+export function PlanetNavigator({ game, onPlanetChange }: { game: GameState; onPlanetChange: (planetId: PlanetId) => boolean }) {
   const [collapsed, setCollapsed] = useState(false);
   const activeSystemId = getPlanet(game.activePlanetId).systemId;
   const visiblePlanets = useMemo(() => PLANET_LIST.filter((planet) => planet.systemId === activeSystemId &&

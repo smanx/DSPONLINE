@@ -9092,6 +9092,24 @@ function configureTargetItem(entity: FactoryEntity, itemId: ItemId, targetPortIn
   }
 }
 
+/**
+ * Recipe selection is a visible domain transition. Refresh its Dyson allocation
+ * synchronously so a paused factory never shows a zero-power receiver until a
+ * later simulation tick happens to run.
+ */
+function refreshRayReceiverRecipePresentation(state: GameState): void {
+  const reception = calculateDysonReception(state);
+  for (const receiver of state.entities) {
+    if (receiver.kind !== "machine" || receiver.buildingId !== "ray_receiver") continue;
+    receiver.powerOutputKw = round(reception.allocationByEntity.get(receiver.id) ?? 0, 2);
+    if (receiver.recipeId === "ray_power") {
+      receiver.progress = 0;
+      receiver.productionRate = 0;
+      receiver.utilization = round(reception.efficiencyByEntity.get(receiver.id) ?? 0, 4);
+    }
+  }
+}
+
 export function setEntityRecipe(state: GameState, entityId: string, recipeId: RecipeId): GameState {
   if (isEntityInteractionLocked(state, entityId)) return state;
   const next = copyState(state);
@@ -9113,6 +9131,7 @@ export function setEntityRecipe(state: GameState, entityId: string, recipeId: Re
   const removedBelts = next.belts.filter((belt) => belt.source === entityId || belt.target === entityId);
   refundBelts(next, removedBelts);
   next.belts = next.belts.filter((belt) => belt.source !== entityId && belt.target !== entityId);
+  if (entity.buildingId === "ray_receiver") refreshRayReceiverRecipePresentation(next);
   return next;
 }
 

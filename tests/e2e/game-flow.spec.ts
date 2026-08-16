@@ -1,4 +1,6 @@
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
+import { createInitialState } from "../../src/game/engine";
+import { serializeEnvelope } from "../../src/game/storage";
 import { selectSettingsCategory } from "./settings-helpers";
 
 async function installTestBootstrap(page: Page) {
@@ -92,38 +94,12 @@ test("start menu gates simulation and exposes saves, cloud, import and settings"
 });
 
 test("cancelling long offline advancement returns to the menu and preserves the pending interval", async ({ page }) => {
-  await page.addInitScript(() => {
-    const entities = Array.from({ length: 500 }, (_, index) => ({
-      id: `offline_storage_${index}`,
-      kind: "storage",
-      planetId: "home",
-      position: { x: index % 25 * 260, y: Math.floor(index / 25) * 190 },
-      buildingId: "storage_mk1",
-      storedItemId: "iron_ingot",
-      machineCount: 1,
-      minerCount: 0,
-      inputs: {},
-      outputs: { iron_ingot: index % 3 },
-      progress: 0,
-      routingCursor: 0,
-      utilization: 0,
-      productionRate: 0,
-    }));
-    const state = {
-      version: 31,
-      nextId: 501,
-      activePlanetId: "home",
-      entities,
-      belts: [],
-      construction: {},
-      tray: {},
-      planetTrays: { home: {} },
-      totalProduced: {},
-      research: { selectedTechId: null, pausedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: [] },
-      paused: false,
-    };
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now() - 7 * 24 * 60 * 60 * 1_000, state }));
-  });
+  const state = createInitialState(44_094);
+  state.paused = false;
+  const raw = serializeEnvelope(state, Date.now() - 7 * 24 * 60 * 60 * 1_000);
+  await page.addInitScript(({ saveRaw }) => {
+    window.localStorage.setItem("dsp-idle-network.save.v1", saveRaw);
+  }, { saveRaw: raw });
   await page.goto("/?menu=1");
   const original = await page.evaluate(() => {
     const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
@@ -131,6 +107,12 @@ test("cancelling long offline advancement returns to the menu and preserves the 
     const state = (JSON.parse(raw) as { state: { elapsedSeconds?: number; totalProduced?: Record<string, number> } }).state;
     return { elapsedSeconds: state.elapsedSeconds ?? 0, totalProduced: state.totalProduced ?? {} };
   });
+  await expect.poll(() => page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    await store.initializeLocalSaveStore();
+    await store.reloadLocalSaveCache();
+    return store.getPrimaryLocalSaveRecoveryIdentity("normal") !== null;
+  }), { timeout: 15_000 }).toBe(true);
   await page.evaluate(() => {
     class HangingOfflineWorker extends EventTarget {
       onmessage: ((event: MessageEvent) => void) | null = null;
@@ -138,7 +120,16 @@ test("cancelling long offline advancement returns to the menu and preserves the 
       postMessage() { /* wait until the user cancels */ }
       terminate() { /* no process was spawned */ }
     }
-    window.Worker = HangingOfflineWorker as unknown as typeof Worker;
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        if (String(args[0]).includes("offlineSimulation.worker")) {
+          return new HangingOfflineWorker() as unknown as Worker;
+        }
+        return Reflect.construct(target, args) as Worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
   });
   await page.getByRole("button", { name: /继续游戏/ }).click();
   const choice = page.getByRole("dialog", { name: "选择离线结算方式" });
@@ -175,9 +166,9 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toHaveAttribute("aria-label", "超大工厂运行态与保存性能优化");
   await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.44");
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
-  await expect(releaseNotes).toContainText("超大线路迁移改为线性处理");
-  await expect(releaseNotes).toContainText("导入与云端恢复不再冻结界面");
-  await expect(releaseNotes).toContainText("立即保存与返回主页避免重复落盘");
+  await expect(releaseNotes).toContainText("大存档全程由 Worker 作为权威");
+  await expect(releaseNotes).toContainText("启动恢复与读取按需投影");
+  await expect(releaseNotes).toContainText("超大工厂命令面板更流畅");
   await expect(releaseNotes).toContainText("存档与在线协议保持兼容");
 
   await releaseNotes.getByRole("button", { name: "查看历史版本" }).click();
@@ -712,6 +703,17 @@ async function freshGame(page: Page) {
   await page.goto("/");
   await expect(page.getByTitle("重置当前工厂")).toHaveCount(0);
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".vein-node").filter({ hasText: "铁矿石" })).toBeVisible({ timeout: 15_000 });
+}
+
+async function freshDurableGame(page: Page) {
+  await page.goto("/?menu=1");
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await expect(page.locator(".vein-node").filter({ hasText: "铁矿石" })).toBeVisible({ timeout: 15_000 });
 }
 
@@ -1849,7 +1851,11 @@ async function openOperationsStageGame(page: Page, route = "/") {
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now() + 60_000, state }));
   });
   await page.goto(route);
-  await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
+  if (new URL(route, "http://localhost").searchParams.get("menu") === "1") {
+    await expect(page.locator(".start-menu")).toBeVisible();
+  } else {
+    await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
+  }
 }
 
 async function openConstructionAutomationGame(page: Page) {
@@ -2146,7 +2152,7 @@ test("progressive onboarding reaches interstellar logistics and locates its bloc
 
 test("five-step basic onboarding advances only after successful factory commands", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await freshGame(page);
+  await freshDurableGame(page);
   const coach = page.locator(".onboarding-coach");
   await expect(coach).toContainText("收纳第一组物品");
   await expect(coach).toContainText("0/18");
@@ -2192,6 +2198,12 @@ test("five-step basic onboarding advances only after successful factory commands
     "cargo-stowed", "construction-crafted", "building-placed", "building-stacked", "belt-connected", "research-selected",
   ]));
   await page.reload();
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+  const reloadedShell = page.locator(".game-shell");
+  await expect(reloadedShell).toBeVisible({ timeout: 15_000 });
+  await expect(reloadedShell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(reloadedShell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await expect(page.locator(".onboarding-coach")).toContainText("8/18");
 });
 
@@ -2471,10 +2483,10 @@ test("mobile selection, long press and staged drawers survive orientation change
 
   const readViewportCenter = () => page.evaluate(() => {
     const viewport = document.querySelector<HTMLElement>(".react-flow__viewport");
-    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
-    if (!viewport || !flow) return null;
+    const canvas = document.querySelector<HTMLElement>(".factory-canvas");
+    if (!viewport || !canvas) return null;
     const matrix = new DOMMatrix(getComputedStyle(viewport).transform);
-    const bounds = flow.getBoundingClientRect();
+    const bounds = canvas.getBoundingClientRect();
     return { x: (bounds.width / 2 - matrix.e) / matrix.a, y: (bounds.height / 2 - matrix.f) / matrix.d, zoom: matrix.a };
   });
   const viewportBefore = await readViewportCenter();
@@ -5142,7 +5154,10 @@ test("operations settings and local save slots persist across reload", async ({ 
   });
   expect(beforeManualSave.raw).not.toBeNull();
   await operations.getByRole("button", { name: "立即保存" }).click();
-  await expect(page.locator(".game-notice")).toContainText("主存档已保存");
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-persistence-kind", "manual");
+  await expect(shell).toHaveAttribute("data-persistence-phase", "complete", { timeout: 30_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
   const afterManualSave = await page.evaluate(async () => {
     const store = await import("/src/game/localSaveStore.ts");
     await store.flushLocalSaveWrites();
@@ -5199,40 +5214,111 @@ test("operations settings and local save slots persist across reload", async ({ 
 
 test("failed primary saves stay visible and never report false success", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await openOperationsStageGame(page);
+  await page.addInitScript(() => {
+    const runtime = window as typeof window & {
+      __dspAuthoritativeSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+    };
+    runtime.__dspAuthoritativeSaveFault = { enabled: false, remainingFailures: 0, interceptedFailures: 0 };
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args) as Worker;
+        if (!String(args[0]).includes("authoritativeSavePersistence.worker")) return worker;
+        const nativePostMessage = worker.postMessage.bind(worker);
+        worker.postMessage = ((message: Record<string, unknown>, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
+          const fault = runtime.__dspAuthoritativeSaveFault;
+          if (fault?.enabled && fault.remainingFailures > 0 && message.type === "commit" &&
+            message.key === "dsp-idle-network.save.v1" && message.payload instanceof ArrayBuffer) {
+            fault.remainingFailures -= 1;
+            fault.interceptedFailures += 1;
+            const response = {
+              id: message.id,
+              type: "result",
+              result: {
+                ok: false,
+                reason: "quota",
+                message: "synthetic quota",
+                retryable: true,
+                degraded: true,
+              },
+              sourcePayloadTransfer: message.payload,
+            };
+            queueMicrotask(() => worker.dispatchEvent(new MessageEvent("message", { data: response })));
+            return;
+          }
+          if (transferOrOptions === undefined) nativePostMessage(message);
+          else nativePostMessage(message, transferOrOptions);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+  });
+  await freshDurableGame(page);
+  const shell = page.locator(".game-shell");
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
+  const readDurablePrimary = () => page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    const { localSaveCatalogRecordKey } = await import("/src/game/localSaveCatalog.ts");
+    const { localSaveRevisionKey, parseLocalSaveRevision } = await import("/src/game/localSaveCoordination.ts");
+    const key = "dsp-idle-network.save.v1";
+    await store.flushLocalSaveWrites();
+    await store.reloadLocalSaveCache();
+    const revision = parseLocalSaveRevision(await store.readPersistedLocalSaveValue(localSaveRevisionKey(key)));
+    const catalog = await store.readPersistedLocalSaveValue(localSaveCatalogRecordKey(key));
+    return {
+      raw: await store.readPersistedLocalSaveValue(key),
+      revision: revision?.revision ?? 0,
+      catalog,
+    };
+  });
+  const before = await readDurablePrimary();
+  expect(before.raw).not.toBeNull();
   await page.evaluate(() => {
-    const runtime = window as typeof window & { __dspNativeIdbPut?: IDBObjectStore["put"] };
-    runtime.__dspNativeIdbPut = IDBObjectStore.prototype.put;
-    IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
-      if (value && typeof value === "object" && (value as { key?: unknown }).key === "dsp-idle-network.save.v1") {
-        throw new DOMException("quota", "QuotaExceededError");
-      }
-      return key === undefined
-        ? runtime.__dspNativeIdbPut!.call(this, value)
-        : runtime.__dspNativeIdbPut!.call(this, value, key);
-    } as IDBObjectStore["put"];
+    const fault = (window as typeof window & {
+      __dspAuthoritativeSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+    }).__dspAuthoritativeSaveFault;
+    if (!fault) throw new Error("authoritative save fault control is missing");
+    fault.enabled = true;
+    fault.remainingFailures = 2;
   });
 
   await operations.getByRole("button", { name: "立即保存" }).click();
   const warning = page.getByRole("alert").filter({ hasText: "本地存储空间不足，当前进度尚未保存" });
   await expect(warning).toBeVisible();
+  await expect(shell).toHaveAttribute("data-persistence-kind", "manual");
+  await expect(shell).toHaveAttribute("data-persistence-phase", "failed", { timeout: 30_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await expect(page.locator(".game-notice")).not.toContainText("主存档已保存");
+  expect(await page.evaluate(() => {
+    const fault = (window as typeof window & {
+      __dspAuthoritativeSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+    }).__dspAuthoritativeSaveFault;
+    return fault ? { remainingFailures: fault.remainingFailures, interceptedFailures: fault.interceptedFailures } : null;
+  })).toEqual({ remainingFailures: 0, interceptedFailures: 2 });
+  const afterFailure = await readDurablePrimary();
+  expect(afterFailure).toEqual(before);
   const downloadPromise = page.waitForEvent("download");
   await warning.getByRole("button", { name: "立即导出当前进度" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^dsp-idle-save-\d{4}-\d{2}-\d{2}\.json$/);
 
   await page.evaluate(() => {
-    const runtime = window as typeof window & { __dspNativeIdbPut?: IDBObjectStore["put"] };
-    if (runtime.__dspNativeIdbPut) IDBObjectStore.prototype.put = runtime.__dspNativeIdbPut;
-    delete runtime.__dspNativeIdbPut;
+    const fault = (window as typeof window & {
+      __dspAuthoritativeSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+    }).__dspAuthoritativeSaveFault;
+    if (!fault) throw new Error("authoritative save fault control is missing");
+    fault.enabled = false;
   });
   await operations.getByRole("button", { name: "立即保存" }).click();
+  await expect(shell).toHaveAttribute("data-persistence-kind", "manual");
+  await expect(shell).toHaveAttribute("data-persistence-phase", "complete", { timeout: 30_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false", { timeout: 15_000 });
   await expect(warning).toBeHidden();
-  await expect(page.locator(".game-notice")).toContainText("主存档已保存");
+  const afterRetry = await readDurablePrimary();
+  expect(afterRetry.revision).toBe(before.revision + 1);
 });
 
 test("font scaling keeps rendered belt endpoints attached to their handles", async ({ page }) => {
@@ -5284,9 +5370,19 @@ test("save preview, snapshots, content-pack validation and simulation diagnostic
   await expect(operations.locator(".save-import-preview")).toBeVisible();
   await expect(operations.locator(".save-import-preview")).toContainText("校验通过");
   await operations.locator(".save-import-preview").getByRole("button", { name: "确认导入" }).click();
-  await expect(operations.locator(".save-import-preview")).toBeHidden();
+  await expect(operations.locator(".save-import-preview")).toBeHidden({ timeout: 1_000 });
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-persistence-phase", "complete", { timeout: 30_000 });
+  await expect.poll(async () => page.evaluate(async () => {
+    const localStore = await import("/src/game/localSaveStore.ts");
+    return {
+      role: localStore.getLocalSaveWriterStatus().role,
+      conflicts: await localStore.getLocalSaveConflicts(),
+    };
+  }), { timeout: 5_000 }).toEqual({ role: "primary", conflicts: [] });
+  await expect(operations).toBeHidden({ timeout: 30_000 });
   await page.getByLabel("打开设置").click();
   const reopenedOperations = page.getByRole("dialog", { name: "运营中心" });
+  await expect(reopenedOperations).toBeVisible();
   await reopenedOperations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
 
   const packRaw = JSON.stringify({
@@ -5421,16 +5517,20 @@ test("placement preview, selection focus and keyboard recycle keep canvas work d
 
 test("large workspaces load on demand with polished desktop and mobile hierarchy", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  let technologyModuleRequested = false;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/src/components/TechnologyWorkspace.tsx")) {
+      technologyModuleRequested = true;
+    }
+  });
   await openTechnologyUpgradeGame(page);
-  const technologyModuleLoaded = () => page.evaluate(() => performance.getEntriesByType("resource")
-    .some((entry) => entry.name.includes("TechnologyWorkspace")));
-  expect(await technologyModuleLoaded()).toBe(false);
+  expect(technologyModuleRequested).toBe(false);
 
   await page.getByLabel("打开科技树").click();
   const technology = page.getByRole("dialog", { name: "科技树" });
   await expect(technology).toBeVisible();
   await technology.getByLabel("展开科研详情").click();
-  await expect.poll(technologyModuleLoaded).toBe(true);
+  await expect.poll(() => technologyModuleRequested).toBe(true);
   await expect(technology.locator(".technology-upgrade-overview")).toBeVisible();
   await page.waitForTimeout(220);
   await page.screenshot({ path: "artifacts/qa/frontend-polish-1440.png", fullPage: true });
@@ -5674,7 +5774,7 @@ test("campaign migration preserves legacy inventory while restoring task progres
   await page.evaluate(async () => {
     const storage = await import("/src/game/storage.ts");
     const localStore = await import("/src/game/localSaveStore.ts");
-    const raw = localStore.getLocalSaveValue("dsp-idle-network.save.v1");
+    const raw = await localStore.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
     if (!raw) throw new Error("missing primary save");
     const envelope = JSON.parse(raw);
     envelope.state.version = 17;

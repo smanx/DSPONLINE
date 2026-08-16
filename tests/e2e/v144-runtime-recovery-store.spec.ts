@@ -1282,11 +1282,20 @@ test("Worker-safe current/2x transfer checkpoints detach UI buffers and fit loca
     const generatorUrl = URL.createObjectURL(new Blob([generatorSource], { type: "text/javascript" }));
     const storageUrl = URL.createObjectURL(new Blob([storageSource], { type: "text/javascript" }));
     const results: Array<Record<string, unknown>> = [];
-    let mainLongTasks = 0;
+    const mainLongTasks: Array<{ startTime: number; duration: number; name: string }> = [];
     let observer: PerformanceObserver | null = null;
+    const collectLongTasks = (entries: PerformanceEntryList | readonly PerformanceEntry[]) => {
+      mainLongTasks.push(...[...entries].map((entry) => ({
+        startTime: entry.startTime,
+        duration: entry.duration,
+        name: entry.name,
+      })));
+    };
     try {
-      observer = new PerformanceObserver((list) => { mainLongTasks += list.getEntries().length; });
-      observer.observe({ type: "longtask", buffered: true });
+      observer = new PerformanceObserver((list) => {
+        collectLongTasks(list.getEntries());
+      });
+      observer.observe({ type: "longtask" });
     } catch { /* optional */ }
     try {
       for (const [index, size] of sizes.entries()) {
@@ -1333,6 +1342,8 @@ test("Worker-safe current/2x transfer checkpoints detach UI buffers and fit loca
         });
       }
     } finally {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      if (observer) collectLongTasks(observer.takeRecords());
       observer?.disconnect();
       URL.revokeObjectURL(generatorUrl);
       URL.revokeObjectURL(storageUrl);
@@ -1342,7 +1353,7 @@ test("Worker-safe current/2x transfer checkpoints detach UI buffers and fit loca
 
   console.log(`V144_RECOVERY_BUFFER_METRICS ${JSON.stringify(metrics)}`);
   expect(metrics.results).toHaveLength(2);
-  expect(metrics.mainLongTasks).toBe(0);
+  expect(metrics.mainLongTasks).toHaveLength(0);
   for (const [index, metric] of metrics.results.entries()) {
     const expectedBytes = [29_572_337, 58_857_707][index];
     expect(metric).toMatchObject({
