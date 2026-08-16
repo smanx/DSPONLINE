@@ -86,3 +86,38 @@
 - 大库全量校验（Node/quick_check 经 COSFS）很慢且占盘：切换关键路径只复核身份/元数据，full `sha256sum` 在快照/预置阶段用本地副本完成。
 - 每次发布预留 `RESUME_STATE.md`；一旦中断按它续跑，别从头再来。
 - 不要在同一关键时刻并行发多个依赖同一结果的写命令（易造成无法归因）。
+
+## 9. 测试运行与并行优化（2026-08-17 起生效）
+
+为把“每次全量测试 20+ 分钟”压缩到可接受范围，以下改动已合入仓库（见 `package.json`、`server/package.json`、`playwright.config.ts`、`.github/workflows/ci.yml`、`scripts/run-changed-tests.mjs`）。
+
+### 9.1 并行策略
+
+| 套件 | 之前 | 现在 | 说明 |
+| --- | --- | --- | --- |
+| `test:e2e` | `--workers=1`（完全串行） | config 默认：本地 4 / CI 2（`DSP_E2E_WORKERS` 可覆盖） | `fullyParallel: false` 保证单文件内串行；不同文件跨 worker 并行 |
+| `test:server` | `--test-concurrency=1` | `--test-concurrency=4` | 集成测试均 `mkdtemp` + `listen(0)` 随机端口，隔离充分 |
+| `test:ops` | `--test-concurrency=1` | `--test-concurrency=2` | 多数用临时目录；保守 2 并发 |
+| `test`（Vitest） | `maxWorkers: 1` | 保持 `maxWorkers: 1` | Windows 大确定性套件在 V8 fork 并行下会内存崩溃（平台性约束，勿无脑改） |
+| CI `ci.yml` | 单 job 顺序执行 | 拆成 `unit` / `server-ops-native` / `build` / `e2e` 四个并行 job | 总墙钟从“和”变为“最大值” |
+
+### 9.2 新增 npm scripts（开发体验）
+
+| 脚本 | 用途 |
+| --- | --- |
+| `npm run test:quick` | typecheck + server 并行 + ops 并行；日常改动后快速回归，不跑重 E2E/全量 Vitest |
+| `npm run test:unit:fast` | `vitest run --maxWorkers=4`；**仅推荐 Linux/CI**，Windows 可能触发大套件内存崩溃 |
+| `npm run test:changed` | 增量测试：只跑本次 Git 改动中实际被修改的测试文件（见 `scripts/run-changed-tests.mjs`）；只改源码时请改用 `test:quick` |
+| `npm run test:e2e:fast` | 只跑关键 E2E（cloud/save/offline/idle/PWA/leaderboard），与发布门禁关键子集一致 |
+
+### 9.3 可观测性
+
+- Playwright reporter 已从 `list` 升级为 `list + html + json`：
+  - HTML 报告：`playwright-report/`（失败/耗时/轨迹可视化）
+  - JSON 报告：`test-results/playwright-report.json`（便于脚本统计每个 spec 耗时）
+- 后续定位热点：用 JSON 报告按 `duration` 排序，优先拆 `game-flow.spec.ts`（约 105 个 test / 357KB）、`v144-runtime-protocol.spec.ts`、`v144-runtime-recovery-store.spec.ts` 等单文件串行瓶颈。
+
+### 9.4 注意事项
+
+- **发布门禁 `release-gate.yml` 保持全量串行**，不做并行化，保证确定性证据链。
+- 本优化不改任何测试逻辑/断言；只改运行编排。若并行后出现偶发失败，请先确认是否为共享资源（固定路径/端口）导致，再决定降级并发。

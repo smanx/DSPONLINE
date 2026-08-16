@@ -1,5 +1,9 @@
 # 测试与发布基线
 
+> **测试运行优化（2026-08-17）**：为缩短全量测试时间，已启用 E2E 并行 worker（本地 4 / CI 2）、server 测试并发 4、ops 测试并发 2，并把 `ci.yml` 拆为 `unit` / `server-ops-native` / `build` / `e2e` 四个并行 job。新增快速脚本：`npm run test:quick`、`npm run test:unit:fast`、`npm run test:changed`、`npm run test:e2e:fast`；Playwright 报告升级为 `list + html + json`（`playwright-report/`、`test-results/playwright-report.json`）。Vitest 因 Windows 大套件内存崩溃约束仍保持 `maxWorkers=1`；发布门禁 `release-gate.yml` 保持全量串行保证确定性。完整说明见 [RELEASE_RUNBOOK_CHECKS.md](./RELEASE_RUNBOOK_CHECKS.md) 第 9 节。
+
+> **1.0.44 完整稳定发布（2026-08-17）**：香港 Web/API、上海 Web/API、上海下载页、Windows/Android stable 均已切换至 `1.0.44+3e580c715a5a`。香港 switch-state generation 14（slot green / 4322），上海 generation 5（slot blue / 4321）；下载页 `download-site-1.0.44-3e580c715a5a`。完整证据见 [releases/1.0.44.md](./releases/1.0.44.md)。
+
 > `1.0.43` 超大存档热修已完成香港 Web-only 稳定发布：最终 clean source `fceca3eda51cf7e488e176e23c6119ba104b77fd`，runtime/test tree `6c2df9686031fa1db68b1d862f33364cbbae95a6`，Build ID `1.0.43+fceca3eda51c`。完整 Vitest 为 1,238/18、同 runtime/test tree 完整 Chromium 为 356/8、0 失败；final-tip clean build 为 1,929 modules，production-preview PWA 3/3，Web 归档 122/122。只读真实附件 36,704,109 bytes 的初次检查 437 ms，本机/生产 UI 旅程验证导入预览、确认进入、manual revision/backup、受控返回和重载正确性；源 bytes/SHA 前后不变。香港 generation 13 current 为 `web-1.0.43-fceca3eda51c`，previous 为 1.0.42；API、数据库、上海、原生、下载页和玩家生产数据均未修改。注意：受控 Continue→Pause 仍耗时 20,887 ms，Long Task 峰值 20,291 ms，运行态近乎不可玩的反馈未由 1.0.43 解决，已升级为 1.0.44 P0。
 
 > `1.0.42` 已基于香港最终 1.0.41 热修固定为 `c24e6247d2572e54e30e173d3e16bfd85829b92f / 1.0.42+c24e6247d257`。最终门禁：Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，均 0 失败；root/server production audit 0，125 个运行时许可证。production build 为 1,928 模块、startup 185,929 B gzip、menu 281,809 B、forbidden 0。API 162 文件临时 SQLite 启动、Android unsigned bundle/assemble/lint/zipalign、Windows PE/ASAR/48 MiB/4 进程隔离启动均通过。source 214/214、candidate 10/10、provenance 3/3。旧 `8056d2cb…` 候选只作历史诊断且不得发布。
