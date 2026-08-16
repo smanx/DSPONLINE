@@ -16,6 +16,11 @@ export const CANVAS_DETAIL_PREFERENCE_KEY = "dsp-idle-network.ui.canvas-detail.v
 export const BLUEPRINT_ALLOW_OVERLAP_PREFERENCE_KEY = "dsp-idle-network.ui.blueprint-allow-overlap.v1";
 export const LARGE_SAVE_AUTOSAVE_THROTTLE_PREFERENCE_KEY = "dsp-idle-network.ui.large-save-autosave-throttle.v1";
 export const FACTORY_ALERTS_PREFERENCE_KEY = "dsp-idle-network.ui.factory-alerts.v1";
+/** 设备级偏好：保存（自动/手动 durable checkpoint）期间允许玩家继续编辑。
+ *  默认 false = 保持既有 fail-safe（保存期间编辑被拒绝并提示）。
+ *  开启后保存不再撤销/拒绝操作；保存期间的编辑会保留在 durable 队列，
+ *  recovery head 会在下一次保存时滚动追赶。 */
+export const ALLOW_EDITS_DURING_SAVE_PREFERENCE_KEY = "dsp-idle-network.save.allow-edits-during-save.v1";
 
 export type SettingsCategory = "all" | "visual" | "performance" | "interaction" | "storage" | "statistics" | "other";
 export type ConnectionPointSize = "default" | "large25" | "large50";
@@ -258,6 +263,23 @@ export function writeFactoryAlertsPreference(enabled: boolean): void {
   const storage = localStorageOrNull();
   if (!storage) return;
   try { storage.setItem(FACTORY_ALERTS_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
+}
+
+/** 保存期间允许继续编辑（默认关闭，保持既有 fail-safe）。 */
+export function readAllowEditsDuringSavePreference(): boolean {
+  const storage = localStorageOrNull();
+  if (!storage) return false;
+  try {
+    return storage.getItem(ALLOW_EDITS_DURING_SAVE_PREFERENCE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeAllowEditsDuringSavePreference(enabled: boolean): void {
+  const storage = localStorageOrNull();
+  if (!storage) return;
+  try { storage.setItem(ALLOW_EDITS_DURING_SAVE_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
 }
 
 /** The speedrun panel is expanded by default and is never part of a save. */
