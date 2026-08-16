@@ -3,7 +3,7 @@
 > 状态：开发完成，待发布 agent 执行最终发布门禁  
 > 分支：`codex/1.0.45-space-station`  
 > 基线：`codex/1.0.44-release-candidate` + `codex/space-station-expansion`  
-> 当前提交：`e971594`（后续文档/回归提交会继续追加）  
+> 当前提交：`92e6fe1`（后续发布门禁如再修改会继续追加）  
 > 版本：`1.0.45` / Android `1000045`
 
 ## 1. 发布内容
@@ -31,6 +31,8 @@
 ## 2. 代码状态
 
 - 已从 1.0.44 release candidate 合并空间站分支，并解决所有冲突。
+- 已吸收主线最新 E2E 拆分：`game-flow.spec.ts` 已拆为 6 个功能域 spec，旧单文件已删除。
+- 已合并 `codex/1.0.44-save-ux-fix`（保存期间允许编辑、失败不回滚编辑、恢复头追赶）。
 - 关键文件：
   - `src/game/spaceStationFeature.ts`（M0 开关）
   - `src/game/orbitalStation.ts` / `stationContracts.ts` / `stationDecorations.ts` / `stationCargoTerminal.ts`
