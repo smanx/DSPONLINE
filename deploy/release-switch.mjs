@@ -491,6 +491,20 @@ export function createReleaseSwitchOptions(environment = process.env) {
     ),
     expectedSchemaVersion: integer(environment.DSP_EXPECTED_CLOUD_SCHEMA_VERSION, 7, 1, 1_000, "expected cloud schema"),
     expectedStorageLayoutVersion: integer(environment.DSP_EXPECTED_SQLITE_LAYOUT_VERSION, 2, 1, 1_000, "expected SQLite layout"),
+    targetSchemaVersion: integer(
+      environment.DSP_TARGET_CLOUD_SCHEMA_VERSION ?? environment.DSP_EXPECTED_CLOUD_SCHEMA_VERSION,
+      environment.DSP_EXPECTED_CLOUD_SCHEMA_VERSION ?? 7,
+      1,
+      1_000,
+      "target cloud schema after migration",
+    ),
+    targetStorageLayoutVersion: integer(
+      environment.DSP_TARGET_SQLITE_LAYOUT_VERSION ?? environment.DSP_EXPECTED_SQLITE_LAYOUT_VERSION,
+      environment.DSP_EXPECTED_SQLITE_LAYOUT_VERSION ?? 2,
+      1,
+      1_000,
+      "target SQLite layout after migration",
+    ),
     writerLockFile: path.resolve(environment.DSP_API_WRITER_LOCK_FILE || path.join(runtimeRoot, "writer.lock")),
     serviceUser: serviceAccount(environment.DSP_SERVICE_USER || "ubuntu", "service user"),
     serviceGroup: serviceAccount(environment.DSP_SERVICE_GROUP || "ubuntu", "service group"),
@@ -946,7 +960,7 @@ async function preflightCandidate(options, runtime, target, evidence, preparedEv
       runtime.waitHealth(options.preflightPort, options.readinessTimeoutMs, "candidate preflight health"),
       runtime.waitReady(options.preflightPort, options.readinessTimeoutMs, "candidate preflight readiness"),
     ]);
-    if (health.schemaVersion !== options.expectedSchemaVersion || health.storageLayoutVersion !== options.expectedStorageLayoutVersion) {
+    if (health.schemaVersion !== options.targetSchemaVersion || health.storageLayoutVersion !== options.targetStorageLayoutVersion) {
       throw new Error("candidate preflight returned an unexpected schema or SQLite layout");
     }
   } finally {
