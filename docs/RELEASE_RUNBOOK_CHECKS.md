@@ -119,7 +119,7 @@
   - HTML 报告：`playwright-report/`（失败/耗时/轨迹可视化）
   - JSON 报告：`test-results/playwright-report.json`（`scripts/report-slowest-tests.mjs` 按 `duration` 排序）
 - CI 的 `e2e-shard-*` job 分别打印本 shard 最慢 10 个测试并上传 JSON；`e2e-report` job 合并两份 JSON 输出全局 TOP 20，持续定位热点。
-- 后续定位热点：优先拆 `game-flow.spec.ts`（约 105 个 test / 357KB）——**依赖分析已完成**，见 [game-flow-spec-split-analysis.md](./game-flow-spec-split-analysis.md)；其次是 `v144-runtime-protocol.spec.ts`、`v144-runtime-recovery-store.spec.ts` 等单文件串行瓶颈。
+- 后续定位热点：`game-flow.spec.ts`（105 个 test / 357KB）**已完成机械拆分**为 6 个功能域 spec（验证 104/105 全量 + 1 项并行偶发超时串行复跑通过），见 [game-flow-spec-split-analysis.md](./game-flow-spec-split-analysis.md)；剩余瓶颈候选为 `v144-runtime-protocol.spec.ts`、`v144-runtime-recovery-store.spec.ts` 等单文件串行大户。
 
 ### 9.4 注意事项
 
