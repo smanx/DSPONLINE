@@ -61,6 +61,7 @@ test("stages the historical API archive and expands server files byte-for-byte i
     "http-route-policy.mjs",
     "account-archive-legacy-json.mjs",
     "runtime-state-persistence.mjs",
+    "station-profile.mjs",
   ]) {
     assert.deepEqual(
       await readFile(path.join(releaseRoot, file)),
@@ -116,7 +117,7 @@ test("runs npm ci in the real expanded layout and reaches health with a temporar
   assert.equal(result.status, 200);
   assert.equal(result.health.ok, true);
   assert.equal(result.health.service, "dsp-idle-cloud");
-  assert.equal(result.health.schemaVersion, 7);
+  assert.equal(result.health.schemaVersion, 8);
   assert.equal(result.health.storage, "sqlite");
-  assert.equal(result.health.storageLayoutVersion, 2);
+  assert.equal(result.health.storageLayoutVersion, 3);
 });

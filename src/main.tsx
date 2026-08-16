@@ -15,6 +15,8 @@ import { AppLocaleProvider, initializeDocumentLocale } from "./i18n/locale";
 import { initializeLocalSaveStore } from "./game/localSaveStore";
 import { importWithRecovery, reloadLatestBuild } from "./game/dynamicImportRecovery";
 import { initializeDocumentTheme } from "./game/uiPreferences";
+import { resolveApplicationRoute } from "./game/applicationRoute";
+import { isSpaceStationFeatureEnabled } from "./game/spaceStationFeature";
 
 // Apply the device-only theme before the first React paint. The legacy
 // GameState theme is still read for old saves, but it is no longer the source
@@ -32,14 +34,16 @@ const nativeRuntime = __APP_PLATFORM__ === "android"
 const nativeInitialization = nativeRuntime.then((native) => native?.initializeNativeRuntime());
 initializeDocumentLocale();
 installClientMonitoring();
-const adminRoute = /^\/admin\/?$/.test(window.location.pathname);
-if (!adminRoute) installAnalytics();
+const applicationRoute = resolveApplicationRoute(window.location.pathname);
+if (applicationRoute.kind !== "admin") installAnalytics();
 
 async function mountApplication(): Promise<void> {
-  if (!adminRoute) await initializeLocalSaveStore();
-  const application = adminRoute
+  if (applicationRoute.kind === "game") await initializeLocalSaveStore();
+  const application = applicationRoute.kind === "admin"
     ? await importWithRecovery(() => import("./components/AdminDashboard"), "管理后台模块").then(({ AdminDashboard }) => <AdminDashboard />)
-    : await importWithRecovery(() => import("./GameLauncher"), "游戏启动模块").then(({ App }) => <App />);
+    : applicationRoute.kind === "public-station" && isSpaceStationFeatureEnabled()
+      ? await importWithRecovery(() => import("./components/PublicStationPage"), "公开空间站页面").then(({ PublicStationPage }) => <PublicStationPage publicId={applicationRoute.publicId} />)
+      : await importWithRecovery(() => import("./GameLauncher"), "游戏启动模块").then(({ App }) => <App />);
   createRoot(document.getElementById("root")!).render(<StrictMode><AppLocaleProvider>{application}</AppLocaleProvider></StrictMode>);
   await nativeInitialization.catch(() => undefined);
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));

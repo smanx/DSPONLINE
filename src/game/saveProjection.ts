@@ -5,11 +5,14 @@ import { omitSaveContractDefaults } from "./saveFieldContract";
 import type { BeltConnection, BlueprintDefinition, FactoryEntity, GameState, ItemId, StationSlot } from "./types";
 
 /**
- * Pure, Worker-safe projection of runtime state into the v46 persistent JSON
+ * Pure, Worker-safe projection of runtime state into the v47 persistent JSON
  * shape. This module must never construct or import a Worker.
  */
 export function projectPersistentSaveState(state: GameState, contentPackRegistry: ContentPackRegistry): GameState {
   const { runtimeFlow: _runtimeFlow, ...quantumLogisticsNetwork } = state.quantumLogisticsNetwork;
+  // M0 bridge: a v46 build must not write the orbital-station namespace. A
+  // bridge build reading a v47 save keeps the namespace untouched.
+  const { orbitalStation: _omittedOrbitalStation, ...stateWithoutOrbitalStation } = state;
   const compactRecord = (value: Partial<Record<ItemId, number>>): Partial<Record<ItemId, number>> => ({ ...value });
   const compactStationSlots = (slots: StationSlot[] | undefined): StationSlot[] | undefined => {
     if (!slots) return undefined;
@@ -37,6 +40,17 @@ export function projectPersistentSaveState(state: GameState, contentPackRegistry
     if (entity.buildingId === "micro_black_hole_connector" && state.version >= 46) {
       if (typeof entity.blackHolePaused !== "boolean" || typeof entity.blackHoleActivationConfirmed !== "boolean") {
         throw new TypeError("A current micro black hole must have explicit pause and activation-confirmation state before saving");
+      }
+    }
+    if (entity.buildingId === "orbital_cargo_terminal" && state.version >= 47) {
+      const binding = entity.orbitalCargoBinding;
+      const validBinding = binding === null || binding === undefined || binding.kind === "construction" ||
+        binding.kind === "contract" && typeof binding.contractId === "string" && binding.contractId.length > 0 && binding.contractId.length <= 180;
+      if (state.mode !== "normal" || entity.machineCount !== 1 || !Array.isArray(entity.orbitalCargoPortItems) ||
+        entity.orbitalCargoPortItems.length !== 4 || !validBinding || !Number.isFinite(entity.orbitalCargoProgress) ||
+        (entity.orbitalCargoProgress ?? -1) < 0 || (entity.orbitalCargoProgress ?? 1) >= 1 ||
+        typeof entity.orbitalCargoTotalUploaded !== "string" || !/^(0|[1-9][0-9]{0,255})$/.test(entity.orbitalCargoTotalUploaded)) {
+        throw new TypeError("A current orbital cargo terminal must have one machine, four stable ports, and valid upload state before saving");
       }
     }
     // Older clients briefly wrote quantumTarget to every entity. It remains a
@@ -70,7 +84,7 @@ export function projectPersistentSaveState(state: GameState, contentPackRegistry
     }),
   });
   return {
-    ...state,
+    ...(state.version >= 47 ? state : stateWithoutOrbitalStation),
     mode: state.mode === "speedrun" ? "speedrun" : "normal",
     idleSettlement: normalizeIdleSettlementState(state.idleSettlement),
     productionHistory: [],
@@ -85,5 +99,5 @@ export function projectPersistentSaveState(state: GameState, contentPackRegistry
     blueprintVersions: state.blueprintVersions.map((snapshot) => ({ ...snapshot, definition: sanitizeBlueprint(snapshot.definition) })),
     planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...state.tray } },
     quantumLogisticsNetwork,
-  };
+  } as unknown as GameState;
 }

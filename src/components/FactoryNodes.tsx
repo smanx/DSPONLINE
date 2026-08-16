@@ -34,6 +34,7 @@ import { isElevatorStation } from "../game/systemHubLogistics";
 import { PowerValue } from "./PowerValue";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
 import { recordRuntimeTransitionCounter } from "../game/runtimeTransitionDiagnostics";
+import { getOrbitalCargoPortItems, ORBITAL_CARGO_TERMINAL_PORT_COUNT } from "../game/stationCargoTerminal";
 import type { WorkProgressMode } from "../game/productionRefresh";
 import { useWorkDisplayProgress } from "../hooks/useProductionVisualClock";
 import type {
@@ -368,6 +369,8 @@ function LightweightNodeHandles({ data }: { data: FactoryNodeData }) {
   const { entity } = data;
   const specialInputs = entity.buildingId === "material_delivery_hub"
     ? (entity.deliverySlots ?? []).flatMap((slot, index) => slot.mode === "disabled" ? [] : [{ id: `in:delivery:${index}`, itemId: slot.itemId }])
+    : entity.buildingId === "orbital_cargo_terminal"
+      ? getOrbitalCargoPortItems(entity).map((itemId, index) => ({ id: `in:orbital:${index}`, itemId: itemId ?? undefined }))
     : entity.buildingId === "micro_black_hole_connector"
       ? ([0, 1, 2] as const).map((index) => ({ id: `in:black-hole:${index}`, itemId: data.blackHolePortConnections[index] }))
       : [];
@@ -818,21 +821,29 @@ function LogisticsFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const isStation = entity.kind === "station";
   const orbitalCollector = entity.buildingId === "orbital_collector";
   const deliveryHub = entity.buildingId === "material_delivery_hub";
+  const cargoTerminal = entity.buildingId === "orbital_cargo_terminal";
   const elevatorStation = isElevatorStation(entity);
   const deliverySlots = deliveryHub ? getMaterialDeliverySlots(entity) : [];
+  const cargoPorts = cargoTerminal ? getOrbitalCargoPortItems(entity) : [];
   const warehouseStorage = entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank";
   const configuredItems = elevatorStation
     ? []
     : deliveryHub
     ? getMaterialDeliveryItems(entity)
+    : cargoTerminal
+      ? [...new Set(cargoPorts.flatMap((candidate) => candidate ? [candidate] : []))]
     : isStation && !orbitalCollector
     ? getStationSlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : [])
     : itemId ? [itemId] : [];
-  const nodeRef = useDynamicHandles(entity.id, deliveryHub
+  const nodeRef = useDynamicHandles(entity.id, cargoTerminal
+    ? cargoPorts.map((item) => item ?? "empty").join(":")
+    : deliveryHub
     ? deliverySlots.map((slot) => `${slot.mode}:${slot.itemId ?? "empty"}`).join(":")
     : `${configuredItems.join(":") || "unconfigured"}:${elevatorStation ? (entity.elevatorOutputItems ?? []).join(":") : "auto"}`);
   const cargoKind = cargo ? getItem(cargo.itemId).kind : null;
-  const acceptsCargo = Boolean(cargo && (configuredItems.length === 0 || configuredItems.includes(cargo.itemId) || (deliveryHub && configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT)) && (
+  const acceptsCargo = Boolean(cargo && (cargoTerminal
+    ? data.acceptedInputItemIds.includes(cargo.itemId)
+    : configuredItems.length === 0 || configuredItems.includes(cargo.itemId) || (deliveryHub && configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT)) && (
     building.accepts === "any" || building.accepts === cargoKind || (building.accepts === "solid" && cargoKind === "matrix")
   ));
   const adding = placement === entity.buildingId;
@@ -851,7 +862,7 @@ function LogisticsFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
     <article
       data-heavy-card="true"
       ref={nodeRef}
-      className={`factory-node logistics-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${isStation ? " station-node" : ""}${deliveryHub ? " delivery-hub-node" : ""}${warehouseStorage ? " storage-buffer-node" : ""}${entity.buildingId === "storage_tank" ? " storage-buffer-node--fluid" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
+      className={`factory-node logistics-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${isStation ? " station-node" : ""}${deliveryHub ? " delivery-hub-node" : ""}${cargoTerminal ? " orbital-cargo-node" : ""}${warehouseStorage ? " storage-buffer-node" : ""}${entity.buildingId === "storage_tank" ? " storage-buffer-node--fluid" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();
@@ -878,17 +889,17 @@ function LogisticsFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
     >
       <InteractionLockBadge entity={entity} onChange={data.onInteractionLockChange} />
       <header className="factory-node__header">
-        <div className="node-icon">{isStation ? <Orbit size={18} /> : isSplitter ? <GitFork size={18} /> : <Database size={18} />}</div>
-        <div><span>{deliveryHub ? "物资托盘直送" : orbitalCollector ? "气态巨星采集" : planetaryStation ? "行星无线运输" : isStation ? "跨行星运输" : isSplitter ? "物流分配" : "物流缓存"}</span><strong>{building.name}</strong></div>
+        <div className="node-icon">{cargoTerminal ? <Satellite size={18} /> : isStation ? <Orbit size={18} /> : isSplitter ? <GitFork size={18} /> : <Database size={18} />}</div>
+        <div><span>{cargoTerminal ? "全星系空间站上传" : deliveryHub ? "物资托盘直送" : orbitalCollector ? "气态巨星采集" : planetaryStation ? "行星无线运输" : isStation ? "跨行星运输" : isSplitter ? "物流分配" : "物流缓存"}</span><strong>{building.name}</strong></div>
         <small>×{entity.machineCount}</small>
       </header>
       <WorkCycle
-        label={deliveryHub ? "直送周期" : orbitalCollector ? "采集周期" : planetaryStation ? "运输机航程" : isStation ? "运输船航程" : "物流周期"}
-        progress={orbitalCollector ? entity.progress : isStation ? entity.stationProgress ?? 0 : 0}
-        active={!data.paused && (isStation ? entity.utilization > 0.001 : data.activeLogisticsEntityIds.includes(entity.id))}
-        efficiency={isStation ? entity.utilization : data.activeLogisticsEntityIds.includes(entity.id) ? 1 : 0}
+        label={cargoTerminal ? "上传周期" : deliveryHub ? "直送周期" : orbitalCollector ? "采集周期" : planetaryStation ? "运输机航程" : isStation ? "运输船航程" : "物流周期"}
+        progress={cargoTerminal ? entity.orbitalCargoProgress ?? 0 : orbitalCollector ? entity.progress : isStation ? entity.stationProgress ?? 0 : 0}
+        active={!data.paused && (cargoTerminal ? entity.utilization > 0.001 : isStation ? entity.utilization > 0.001 : data.activeLogisticsEntityIds.includes(entity.id))}
+        efficiency={cargoTerminal || isStation ? entity.utilization : data.activeLogisticsEntityIds.includes(entity.id) ? 1 : 0}
         cyclesPerSecond={orbitalCollector ? data.cycleRatePerSecond : 0}
-        mode={orbitalCollector ? "cycle" : isStation ? "route" : "indeterminate"}
+        mode={cargoTerminal ? "cycle" : orbitalCollector ? "cycle" : isStation ? "route" : "indeterminate"}
         semanticKey={`${entity.id}:${isStation ? (entity.stationRoutes ?? []).map((route) => route.id).join(",") || "idle" : configuredItems.join(",") || "empty"}`}
         effectiveSimulationMultiplier={data.simulationMultiplier}
         animate={data.dynamicEffects}
@@ -897,6 +908,17 @@ function LogisticsFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         <div className="node-io logistics-io elevator-logistics-io">
           <div className="logistics-slot-row"><div className="node-io__column"><span className="node-io__label">通用输入</span><AutoInputPort connectionDraft={data.connectionDraft} label="任意物资" handleId="in:auto" /></div><div className="delivery-hub-target"><Database size={14} /><span>进入系统共享仓库</span></div></div>
           {(entity.elevatorOutputItems ?? []).map((outputItemId, index) => outputItemId ? <div className="logistics-slot-row" key={`${outputItemId}:${index}`}><div className="node-io__column node-io__column--output"><span className="node-io__label">输出 {index + 1}</span><OutputSlot entityId={entity.id} itemId={outputItemId} amount={entity.outputs[outputItemId] ?? 0} onPick={data.onPickOutput} connectionDraft={data.connectionDraft} connectionCount={data.outputBeltCounts[outputItemId] ?? 0} /></div><div className="delivery-hub-target"><Route size={14} /><span>{ITEMS[outputItemId].name}</span></div></div> : <div className="logistics-slot-row" key={`empty-output:${index}`}><div className="node-io__column node-io__column--output"><span className="node-io__label">输出 {index + 1}</span><span className="logistics-empty">未配置</span></div></div>)}
+        </div>
+      ) : cargoTerminal ? (
+        <div className="node-io logistics-io orbital-cargo-io">
+          {cargoPorts.map((portItemId, index) => <div className="logistics-slot-row orbital-cargo-slot-row" key={`orbital-${index}`}>
+            <div className="node-io__column">
+              <span className="node-io__label">上传口 {index + 1}</span>
+              {portItemId ? <InputSlot entityId={entity.id} itemId={portItemId} amount={entity.inputs[portItemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} connectionCount={data.inputBeltCounts[portItemId] ?? 0} handleId={`in:orbital:${index}`} />
+                : <AutoInputPort connectionDraft={data.connectionDraft} label="按绑定目标识别" handleId={`in:orbital:${index}`} />}
+            </div>
+            <div className="delivery-hub-target"><Satellite size={14} /><span>{portItemId ? "等待上传" : "目标物资"}</span></div>
+          </div>)}
         </div>
       ) : deliveryHub ? (
         <div className="node-io logistics-io delivery-hub-io">
@@ -926,10 +948,10 @@ function LogisticsFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       ) : (
         <div className="logistics-empty">{deliveryHub ? "连接任意输出端口，自动占用 3 个直送接口" : planetaryStation ? "在检查器中选择行星货物" : isStation ? "在检查器中选择星际货物" : "拖入物品或在检查器中选择缓存类型"}</div>
       )}
-      {!orbitalCollector && !deliveryHub && data.connectionDraft ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
+      {!orbitalCollector && !deliveryHub && !cargoTerminal && data.connectionDraft ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
       <footer className="factory-node__footer">
         <span title={data.status.label}>{data.status.label}</span>
-        <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{deliveryHub ? `${configuredItems.length}/${MATERIAL_DELIVERY_SLOT_COUNT} 接口 · ${entity.productionRate.toFixed(1)}/min` : orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${primaryStationMode === "demand" ? "需求" : primaryStationMode === "supply" ? "供应" : "仓储"} · ${configuredItems.length}/5 槽 · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${data.outputCapacity} 容量`}</span>
+        <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{cargoTerminal ? `${configuredItems.length}/${ORBITAL_CARGO_TERMINAL_PORT_COUNT} 接口 · ${entity.productionRate.toFixed(1)}/min` : deliveryHub ? `${configuredItems.length}/${MATERIAL_DELIVERY_SLOT_COUNT} 接口 · ${entity.productionRate.toFixed(1)}/min` : orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${primaryStationMode === "demand" ? "需求" : primaryStationMode === "supply" ? "供应" : "仓储"} · ${configuredItems.length}/5 槽 · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${data.outputCapacity} 容量`}</span>
       </footer>
     </article>
   );

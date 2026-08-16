@@ -125,6 +125,25 @@ import {
 } from "./http-security.mjs";
 import { bodyCapabilityForRoute } from "./http-route-policy.mjs";
 import { prepareLegacyJsonAccountImport } from "./account-archive-legacy-json.mjs";
+import {
+  STATION_SIGNAL_IDS,
+  applyStationSqliteCollections,
+  clearStationProfileSnapshot,
+  deleteStationAccountData,
+  findPublicStation,
+  initializeStationSqliteTables,
+  loadStationSqliteCollections,
+  normalizeStationCollections,
+  refreshStationProfile,
+  setStationFavorite,
+  setStationSignal,
+  setStationVisibility,
+  stationProjectionFromState,
+  stationPublicIdForUser,
+  stationSocialSummary,
+  validateOrbitalStationGameState,
+  withoutStationCollections,
+} from "./station-profile.mjs";
 
 const cloudTransferNumericKeys = [
   "version", "mibBytes", "guaranteedSavePayloadBytes", "savePayloadLimitBytes", "rawFallbackSafeLimitBytes",
@@ -152,7 +171,7 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"];
 const SAVE_MODES = ["normal", "speedrun"];
 const MANUAL_CLOUD_SAVE_SLOTS = CLOUD_SAVE_SLOTS.slice(1);
-const SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION = 2;
+const SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION = 3;
 const EMAIL_ACTION_TTL_MS = 30 * 60 * 1000;
 const OPERATION_RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const OPERATION_RECEIPT_LIMIT = 5_000;
@@ -202,7 +221,7 @@ const METRIC_KEYS = [
   "colonizedPlanets",
 ];
 const DEFAULT_DATA = {
-  schemaVersion: 7,
+  schemaVersion: 8,
   users: {},
   sessions: {},
   emailVerifications: {},
@@ -230,6 +249,10 @@ const DEFAULT_DATA = {
   errors: [],
   dailyMetrics: {},
   analytics: { visitors: {}, sessions: {}, daily: {} },
+  stationProfiles: {},
+  stationFavorites: {},
+  stationSignals: {},
+  stationModeration: {},
 };
 
 function cloneDefaultData() {
@@ -297,6 +320,7 @@ function normalizeUserRecords(value, sourceSchemaVersion) {
       emailVerifiedAt,
       passwordChangedAt: Number.isFinite(record.passwordChangedAt) ? Math.max(createdAt, Math.floor(record.passwordChangedAt)) : createdAt,
       leaderboardVisible: record.leaderboardVisible !== false,
+      stationVisibility: record.stationVisibility === "private" ? "private" : "public",
     };
   }
   return users;
@@ -648,6 +672,7 @@ function normalizeStoredData(parsed) {
     errors: Array.isArray(source.errors) ? source.errors.slice(-1000) : [],
     dailyMetrics: source.dailyMetrics && typeof source.dailyMetrics === "object" ? source.dailyMetrics : {},
     analytics: normalizeAnalyticsState(source.analytics),
+    ...normalizeStationCollections(source, users),
   };
   for (const [userId, save] of Object.entries(data.cloudSaves)) {
     const history = Array.isArray(data.cloudSaveHistory[userId]) ? data.cloudSaveHistory[userId] : [];
@@ -727,6 +752,7 @@ function publicUser(user) {
     emailVerifiedAt: Number.isFinite(user.emailVerifiedAt) ? user.emailVerifiedAt : null,
     passwordChangedAt: user.passwordChangedAt,
     leaderboardVisible: user.leaderboardVisible !== false,
+    stationVisibility: user.stationVisibility === "private" ? "private" : "public",
     leaderboardPublicId: leaderboardPublicId(user.id, "galaxy"),
     speedrunPublicId: leaderboardPublicId(user.id, "speedrun"),
   };
@@ -1521,6 +1547,7 @@ class SqliteStore extends AtomicStoreBase {
     this.database.exec("CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL, updated_at INTEGER NOT NULL)");
     this.database.exec("CREATE TABLE IF NOT EXISTS cloud_save_payloads (user_id TEXT NOT NULL, slot TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (user_id, slot, revision)) WITHOUT ROWID");
     initializeCloudPayloadStore(this.database);
+    initializeStationSqliteTables(this.database);
     const row = this.database.prepare("SELECT payload, updated_at AS updatedAt FROM app_state WHERE id = 1").get();
     if (!row?.payload) {
       this.data.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
@@ -1535,8 +1562,27 @@ class SqliteStore extends AtomicStoreBase {
       return;
     }
     const parsed = JSON.parse(row.payload);
-    if (parsed?.storageLayoutVersion === SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION) {
-      const normalized = normalizeStoredData(parsed);
+    if (parsed?.storageLayoutVersion === 2 || parsed?.storageLayoutVersion === SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION) {
+      const embedded = normalizeStoredData(parsed);
+      const storedStation = loadStationSqliteCollections(this.database, embedded.users);
+      const normalized = {
+        ...embedded,
+        ...Object.fromEntries(["stationProfiles", "stationFavorites", "stationSignals", "stationModeration"].map((key) => [
+          key,
+          { ...(embedded[key] ?? {}), ...(storedStation[key] ?? {}) },
+        ])),
+        storageLayoutVersion: SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION,
+      };
+      if (parsed.storageLayoutVersion !== SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION ||
+        ["stationProfiles", "stationFavorites", "stationSignals", "stationModeration"].some((key) => Object.keys(embedded[key] ?? {}).length > 0)) {
+        const payload = JSON.stringify(withoutStationCollections(normalized));
+        this.database.transaction(() => {
+          applyStationSqliteCollections(this.database, storedStation, normalized);
+          this.database.prepare("UPDATE app_state SET payload = ?, updated_at = ? WHERE id = 1").run(payload, Date.now());
+        })();
+        row.payload = payload;
+        row.updatedAt = this.database.prepare("SELECT updated_at AS updatedAt FROM app_state WHERE id = 1").get().updatedAt;
+      }
       this.runtimeStatePersistence = new SqliteRuntimeStatePersistence(this.database, { faultInjector: this.faultInjector });
       this.runtimeStatePersistence.initialize(normalized, {
         appStateUpdatedAt: row.updatedAt,
@@ -1747,9 +1793,11 @@ class SqliteStore extends AtomicStoreBase {
 
   async commitCandidate(candidate, mutation, context = {}) {
     candidate.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
+    const appStateCandidate = withoutStationCollections(candidate);
+    const appStateCurrent = withoutStationCollections(this._data);
     const operation = typeof context.operation === "string" ? context.operation : "store.persist";
     const runtimePlan = this.runtimeStatePersistence
-      ? createRuntimeStatePersistencePlan(this._data, candidate, {
+      ? createRuntimeStatePersistencePlan(appStateCurrent, appStateCandidate, {
         operation,
         runtimeIndexEvents: mutation.runtimeIndexEvents,
         dirtyServiceDays: Object.keys(candidate.dailyMetrics ?? {}).filter((day) =>
@@ -1758,7 +1806,7 @@ class SqliteStore extends AtomicStoreBase {
       })
       : null;
     const skipAppState = runtimePlan?.canSkipAppState === true;
-    const payload = skipAppState ? null : JSON.stringify(candidate);
+    const payload = skipAppState ? null : JSON.stringify(appStateCandidate);
     const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
     let runtimeCommitResult = null;
     const blobCleanupCandidates = new Map();
@@ -1797,6 +1845,7 @@ class SqliteStore extends AtomicStoreBase {
         importedChecksums.add(write.checksum);
       }
       this.maybeInjectPersistenceFault("after-payload-writes", context);
+      applyStationSqliteCollections(this.database, this._data, candidate);
       if (!skipAppState) writeState.run(payload, Date.now());
       if (runtimePlan) runtimeCommitResult = this.runtimeStatePersistence.applyPlanInTransaction(runtimePlan, { operation, synchronizeAppState: !skipAppState });
       this.maybeInjectPersistenceFault("after-app-state-write", context);
@@ -1866,7 +1915,7 @@ class SqliteStore extends AtomicStoreBase {
     forEachCloudSaveRecord(candidate, (userId, slot, save, mode = "normal") => {
       if (Number.isInteger(save?.revision) && save.revision > 0) retainedKeys.add(`${userId}\u0000${cloudStorageSlot(mode, slot)}\u0000${save.revision}`);
     });
-    const payload = JSON.stringify(candidate);
+    const payload = JSON.stringify(withoutStationCollections(candidate));
     await this.enqueueWrite(() => {
       const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
       const writeCloudPayload = this.database.prepare("INSERT INTO cloud_save_payloads (user_id, slot, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, slot, revision) DO UPDATE SET payload = excluded.payload");
@@ -1878,6 +1927,7 @@ class SqliteStore extends AtomicStoreBase {
           if (retainedKeys.has(key)) writeCloudPayload.run(write.userId, write.slot, write.revision, write.payload);
         }
         this.maybeInjectPersistenceFault("after-payload-writes", { operation: "storage.migrate-layout" });
+        applyStationSqliteCollections(this.database, this._data, candidate);
         writeState.run(payload, Date.now());
         this.maybeInjectPersistenceFault("after-app-state-write", { operation: "storage.migrate-layout" });
       })();
@@ -2010,6 +2060,7 @@ function deleteAccountData(store, userId) {
   }
   store.data.feedback = store.data.feedback.filter((entry) => entry.userId !== userId);
   store.data.errors = store.data.errors.filter((entry) => entry.userId !== userId);
+  deleteStationAccountData(store.data, userId);
   delete store.data.users[userId];
   store.recordRuntimeIndexEvent?.({ type: "leaderboard-account", userId });
 }
@@ -2032,6 +2083,9 @@ function adminAccountSummary(store, userId) {
     emailBound: Boolean(user.email),
     emailVerified: Number.isFinite(user.emailVerifiedAt),
     leaderboardVisible: user.leaderboardVisible !== false,
+    stationVisibility: user.stationVisibility === "private" ? "private" : "public",
+    stationPublicId: stationPublicIdForUser(store.data, userId),
+    stationWithdrawn: store.data.stationModeration?.[userId]?.withdrawn === true,
     sessionCount: Object.values(store.data.sessions).filter((session) => session.userId === userId && session.expiresAt > Date.now()).length,
     recentLogins: publicLoginSecurityEvents(store.data, userId),
     cloud: {
@@ -2455,6 +2509,7 @@ function publicUploadInspection(inspection) {
     payloadSize: inspection.payloadSize,
     summary: inspection.summary,
     leaderboardProjection: inspection.leaderboardProjection,
+    stationProjection: inspection.stationProjection,
     integrity: inspection.integrity,
     payloadParseCount: inspection.payloadParseCount,
   };
@@ -2512,7 +2567,7 @@ function validateParsedSavePayload(parsed, integrity = inspectParsedSavePayloadI
     if (!integrity.valid) return false;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 46) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 47) return false;
     if (savePayloadModeFromParsed(parsed) === null) return false;
     if (state.entities.some((entity) => !entity || typeof entity !== "object" || Array.isArray(entity) ||
       !inspectSaveContractRecord("entity", entity, state.version).valid)) return false;
@@ -2524,6 +2579,9 @@ function validateParsedSavePayload(parsed, integrity = inspectParsedSavePayloadI
     if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
       !belt || typeof belt !== "object" || Array.isArray(belt) ||
       !inspectSaveContractRecord("belt", belt, state.version).valid))) return false;
+    if (state.version === 47) {
+      if (!validateOrbitalStationGameState(state)) return false;
+    } else if (state.entities.some((entity) => entity?.buildingId === "orbital_cargo_terminal")) return false;
     const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
     const productionLimit = state.settings?.productionBufferLimit;
     const logisticsLimit = state.settings?.logisticsBufferLimit;
@@ -2685,6 +2743,9 @@ function validateParsedSavePayload(parsed, integrity = inspectParsedSavePayloadI
             !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096) return true;
           if (belt.targetPortIndex === undefined) return false;
           const targetTemplate = blueprintEntityByKey.get(belt.targetKey);
+          if (state.version >= 47 && targetTemplate?.buildingId === "orbital_cargo_terminal") {
+            return ![0, 1, 2, 3].includes(belt.targetPortIndex);
+          }
           return ![0, 1, 2].includes(belt.targetPortIndex) ||
             (targetTemplate?.buildingId !== "micro_black_hole_connector" && targetTemplate?.buildingId !== "material_delivery_hub");
         });
@@ -2706,6 +2767,9 @@ function validateParsedSavePayload(parsed, integrity = inspectParsedSavePayloadI
               (entity.buildingId === "interstellar_logistics_station"
                 ? typeof entity.quantumTarget !== "boolean"
                 : entity.quantumTarget !== false))) return false;
+          if (state.version >= 47 && entity.buildingId === "orbital_cargo_terminal" &&
+            (entity.machineCount !== 1 || !Array.isArray(entity.orbitalCargoPortItems) || entity.orbitalCargoPortItems.length !== 4 ||
+              entity.orbitalCargoPortItems.some((itemId) => itemId !== null && !validId(itemId, 80)))) return false;
           keys.add(entity.key);
         }
         for (const anchor of blueprint.resourceAnchors ?? []) {
@@ -2800,6 +2864,8 @@ function validateParsedSavePayload(parsed, integrity = inspectParsedSavePayloadI
           if (![0, 1, 2].includes(belt.targetPortIndex)) return false;
           const slot = target.deliverySlots?.[belt.targetPortIndex];
           if (!slot || slot.mode === "disabled" || typeof belt.itemId !== "string" || slot.itemId !== belt.itemId) return false;
+        } else if (state.version >= 47 && target?.buildingId === "orbital_cargo_terminal") {
+          if (![0, 1, 2, 3].includes(belt.targetPortIndex) || target.orbitalCargoPortItems?.[belt.targetPortIndex] !== belt.itemId) return false;
         } else if (belt?.targetPortIndex !== undefined) {
           return false;
         }
@@ -2903,7 +2969,9 @@ export function inspectDecodedCloudSaveUpload(rawBody, descriptor, { returnPaylo
   const summary = parseSucceeded ? summarizeParsedSavePayload(parsed, integrity, payloadMode) : null;
   const legacyImplicitSpeedrun = parseSucceeded && isLegacyImplicitSpeedrunParsed(parsed);
   const payloadChecksum = validPayload ? sha256(descriptor.direct ? raw : payload) : null;
-  const leaderboardProjection = validPayload ? leaderboardProjectionFromState(integrity.state ?? parsed?.state ?? parsed) : null;
+  const parsedState = integrity.state ?? parsed?.state ?? parsed;
+  const leaderboardProjection = validPayload ? leaderboardProjectionFromState(parsedState) : null;
+  const stationProjection = validPayload && parsedState?.version === 47 ? stationProjectionFromState(parsedState) : null;
   let payloadBuffer;
   if (returnPayloadBuffer && validPayload) {
     if (descriptor.direct) {
@@ -2928,6 +2996,7 @@ export function inspectDecodedCloudSaveUpload(rawBody, descriptor, { returnPaylo
     payloadSize,
     summary,
     leaderboardProjection,
+    stationProjection,
     integrity: {
       valid: integrity.valid,
       hasState: Boolean(integrity.state),
@@ -3379,6 +3448,10 @@ function leaderboardMeSnapshot(store, userId, category, seasonId, leaderboardSna
   } else {
     status = entry ? "ranked" : "unavailable";
   }
+  if (entry) {
+    const stationPublicId = stationPublicIdForUser(store.data, userId);
+    entry = { ...entry, ...(stationPublicId ? { stationPublicId } : {}) };
+  }
   return {
     status,
     entry,
@@ -3404,6 +3477,13 @@ function anonymousPublicLeaderboardEntry(entry, rank) {
 
 function publicLeaderboardEntry(entry, rank) {
   return anonymousPublicLeaderboardEntry(entry, rank);
+}
+
+function publicLeaderboardEntryWithStation(store, entry, rank) {
+  const projected = publicLeaderboardEntry(entry, rank);
+  if (!projected) return null;
+  const stationPublicId = stationPublicIdForUser(store.data, entry.userId ?? entry.accountId);
+  return { ...projected, ...(stationPublicId ? { stationPublicId } : {}) };
 }
 
 function backfillLeaderboardFromMainSaves(store) {
@@ -3446,6 +3526,30 @@ function saveHistory(store, userId, slot = "main", mode = "normal") {
   }
   if (slot === "main") return Array.isArray(store.data.cloudSaveHistoryByMode[userId]?.[mode]) ? store.data.cloudSaveHistoryByMode[userId][mode] : [];
   return Array.isArray(store.data.cloudSaveSlotHistoryByMode[userId]?.[mode]?.[slot]) ? store.data.cloudSaveSlotHistoryByMode[userId][mode][slot] : [];
+}
+
+function rebuildStationFromMainSave(store, userId, now = Date.now()) {
+  const user = store.data.users[userId];
+  if (!user) return { ok: false, status: 404, code: "STATION_ACCOUNT_NOT_FOUND", error: "账号不存在" };
+  const metadata = currentCloudSave(store, userId, "main", "normal");
+  if (!metadata) return { ok: false, status: 409, code: "STATION_MAIN_SAVE_REQUIRED", error: "请先上传普通模式主云存档" };
+  const save = typeof metadata.payload === "string" ? metadata : materializeCloudSave(store, userId, "main", metadata, "normal");
+  if (!save) return { ok: false, status: 500, code: "CLOUD_SAVE_PAYLOAD_MISSING", error: "普通主云存档正文缺失" };
+  const state = parseSaveState(save.payload);
+  if (!state || state.version !== 47 || !validateOrbitalStationGameState(state)) {
+    return { ok: false, status: 422, code: "STATION_SAVE_INVALID", error: "普通主云存档尚不包含可发布的空间站状态" };
+  }
+  if (state.orbitalStation.status !== "operational") {
+    return { ok: false, status: 409, code: "STATION_NOT_OPERATIONAL", error: "完成展示舱段后才能发布空间站主页" };
+  }
+  const projection = stationProjectionFromState(state);
+  const submission = store.data.submissions[`${ACTIVE_LEADERBOARD_SEASON_ID}:${userId}`];
+  const metrics = isServerLeaderboardSubmission(submission) ? submission.metrics : leaderboardMetricsFromState(state);
+  const refreshed = refreshStationProfile(store.data, user, projection, save.revision, metrics, now);
+  if (!refreshed.published || !refreshed.profile?.snapshot) {
+    return { ok: false, status: 422, code: "STATION_SNAPSHOT_INVALID", error: "空间站公开资料未通过安全校验" };
+  }
+  return { ok: true, profile: refreshed.profile };
 }
 
 function cloudSavePayload(store, userId, slot, revision, save = null, mode = "normal") {
@@ -3548,6 +3652,7 @@ function clearAccountCloudSaveMetadata(store, userId) {
 
 function installAccountArchiveCloudSaves(store, userId, records) {
   clearAccountCloudSaveMetadata(store, userId);
+  clearStationProfileSnapshot(store.data, userId);
   const grouped = new Map();
   for (const record of records) {
     const key = `${record.mode}:${record.slot}`;
@@ -3642,6 +3747,7 @@ function deleteCloudSaveData(store, userId, slot = "main", mode = "normal") {
   if (mode === "normal" && slot === "main") {
     delete store.data.cloudSaves[userId];
     delete store.data.cloudSaveHistory[userId];
+    clearStationProfileSnapshot(store.data, userId);
     removeUserLeaderboardSubmissions(store, userId);
     store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId });
   } else if (mode === "normal") {
@@ -3976,6 +4082,7 @@ export async function createCloudServer({
   const galacticActivityConfig = activityConfig ? normalizeActivityConfig(activityConfig) : await loadActivityConfig(activityConfigFile);
   const rateLimit = createRateLimiter();
   const registrationRateLimit = createRateLimiter();
+  const stationRateLimit = createRateLimiter(nowProvider);
   const loginFailureGuard = createLoginFailureGuard();
   const uploadInspections = new UploadInspectionScheduler({
     inspectInline: inspectDecodedCloudSaveUpload,
@@ -4113,6 +4220,7 @@ export async function createCloudServer({
     if (runtime.shuttingDown) return;
     rateLimit.cleanup();
     registrationRateLimit.cleanup();
+    stationRateLimit.cleanup();
     void store.mutate((draftStore) => {
       const retention = applyRuntimeRetentionPolicy(draftStore.data, {
         now: nowProvider(),
@@ -4400,7 +4508,7 @@ export async function createCloudServer({
         const body = await readJson(request);
         const accountId = typeof body.accountId === "string" && store.data.users[body.accountId] ? body.accountId : null;
         const action = typeof body.action === "string" ? body.action : "";
-        const allowedActions = new Set(["revoke-sessions", "disable-login", "enable-login", "restrict-leaderboard", "restore-leaderboard", "delete-account"]);
+        const allowedActions = new Set(["revoke-sessions", "disable-login", "enable-login", "restrict-leaderboard", "restore-leaderboard", "withdraw-station", "restore-station", "delete-account"]);
         if (!accountId || !allowedActions.has(action)) return send(response, 400, { error: "账号或管理员动作无效" });
         if (body.confirmation !== `CONFIRM:${action}:${accountId}`) {
           return send(response, 400, { error: "二次确认文字不匹配", code: "ADMIN_CONFIRMATION_INVALID" });
@@ -4453,6 +4561,15 @@ export async function createCloudServer({
           else delete store.data.accountControls[accountId];
           store.recordRuntimeIndexEvent?.({ type: "leaderboard-restriction", userId: accountId });
           store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId: accountId });
+        } else if (action === "withdraw-station") {
+          store.data.stationModeration ??= {};
+          store.data.stationModeration[accountId] = {
+            withdrawn: true,
+            reason: typeof body.reason === "string" ? body.reason.slice(0, 120) : "admin-manual-review",
+            updatedAt: Date.now(),
+          };
+        } else if (action === "restore-station") {
+          delete store.data.stationModeration?.[accountId];
         } else if (action === "delete-account") {
           const verifiedAt = Number(body.verifiedBackupAt);
           if (!runtime.lastBackupAt || verifiedAt !== runtime.lastBackupAt || Date.now() - runtime.lastBackupAt > 24 * 60 * 60 * 1_000) {
@@ -4523,6 +4640,7 @@ export async function createCloudServer({
           emailVerifiedAt: null,
           passwordChangedAt: now,
           leaderboardVisible: true,
+          stationVisibility: "public",
           ...credentials,
         };
         store.data.users[user.id] = user;
@@ -5291,10 +5409,18 @@ export async function createCloudServer({
         if (slot === "main") {
           const revalidationCleared = clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, next.revision, effectiveMode);
           if (revalidationCleared && effectiveMode === "normal") store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId: auth.user.id });
-          if (effectiveMode === "normal") updateLeaderboardFromMainSave(store, auth.user.id, {
-            save: next,
-            inspection: publicUploadInspection(body),
-          });
+          if (effectiveMode === "normal") {
+            const inspection = publicUploadInspection(body);
+            const leaderboard = updateLeaderboardFromMainSave(store, auth.user.id, { save: next, inspection });
+            refreshStationProfile(
+              store.data,
+              auth.user,
+              inspection.stationProjection,
+              next.revision,
+              leaderboard.submission?.metrics ?? leaderboardMetricsFromState(inspection.leaderboardProjection),
+              next.updatedAt,
+            );
+          }
         }
         dayMetric.cloudUploads += 1;
         const metadata = cloudSaveMetadata(next, slot, effectiveMode);
@@ -5355,13 +5481,139 @@ export async function createCloudServer({
         if (slot === "main") {
           const revalidationCleared = clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, restored.revision, mode);
           if (revalidationCleared && mode === "normal") store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId: auth.user.id });
-          if (mode === "normal") updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
+          if (mode === "normal") {
+            const restoredState = parseSaveState(restored.payload);
+            const leaderboard = updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
+            refreshStationProfile(
+              store.data,
+              auth.user,
+              stationProjectionFromState(restoredState),
+              restored.revision,
+              leaderboard.submission?.metrics ?? leaderboardMetricsFromState(restoredState),
+              restored.updatedAt,
+            );
+          }
         }
         dayMetric.cloudUploads += 1;
         appendAudit(store, request, "cloud.revision_restored", auth.user.id);
         if (pruned.revisionCount > 0) appendAudit(store, request, "cloud.history_pruned_for_quota", auth.user.id);
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(restored, slot, mode) });
+      }
+
+      const publicStationMatch = /^\/api\/stations\/(station_[a-f0-9]{32})$/.exec(url.pathname);
+      if (request.method === "GET" && publicStationMatch) {
+        if (!stationRateLimit(`station-read:${ip}`, 60, 60_000)) {
+          return send(response, 429, { error: "空间站访问过于频繁，请稍后再试", code: "STATION_READ_RATE_LIMITED" }, { "retry-after": "60" });
+        }
+        const profile = findPublicStation(store.data, store.data.users, publicStationMatch[1]);
+        if (!profile) return send(response, 404, { error: "空间站不存在", code: "STATION_NOT_FOUND" });
+        const viewer = authenticateRequest(request)?.user ?? null;
+        return send(response, 200, {
+          snapshot: profile.snapshot,
+          social: stationSocialSummary(store.data, profile.userId, viewer?.id ?? null),
+        });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/station/me") {
+        const auth = authenticateRequest(request);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const profile = store.data.stationProfiles?.[auth.user.id] ?? null;
+        response.setHeader("cache-control", "private, no-store");
+        return send(response, 200, {
+          visibility: auth.user.stationVisibility === "private" ? "private" : "public",
+          publicId: profile?.snapshot ? profile.publicId : null,
+          published: Boolean(profile?.snapshot),
+          sourceRevision: profile?.sourceRevision ?? null,
+          snapshot: profile?.snapshot ?? null,
+          social: stationSocialSummary(store.data, auth.user.id, auth.user.id),
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/station/publish") {
+        const auth = authenticateRequest(request);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!stationRateLimit(`station-publish:${auth.user.id}`, 6, 60_000)) {
+          return send(response, 429, { error: "发布操作过于频繁，请稍后再试", code: "STATION_PUBLISH_RATE_LIMITED" }, { "retry-after": "60" });
+        }
+        const body = await readJson(request);
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length > 0) {
+          return send(response, 400, { error: "发布接口不接受客户端快照正文", code: "STATION_CLIENT_SNAPSHOT_FORBIDDEN" });
+        }
+        const result = rebuildStationFromMainSave(store, auth.user.id, Date.now());
+        if (!result.ok) return send(response, result.status, { error: result.error, code: result.code });
+        appendAudit(store, request, "station.published", auth.user.id);
+        await store.persist({ operation: "station.publish" });
+        return send(response, 200, {
+          published: true,
+          visibility: result.profile.visibility,
+          publicId: result.profile.publicId,
+          sourceRevision: result.profile.sourceRevision,
+          snapshot: result.profile.snapshot,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/station/visibility") {
+        const auth = authenticateRequest(request);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const body = await readJson(request);
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => key !== "visibility") ||
+          !["public", "private"].includes(body.visibility)) {
+          return send(response, 400, { error: "空间站可见性设置无效", code: "STATION_VISIBILITY_INVALID" });
+        }
+        if (body.visibility === "public") {
+          const result = rebuildStationFromMainSave(store, auth.user.id, Date.now());
+          if (!result.ok) return send(response, result.status, { error: result.error, code: result.code });
+        }
+        const profile = setStationVisibility(store.data, auth.user, body.visibility, Date.now());
+        appendAudit(store, request, body.visibility === "public" ? "station.visibility_enabled" : "station.visibility_disabled", auth.user.id);
+        await store.persist({ operation: "station.visibility" });
+        return send(response, 200, {
+          visibility: body.visibility,
+          publicId: profile?.snapshot ? profile.publicId : null,
+          published: Boolean(profile?.snapshot),
+          user: publicUser(auth.user),
+        });
+      }
+
+      const stationFavoriteMatch = /^\/api\/stations\/(station_[a-f0-9]{32})\/favorite$/.exec(url.pathname);
+      if ((request.method === "POST" || request.method === "DELETE") && stationFavoriteMatch) {
+        const auth = authenticateRequest(request);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!stationRateLimit(`station-favorite:${auth.user.id}`, 30, 60_000)) {
+          return send(response, 429, { error: "收藏操作过于频繁，请稍后再试", code: "STATION_SOCIAL_RATE_LIMITED" }, { "retry-after": "60" });
+        }
+        const profile = findPublicStation(store.data, store.data.users, stationFavoriteMatch[1]);
+        if (!profile) return send(response, 404, { error: "空间站不存在", code: "STATION_NOT_FOUND" });
+        if (request.method === "POST") {
+          const body = await readJson(request);
+          if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length > 0) {
+            return send(response, 400, { error: "收藏请求正文无效", code: "STATION_SOCIAL_BODY_INVALID" });
+          }
+        }
+        const result = setStationFavorite(store.data, auth.user.id, profile.userId, request.method === "POST", Date.now());
+        if (!result.ok) return send(response, 409, { error: "不能收藏自己的空间站", code: result.code });
+        await store.persist({ operation: "station.favorite" });
+        return send(response, 200, { favorite: result.favorite, social: stationSocialSummary(store.data, profile.userId, auth.user.id) });
+      }
+
+      const stationSignalMatch = /^\/api\/stations\/(station_[a-f0-9]{32})\/signal$/.exec(url.pathname);
+      if (request.method === "POST" && stationSignalMatch) {
+        const auth = authenticateRequest(request);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!stationRateLimit(`station-signal:${auth.user.id}`, 20, 60_000)) {
+          return send(response, 429, { error: "通讯信号发送过于频繁，请稍后再试", code: "STATION_SOCIAL_RATE_LIMITED" }, { "retry-after": "60" });
+        }
+        const profile = findPublicStation(store.data, store.data.users, stationSignalMatch[1]);
+        if (!profile) return send(response, 404, { error: "空间站不存在", code: "STATION_NOT_FOUND" });
+        const body = await readJson(request);
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => key !== "signalId") || !STATION_SIGNAL_IDS.has(body.signalId)) {
+          return send(response, 400, { error: "通讯信号无效", code: "STATION_SIGNAL_INVALID" });
+        }
+        const result = setStationSignal(store.data, auth.user.id, profile.userId, body.signalId, Date.now());
+        if (!result.ok) return send(response, 409, { error: "不能向自己的空间站发送信号", code: result.code });
+        await store.persist({ operation: "station.signal" });
+        return send(response, 200, { signalId: result.signalId, social: stationSocialSummary(store.data, profile.userId, auth.user.id) });
       }
 
       if (request.method === "GET" && url.pathname === "/api/speedrun/leaderboard") {
@@ -5436,7 +5688,10 @@ export async function createCloudServer({
       if (request.method === "GET" && url.pathname === "/api/leaderboard") {
         const category = VALID_CATEGORIES.has(url.searchParams.get("category")) ? url.searchParams.get("category") : "galaxy";
         const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : ACTIVE_LEADERBOARD_SEASON_ID;
-        const page = leaderboardIndex.getPublicPage(category, seasonId, { limit: 100, project: publicLeaderboardEntry });
+        const page = leaderboardIndex.getPublicPage(category, seasonId, {
+          limit: 100,
+          project: (entry, rank) => publicLeaderboardEntryWithStation(store, entry, rank),
+        });
         return send(response, 200, {
           category,
           seasonId,

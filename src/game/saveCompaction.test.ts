@@ -10,7 +10,7 @@ import { inspectSave, migrateGame, serializeEnvelope } from "./storage";
 
 const environment = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } }).process?.env;
 
-describe("v46 sparse save projection", () => {
+describe("v47 sparse save projection", () => {
   it("consumes the shared contract for every projected entity and belt default", () => {
     const state = createInitialState(1, false);
     const station = structuredClone(state.entities[0]);
@@ -210,8 +210,8 @@ describe("v46 sparse save projection", () => {
     });
     const denseLoaded = inspectSave(denseRaw);
     const sparseLoaded = inspectSave(sparseRaw);
-    expect(denseLoaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
-    expect(sparseLoaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(denseLoaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
+    expect(sparseLoaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(sparseLoaded.state).toEqual(denseLoaded.state);
     expect(sparseLoaded.state!.entities.at(-1)!.stationSlots).toHaveLength(5);
     expect(sparseLoaded.state!.entities.at(-1)).toMatchObject({
@@ -309,7 +309,7 @@ describe("v46 sparse save projection", () => {
       expect(persistedBelt).not.toHaveProperty(key);
     }
     const inspection = inspectSave(raw);
-    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(inspection.state!.entities.find((entity) => entity.id === primary.id)).toMatchObject({
       inputs: { iron_ore: 42 }, outputs: { iron_ore: 7 }, progress: 0.5, powerFactor: 0.8, productionRate: 12,
     });
@@ -359,7 +359,7 @@ describe("v46 sparse save projection", () => {
       expect(Object.prototype.hasOwnProperty.call(projected, "blackHoleActivationConfirmed")).toBe(true);
     }
     const loaded = inspectSave(raw);
-    expect(loaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(loaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(loaded.state!.entities.find((entity) => entity.id === "black-hole-running")).toMatchObject({
       blackHolePaused: false,
       blackHoleActivationConfirmed: true,
@@ -459,7 +459,7 @@ describe("v46 sparse save projection", () => {
     const inspection = inspectSave(raw);
     console.log(`V144_ANONYMOUS_2X_SAVE ${JSON.stringify({ bytes, entityCount, beltCount, stationCount })}`);
     expect(bytes).toBeLessThanOrEqual(60 * 1024 * 1024);
-    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(inspection.state?.entities).toHaveLength(entityCount);
     expect(inspection.state?.belts).toHaveLength(beltCount);
   }, 120_000);
@@ -485,7 +485,7 @@ describe("v46 sparse save projection", () => {
       belts: state!.belts.length,
     };
     console.log(`V138_SAVE_COMPACTION ${JSON.stringify(report)}`);
-    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(inspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(compactBytes).toBeLessThan(sourceBytes);
     if (sourceBytes >= 35 * 1024 * 1024 && sourceBytes <= 36 * 1024 * 1024) {
       expect(compactBytes).toBeLessThanOrEqual(Math.floor(29.7 * 1024 * 1024));
@@ -536,7 +536,7 @@ describe("v46 sparse save projection", () => {
       stationCount: doubledState.entities.filter((entity) => Boolean(entity.stationSlots)).length,
     })}`);
     expect(doubledBytes).toBeLessThanOrEqual(60 * 1024 * 1024);
-    expect(doubledInspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(doubledInspection).toMatchObject({ valid: true, checksum: "valid", stateVersion: 47 });
     expect(doubledInspection.state?.entities).toHaveLength(state!.entities.length * 2);
     expect(doubledInspection.state?.belts).toHaveLength(state!.belts.length * 2);
 

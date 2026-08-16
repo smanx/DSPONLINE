@@ -271,7 +271,7 @@ describe("pure idle macro session", () => {
 
     const result = finalizePureIdleMacroSession(session, 7 * 24 * 60 * 60, createContentPackRegistry());
 
-    expect(result.state.version).toBe(46);
+    expect(result.state.version).toBe(47);
     expect(result.state.timeWarp.enabled).toBe(false);
     expect(result.state.timeWarp.pendingSimulationSeconds).toBe(0);
     expect(result.state.timeWarp.pendingWallSeconds).toBe(0);

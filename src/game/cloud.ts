@@ -1,5 +1,5 @@
 import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type LeaderboardMetrics } from "./leaderboardContract";
-import type { SaveMode, SpeedrunTargetId } from "./types";
+import type { PublicStationMetricKey, SaveMode, SpeedrunTargetId, StationDecorationPlacement } from "./types";
 import {
   assessSavePayloadSize,
   CLOUD_SAVE_LARGE_ENDGAME_BYTES,
@@ -58,6 +58,8 @@ export interface CloudUser {
   emailVerifiedAt: number | null;
   passwordChangedAt: number;
   leaderboardVisible: boolean;
+  /** Missing on schema v7 nodes and is treated as the default public setting. */
+  stationVisibility?: "public" | "private";
   /** Stable anonymous aliases used only to identify this account in public lists. */
   leaderboardPublicId?: string;
   speedrunPublicId?: string;
@@ -301,6 +303,51 @@ export interface CloudLeaderboardEntry {
   value: number;
   verified: boolean;
   rank: number;
+  stationPublicId?: string;
+}
+
+export type StationSignalId = "spectacular" | "precise" | "industrial" | "layout";
+
+export interface PublicStationSnapshot {
+  schema: "station-showcase-v1";
+  publicId: string;
+  owner: { displayName: string; avatar: string };
+  profile: { title: string; motto: string };
+  station: {
+    stage: "operational";
+    reputation: string;
+    level: number;
+    themeId: string;
+    placements: StationDecorationPlacement[];
+    featuredAchievementIds: string[];
+    completedContracts: number;
+    featuredContract: { id: string; title: string; difficulty: "P1" | "P2" | "P3"; settledAtTaskDay: number } | null;
+  };
+  metrics: Partial<Record<PublicStationMetricKey, number | string>>;
+  aggregateMetrics: Partial<Record<PublicStationMetricKey, number | string>>;
+  metricStatus: "official" | "content-pack-unverified";
+  publishedAt: number;
+}
+
+export interface PublicStationSocial {
+  favoriteCount: number;
+  viewerFavorite: boolean;
+  signals: Record<StationSignalId, number>;
+  viewerSignal: StationSignalId | null;
+}
+
+export interface PublicStationResponse {
+  snapshot: PublicStationSnapshot;
+  social: PublicStationSocial;
+}
+
+export interface CloudStationProfile {
+  visibility: "public" | "private";
+  publicId: string | null;
+  published: boolean;
+  sourceRevision: number | null;
+  snapshot: PublicStationSnapshot | null;
+  social: PublicStationSocial;
 }
 
 export type CloudLeaderboardMeStatus =
@@ -1585,6 +1632,54 @@ export async function setCloudLeaderboardVisibility(visible: boolean): Promise<C
     body: JSON.stringify({ visible }),
   }, true);
   return result.user;
+}
+
+function validStationPublicId(publicId: string): boolean {
+  return /^station_[a-f0-9]{32}$/.test(publicId);
+}
+
+export async function fetchPublicStation(publicId: string): Promise<PublicStationResponse> {
+  if (!validStationPublicId(publicId)) throw new CloudApiError("空间站公开地址无效", 404, { code: "STATION_NOT_FOUND" });
+  return cloudRequest<PublicStationResponse>(`/stations/${encodeURIComponent(publicId)}`, {}, hasCloudAuthentication(), true);
+}
+
+export async function fetchCloudStationProfile(): Promise<CloudStationProfile> {
+  return cloudRequest<CloudStationProfile>("/station/me", {}, true);
+}
+
+export async function publishCloudStation(): Promise<CloudStationProfile> {
+  const result = await cloudRequest<Omit<CloudStationProfile, "social">>("/station/publish", {
+    method: "POST",
+    body: "{}",
+  }, true);
+  const current = await fetchCloudStationProfile();
+  return { ...current, ...result };
+}
+
+export async function setCloudStationVisibility(visibility: "public" | "private"): Promise<CloudStationProfile> {
+  await cloudRequest("/station/visibility", {
+    method: "POST",
+    body: JSON.stringify({ visibility }),
+  }, true);
+  return fetchCloudStationProfile();
+}
+
+export async function setCloudStationFavorite(publicId: string, favorite: boolean): Promise<PublicStationSocial> {
+  if (!validStationPublicId(publicId)) throw new CloudApiError("空间站公开地址无效", 404, { code: "STATION_NOT_FOUND" });
+  const result = await cloudRequest<{ social: PublicStationSocial }>(`/stations/${encodeURIComponent(publicId)}/favorite`, {
+    method: favorite ? "POST" : "DELETE",
+    ...(favorite ? { body: "{}" } : {}),
+  }, true);
+  return result.social;
+}
+
+export async function sendCloudStationSignal(publicId: string, signalId: StationSignalId): Promise<PublicStationSocial> {
+  if (!validStationPublicId(publicId)) throw new CloudApiError("空间站公开地址无效", 404, { code: "STATION_NOT_FOUND" });
+  const result = await cloudRequest<{ social: PublicStationSocial }>(`/stations/${encodeURIComponent(publicId)}/signal`, {
+    method: "POST",
+    body: JSON.stringify({ signalId }),
+  }, true);
+  return result.social;
 }
 
 export async function sendCloudFeedback(kind: string, message: string, diagnostics: Record<string, unknown>): Promise<string> {

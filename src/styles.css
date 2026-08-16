@@ -2888,6 +2888,83 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   }
 }
 
+.canvas-global-navigation {
+  position: relative;
+  z-index: 7;
+  display: flex;
+  min-width: 0;
+  max-width: calc(100% - 12px);
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  justify-self: end;
+  align-items: stretch;
+  gap: 7px;
+  margin-right: 12px;
+}
+
+.canvas-global-navigation > .planet-navigator {
+  min-width: 0;
+  margin-right: 0;
+}
+
+.orbital-station-entry {
+  display: grid;
+  width: 112px;
+  min-width: 112px;
+  height: 48px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid var(--theme-border);
+  border-radius: 5px;
+  background: var(--theme-surface-translucent);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, .16);
+  color: var(--theme-text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.orbital-station-entry:hover,
+.orbital-station-entry.active {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-accent-soft);
+  color: var(--cyan);
+}
+
+.orbital-station-entry.claimable {
+  border-color: var(--theme-warning-border);
+  color: var(--yellow);
+}
+
+.orbital-station-entry > i {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.orbital-station-entry > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.orbital-station-entry strong,
+.orbital-station-entry small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orbital-station-entry strong { color: var(--theme-text-soft); font-size: calc(10px * var(--ui-font-scale, 1)); }
+.orbital-station-entry small { font-size: calc(7px * var(--ui-font-scale, 1)); }
+
+.game-shell[data-mobile-shell="true"] .canvas-global-navigation { display: none; }
+
 .start-menu-mode-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -20930,6 +21007,9 @@ input:focus-visible,
 .galaxy-rank-value small { margin-left: 4px; color: var(--muted); font-size: 7px; font-weight: 500; }
 .galaxy-rank-status { display: flex; width: fit-content; align-items: center; gap: 4px; padding: 4px 6px; border: 1px solid #3c554d; border-radius: 3px; color: #83b7a8; font-size: 7px; white-space: nowrap; }
 .galaxy-rank-status--preview { border-color: #675b37; color: var(--yellow); }
+.galaxy-rank-actions { display: grid; justify-items: start; gap: 3px; }
+.galaxy-rank-actions > a { display: inline-flex; align-items: center; gap: 3px; color: var(--cyan); font-size: 7px; text-decoration: none; white-space: nowrap; }
+.galaxy-rank-actions > a:hover { text-decoration: underline; }
 
 .galaxy-upload-panel {
   min-width: 0;
@@ -23203,6 +23283,32 @@ input:focus-visible,
 }
 
 .delivery-hub-slot-actions button.danger {
+  color: #d78b7d;
+}
+
+.orbital-cargo-port-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.orbital-cargo-port-actions button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 8px;
+  overflow-wrap: anywhere;
+}
+
+.orbital-cargo-port-actions button:last-child {
   color: #d78b7d;
 }
 

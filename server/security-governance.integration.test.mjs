@@ -116,7 +116,7 @@ test("exposes SQLite growth metrics and requires an exact prune preview confirma
     const headers = { authorization: `Bearer ${adminToken}` };
     const metrics = await request("/api/admin/metrics?days=7", { headers });
     assert.equal(metrics.response.status, 200);
-    assert.equal(metrics.body.governance.sqlite.layoutVersion, 2);
+    assert.equal(metrics.body.governance.sqlite.layoutVersion, 3);
     assert.equal(typeof metrics.body.governance.sqlite.appStateBytes, "number");
     assert.equal(typeof metrics.body.runtime.writeQueueDepth, "number");
     assert.equal(metrics.body.backups.state, "disabled");

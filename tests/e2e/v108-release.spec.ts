@@ -105,7 +105,7 @@ test("structurally complete checksum failures show real progress and require two
     const parsed = JSON.parse(rawSave);
     return { formatVersion: parsed.formatVersion, version: parsed.state.version, checksum: parsed.checksum, state: parsed.state };
   });
-  expect(integrity.version).toBe(46);
+  expect(integrity.version).toBe(47);
   expect(integrity.checksum).toBe(checksum(integrity.formatVersion, integrity.state));
 });
 

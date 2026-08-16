@@ -218,7 +218,7 @@ test("archive route exports a no-save account as a valid manifest-v2 with downlo
     assert.equal(downloaded.response.headers.get("cache-control"), "private, no-store");
     assert.equal(downloaded.response.headers.get("x-dsp-account-archive-version"), "2");
     assert.equal(downloaded.archive.manifest.manifestVersion, 2);
-    assert.equal(downloaded.archive.manifest.schemaVersion, 7);
+    assert.equal(downloaded.archive.manifest.schemaVersion, 8);
     assert.deepEqual(downloaded.archive.manifest.refs, []);
     assert.deepEqual(downloaded.archive.manifest.blobs, []);
     assert.equal(downloaded.archive.accountData.accountId, account.accountId);

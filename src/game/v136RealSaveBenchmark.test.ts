@@ -141,7 +141,7 @@ describe("1.0.36 read-only real-save benchmark", () => {
       },
     };
     console.log(`V136_REAL_SAVE_BENCHMARK ${JSON.stringify(report)}`);
-    expect(source.version).toBe(46);
+    expect(source.version).toBe(47);
     expect(exactState.elapsedSeconds).toBeCloseTo(source.elapsedSeconds + exactSeconds, 6);
     expect(exactIntegrity.invalidAmounts).toBe(0);
     if (sliceState && sliceCount === exactSeconds) expect(report.slices.gameplayHash).toBe(report.exact.gameplayHash);

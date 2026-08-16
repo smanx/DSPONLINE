@@ -47,6 +47,7 @@ import { isElevatorStation, settleSystemHubLogistics, SYSTEM_HUB_SETTLEMENT_SECO
 import { compactProductionHistory, PRODUCTION_HISTORY_SAMPLE_SECONDS } from "./productionStatistics";
 import type {
   BeltTier,
+  BeltInputPortIndex,
   BeltRouteMode,
   BeltConnection,
   BlueprintDefinition,
@@ -149,6 +150,15 @@ import {
 } from "./recursiveCrafting";
 import { advanceSpeedrunClock, createSpeedrunState, evaluateSpeedrunMilestones } from "./speedrun";
 import { createIdleSettlementState } from "./idleSettlement";
+import { cloneOrbitalStationState, createOrbitalStationState, synchronizeOrbitalStationEligibility } from "./orbitalStation";
+import {
+  configureOrbitalCargoPortMutable,
+  getOrbitalCargoPortItems,
+  getOrbitalCargoTargetRemaining,
+  orbitalCargoTerminalAccepts,
+  resolveOrbitalCargoPortIndex,
+  settleOrbitalCargoTerminals,
+} from "./stationCargoTerminal";
 
 export const ACCUMULATOR_ENERGY_MJ = 90;
 export const SOLAR_SAIL_POWER_KW = 88;
@@ -242,6 +252,10 @@ function copyState(state: GameState): GameState {
       stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
       deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
       deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
+      orbitalCargoPortItems: entity.buildingId === "orbital_cargo_terminal"
+        ? Array.from({ length: 4 }, (_, index) => entity.orbitalCargoPortItems?.[index] ?? null)
+        : undefined,
+      orbitalCargoBinding: entity.orbitalCargoBinding ? { ...entity.orbitalCargoBinding } : entity.orbitalCargoBinding,
       stationRoutes: entity.stationRoutes?.map((route) => ({
         ...route,
         waypointStationIds: route.waypointStationIds ? [...route.waypointStationIds] : [],
@@ -328,6 +342,7 @@ function copyState(state: GameState): GameState {
         offset: { ...entity.offset },
         stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
         deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
+        orbitalCargoPortItems: entity.orbitalCargoPortItems ? [...entity.orbitalCargoPortItems] : undefined,
       })),
       resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
       belts: blueprint.belts.map((belt) => ({ ...belt })),
@@ -343,6 +358,7 @@ function copyState(state: GameState): GameState {
           offset: { ...entity.offset },
           stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
           deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
+          orbitalCargoPortItems: entity.orbitalCargoPortItems ? [...entity.orbitalCargoPortItems] : undefined,
         })),
         resourceAnchors: snapshot.definition.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
         belts: snapshot.definition.belts.map((belt) => ({ ...belt })),
@@ -436,6 +452,7 @@ function copyState(state: GameState): GameState {
         },
       } : {}),
     },
+    orbitalStation: cloneOrbitalStationState(state.orbitalStation),
     timeWarp: { ...state.timeWarp },
     idleSettlement: {
       ...state.idleSettlement,
@@ -632,7 +649,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 46,
+    version: 47,
     mode: "normal",
     nextId: 1,
     activePlanetId: "home",
@@ -789,6 +806,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     systemSpaceStations: createEmptySystemSpaceStations(),
     galacticHubNetwork: createEmptyGalacticHubNetwork(),
     quantumLogisticsNetwork: createEmptyQuantumLogisticsNetworkState(),
+    orbitalStation: createOrbitalStationState(),
     timeWarp: {
       controllerEntityId: null,
       enabled: false,
@@ -812,6 +830,7 @@ export function createPlayerInitialState(): GameState {
 export function createSpeedrunInitialState(nowMs = Date.now(), factoryId?: string): GameState {
   const state = createPlayerInitialState();
   state.mode = "speedrun";
+  state.orbitalStation = createOrbitalStationState({ mode: "speedrun", nowMs });
   state.speedrun = createSpeedrunState(state, nowMs, factoryId);
   return evaluateSpeedrunMilestones(state);
 }
@@ -1930,6 +1949,8 @@ export interface SimulationLookupContext {
   logisticsBufferEntities: FactoryEntity[];
   logisticsBufferRuntimes: IndexedLogisticsBufferRuntime[];
   materialDeliveryHubs: FactoryEntity[];
+  /** Global-station upload endpoints; empty saves avoid a per-step entity scan. */
+  orbitalCargoTerminals: FactoryEntity[];
   galacticExporters: FactoryEntity[];
   timeWarpDevices: FactoryEntity[];
   beltsByPlanet: Map<PlanetId, BeltConnection[]>;
@@ -2036,6 +2057,7 @@ export function createSimulationLookupContext(
     logisticsBufferEntities: [],
     logisticsBufferRuntimes: [],
     materialDeliveryHubs: [],
+    orbitalCargoTerminals: [],
     galacticExporters: [],
     timeWarpDevices: [],
     beltsByPlanet: new Map(),
@@ -2135,6 +2157,7 @@ export function createSimulationLookupContext(
       context.logisticsBufferEntities.push(entity);
     }
     if (entity.buildingId === "material_delivery_hub") context.materialDeliveryHubs.push(entity);
+    if (entity.buildingId === "orbital_cargo_terminal") context.orbitalCargoTerminals.push(entity);
     if (entity.buildingId === "galactic_material_exporter") context.galacticExporters.push(entity);
     if (entity.buildingId === "time_warp_device") context.timeWarpDevices.push(entity);
     if (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")) {
@@ -4269,7 +4292,7 @@ function beltHasRuntimeSignal(belt: BeltConnection): boolean {
     Math.abs(belt.congestion ?? 0) > EPSILON;
 }
 
-function beltTargetCapacityKey(target: FactoryEntity, itemId: ItemId, portIndex?: 0 | 1 | 2): string {
+function beltTargetCapacityKey(target: FactoryEntity, itemId: ItemId, portIndex?: BeltInputPortIndex): string {
   return target.buildingId === "material_delivery_hub"
     ? `tray:${target.planetId}:${itemId}`
     : `${target.id}:${itemId}:${portIndex ?? -1}`;
@@ -4316,7 +4339,7 @@ function refreshActiveBeltGroups(lookup: SimulationLookupContext, groupKeys: Rea
   }
 }
 
-function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2, lookup?: SimulationLookupContext): number {
+function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: ItemId, targetPortIndex?: BeltInputPortIndex, lookup?: SimulationLookupContext): number {
   if (!target.buildingId) return 0;
   if (target.buildingId === "micro_black_hole_connector") {
     if (target.blackHolePaused !== false || !target.blackHoleActivationConfirmed || targetPortIndex === undefined) return 0;
@@ -4383,7 +4406,7 @@ function transferBelts(
   // a Map lookup in the inner distribution loop.
   const indexedTargetCapacityLedgers = lookup?.beltRuntime.targetCapacityLedgers ?? [];
   const fallbackTargetCapacityLedgers = new Map<string, { free: number }>();
-  const targetCapacity = (route: IndexedBeltRoute, target: FactoryEntity, itemId: ItemId, portIndex?: 0 | 1 | 2): { free: number } => {
+  const targetCapacity = (route: IndexedBeltRoute, target: FactoryEntity, itemId: ItemId, portIndex?: BeltInputPortIndex): { free: number } => {
     if (profiler) profiler.beltTargetChecks += 1;
     const index = route.targetCapacityIndex;
     if (index !== undefined) {
@@ -6317,6 +6340,9 @@ export function completeSimulationStep(
   contractExperiment?: SimulationContractExperiment,
 ): void {
   let quantumBoundaryFlow = prepared.quantumBoundaryFlow;
+  if (state.mode === "normal" && state.orbitalStation.status !== "locked") {
+    settleOrbitalCargoTerminals(state, seconds, lookup?.orbitalCargoTerminals);
+  }
   if (prepared.quantumBoundarySecond !== null) {
     const quantumStartedAt = profiler ? profileNow() : 0;
     quantumBoundaryFlow = settleQuantumNetworkDownloads(
@@ -6605,6 +6631,9 @@ function simulateStep(
       contractExperiment,
     );
     powerByPlanet.set(planet.id, result.powerPlan);
+  }
+  if (state.mode === "normal" && state.orbitalStation.status !== "locked") {
+    settleOrbitalCargoTerminals(state, seconds, lookup?.orbitalCargoTerminals);
   }
   if (quantumBoundarySecond !== null) {
     const quantumStartedAt = profiler ? profileNow() : 0;
@@ -6963,7 +6992,9 @@ export function createSimulationAdvanceSession(state: GameState, seconds: number
   // Elevator contracts settle on a fixed five-second boundary. Keep a hub
   // session from jumping over those boundaries so 1s/5s/offline segmentation
   // observes the same input and output order.
-  const hasBoundaryStation = state.entities.some((entity) => isElevatorStation(entity) || hasQuantumBoundaryLogistics(entity));
+  const hasBoundaryStation = state.entities.some((entity) => isElevatorStation(entity) || hasQuantumBoundaryLogistics(entity)) ||
+    (options.lookup?.orbitalCargoTerminals ?? state.entities.filter((entity) => entity.buildingId === "orbital_cargo_terminal"))
+      .some((entity) => Boolean(entity.orbitalCargoBinding));
   const stepSize = hasBoundaryStation ? Math.min(baseStepSize, SYSTEM_HUB_SETTLEMENT_SECONDS) : baseStepSize;
   const copyStartedAt = profileNow();
   const sessionState = totalSeconds > 0 || totalWallSeconds > 0
@@ -7068,7 +7099,7 @@ export function completeSimulationAdvanceSession(session: SimulationAdvanceSessi
   startedAt = session.profiler ? profileNow() : 0;
   // Blueprint reservations are reconciled by inventory/player commands. They
   // are deliberately absent from the per-step simulation hot path.
-  const completed = syncCampaignProgress(session.state);
+  const completed = synchronizeOrbitalStationEligibility(syncCampaignProgress(session.state));
   if (session.profiler) session.profiler.constructionMs += profileNow() - startedAt;
   session.state = evaluateSpeedrunMilestones(completed);
   return session.state;
@@ -7575,6 +7606,7 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
         : undefined,
       deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
       deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
+      orbitalCargoPortItems: entity.orbitalCargoPortItems ? [...entity.orbitalCargoPortItems] : undefined,
       distributionMode: entity.distributionMode,
       fuelItemId: entity.fuelItemId,
       energyMode: entity.energyMode,
@@ -7671,6 +7703,7 @@ function cloneBlueprintDefinition(blueprint: BlueprintDefinition): BlueprintDefi
       offset: { ...entity.offset },
       stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
       deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
+      orbitalCargoPortItems: entity.orbitalCargoPortItems ? [...entity.orbitalCargoPortItems] : undefined,
     })),
     resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
     belts: blueprint.belts.map((belt) => ({ ...belt })),
@@ -7877,7 +7910,11 @@ function createBlueprintDeploymentPlan(
     blueprint.entities.every((entity) => canPlaceBuildingOnPlanet(entity.buildingId, planetId, state)) &&
     blueprint.entities.filter((entity) => entity.buildingId === "space_station_construction_launcher").length <= 1 &&
     !(blueprint.entities.some((entity) => entity.buildingId === "space_station_construction_launcher") &&
-      state.entities.some((entity) => entity.planetId === planetId && entity.buildingId === "space_station_construction_launcher"));
+      state.entities.some((entity) => entity.planetId === planetId && entity.buildingId === "space_station_construction_launcher")) &&
+    blueprint.entities.filter((entity) => entity.buildingId === "orbital_cargo_terminal").length <= 1 &&
+    blueprint.entities.filter((entity) => entity.buildingId === "orbital_cargo_terminal").every((entity) => entity.machineCount === 1) &&
+    !(blueprint.entities.some((entity) => entity.buildingId === "orbital_cargo_terminal") &&
+      state.entities.some((entity) => entity.planetId === planetId && entity.buildingId === "orbital_cargo_terminal"));
   const inventoryReady = requirements.every((requirement) => {
     const available = state.construction[requirement.constructionId] ?? 0;
     return Number.isSafeInteger(available) && available >= requirement.amount;
@@ -8038,6 +8075,12 @@ export function placeBlueprint(
         : undefined,
       deliveryItemIds: template.deliveryItemIds ? [...template.deliveryItemIds] : undefined,
       deliverySlots: template.deliverySlots?.map((slot) => ({ ...slot })),
+      orbitalCargoPortItems: template.buildingId === "orbital_cargo_terminal"
+        ? Array.from({ length: 4 }, (_, index) => template.orbitalCargoPortItems?.[index] ?? null)
+        : undefined,
+      orbitalCargoBinding: template.buildingId === "orbital_cargo_terminal" ? null : undefined,
+      orbitalCargoProgress: template.buildingId === "orbital_cargo_terminal" ? 0 : undefined,
+      orbitalCargoTotalUploaded: template.buildingId === "orbital_cargo_terminal" ? "0" : undefined,
       distributionMode: building.kind === "splitter" ? template.distributionMode ?? "balanced" : undefined,
       fuelItemId: template.fuelItemId,
       fuelRemainingMj: getFuelItemIdsForBuilding(template.buildingId).length > 0 ? 0 : undefined,
@@ -8083,7 +8126,7 @@ export function placeBlueprint(
       blackHolePaused: template.buildingId === "micro_black_hole_connector" ? template.operationEnabledOnDeploy !== true : undefined,
       blackHoleActivationConfirmed: template.buildingId === "micro_black_hole_connector" ? template.operationEnabledOnDeploy === true : undefined,
       blackHolePorts: template.buildingId === "micro_black_hole_connector" ? ([0, 1, 2] as const).map((index) => ({ index, totalDestroyed: "0" })) : undefined,
-      machineCount: template.buildingId === "micro_black_hole_connector" || template.buildingId === "time_warp_device" ? 1 : template.machineCount,
+      machineCount: template.buildingId === "micro_black_hole_connector" || template.buildingId === "time_warp_device" || template.buildingId === "orbital_cargo_terminal" ? 1 : template.machineCount,
       minerCount: 0,
       inputs: {},
       outputs: {},
@@ -8135,10 +8178,12 @@ export function placeBlueprint(
     }
     const targetPortIndex = targetEntity.buildingId === "material_delivery_hub"
       ? resolveMaterialDeliverySlotIndex(targetEntity, template.itemId, template.targetPortIndex)
+      : targetEntity.buildingId === "orbital_cargo_terminal"
+        ? resolveOrbitalCargoPortIndex(next, targetEntity, template.itemId, template.targetPortIndex)
       : targetEntity.buildingId === "micro_black_hole_connector"
         ? resolveBlackHolePortIndex(next, target, template.targetPortIndex)
         : undefined;
-    if ((targetEntity.buildingId === "material_delivery_hub" || targetEntity.buildingId === "micro_black_hole_connector") && targetPortIndex === undefined) return state;
+    if ((targetEntity.buildingId === "material_delivery_hub" || targetEntity.buildingId === "orbital_cargo_terminal" || targetEntity.buildingId === "micro_black_hole_connector") && targetPortIndex === undefined) return state;
     configureTargetItem(targetEntity, template.itemId, targetPortIndex);
     next.belts.push({
       id: `belt_${next.nextId}`,
@@ -8607,17 +8652,23 @@ export function processConstructionQueue(state: GameState): GameState {
 export function canPlaceBuildingOnPlanet(buildingId: BuildingId, planetId: PlanetId, state?: { galaxy?: GameState["galaxy"] }): boolean {
   if (getPlanet(planetId).kind === "gas-giant") return buildingId === "orbital_collector";
   if (buildingId === "orbital_collector") return false;
+  if (buildingId === "orbital_cargo_terminal") {
+    const game = state as Partial<Pick<GameState, "mode" | "orbitalStation" | "exploration">> | undefined;
+    return game?.mode === "normal" && game.orbitalStation?.status !== "locked" &&
+      Boolean(game.exploration?.colonizedPlanetIds.includes(planetId));
+  }
   return buildingId !== "geothermal_power_station" || getPlanetIndustrialProfile(state ?? { galaxy: createGalaxyState() }, planetId).geothermalMultiplier > 0;
 }
 
 export function placeBuilding(state: GameState, buildingId: BuildingId, position: { x: number; y: number }, count = 1): GameState {
   const building = getBuilding(buildingId);
-  const singleEntityMegastructure = buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device";
+  const singleEntityMegastructure = buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device" || buildingId === "orbital_cargo_terminal";
   const requested = singleEntityMegastructure ? 1 : count;
   const stackCheck = getBuildingStackAdditionCheck(0, requested, building.name);
   if (!stackCheck.ok) return state;
   const amount = stackCheck.amount;
   if (buildingId === "space_station_construction_launcher" && state.entities.some((entity) => entity.planetId === state.activePlanetId && entity.buildingId === buildingId)) return state;
+  if (buildingId === "orbital_cargo_terminal" && state.entities.some((entity) => entity.planetId === state.activePlanetId && entity.buildingId === buildingId)) return state;
   if (building.kind === "miner" || !canPlaceBuildingOnPlanet(buildingId, state.activePlanetId, state) ||
     (state.construction[buildingId] ?? 0) < amount) return state;
   const next = copyState(state);
@@ -8651,6 +8702,10 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
       : undefined,
     deliveryItemIds: buildingId === "material_delivery_hub" ? [] : undefined,
     deliverySlots: buildingId === "material_delivery_hub" ? defaultMaterialDeliverySlots() : undefined,
+    orbitalCargoPortItems: buildingId === "orbital_cargo_terminal" ? [null, null, null, null] : undefined,
+    orbitalCargoBinding: buildingId === "orbital_cargo_terminal" ? null : undefined,
+    orbitalCargoProgress: buildingId === "orbital_cargo_terminal" ? 0 : undefined,
+    orbitalCargoTotalUploaded: buildingId === "orbital_cargo_terminal" ? "0" : undefined,
     stationMode: building.kind === "station" ? "supply" : undefined,
     stationTier: buildingId === "interstellar_logistics_station" ? 1 : undefined,
     stationOperationMode: buildingId === "interstellar_logistics_station" ? "legacy" : undefined,
@@ -8697,7 +8752,7 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
 }
 
 export function addBuildingToGroup(state: GameState, entityId: string, buildingId: BuildingId, count = 1): GameState {
-  if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device" || isEntityInteractionLocked(state, entityId)) return state;
+  if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device" || buildingId === "orbital_cargo_terminal" || isEntityInteractionLocked(state, entityId)) return state;
   const definition = getBuilding(buildingId);
   const current = state.entities.find((item) => item.id === entityId && item.buildingId === buildingId);
   if (!current || definition.kind === "miner") return state;
@@ -8878,11 +8933,11 @@ export function getMaterialDeliveryItems(entity: FactoryEntity): ItemId[] {
 function resolveMaterialDeliverySlotIndex(
   entity: FactoryEntity,
   itemId: ItemId,
-  requested?: 0 | 1 | 2,
+  requested?: BeltInputPortIndex,
 ): 0 | 1 | 2 | undefined {
   const slots = getMaterialDeliverySlots(entity);
   const accepts = (slot: MaterialDeliverySlot) => slot.mode !== "disabled" && (!slot.itemId || slot.itemId === itemId);
-  if (requested !== undefined) return accepts(slots[requested]) ? requested : undefined;
+  if (requested !== undefined) return requested <= 2 && accepts(slots[requested]) ? requested as 0 | 1 | 2 : undefined;
   const matching = slots.findIndex((slot) => slot.mode !== "disabled" && slot.itemId === itemId);
   if (matching >= 0) return matching as 0 | 1 | 2;
   const unbound = slots.findIndex((slot) => slot.mode === "auto" && !slot.itemId);
@@ -8965,6 +9020,64 @@ export function setMaterialDeliverySlot(
   return next;
 }
 
+export type OrbitalCargoPortClearCheck =
+  | { ok: true; requiresConfirmation: boolean; connectedBelts: number; bufferedItems: number; itemId: ItemId | null; label: string }
+  | { ok: false; requiresConfirmation: false; connectedBelts: 0; bufferedItems: 0; itemId: null; label: string };
+
+export function getOrbitalCargoPortClearCheck(
+  state: GameState,
+  entityId: string,
+  portIndex: number,
+): OrbitalCargoPortClearCheck {
+  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "orbital_cargo_terminal");
+  if (!entity || entity.interactionLocked || !Number.isInteger(portIndex) || portIndex < 0 || portIndex >= 4) {
+    return { ok: false, requiresConfirmation: false, connectedBelts: 0, bufferedItems: 0, itemId: null, label: "轨道货运接口不可修改" };
+  }
+  const ports = getOrbitalCargoPortItems(entity);
+  const itemId = ports[portIndex];
+  if (!itemId) return { ok: true, requiresConfirmation: false, connectedBelts: 0, bufferedItems: 0, itemId: null, label: "接口已经为空" };
+  const connectedBelts = state.belts.filter((belt) => belt.target === entityId && belt.targetPortIndex === portIndex).length;
+  const itemUsedElsewhere = ports.some((candidate, index) => index !== portIndex && candidate === itemId);
+  const bufferedItems = itemUsedElsewhere ? 0 : Math.max(0, Math.floor(entity.inputs[itemId] ?? 0));
+  const requiresConfirmation = connectedBelts > 0 || bufferedItems > 0;
+  return {
+    ok: true,
+    requiresConfirmation,
+    connectedBelts,
+    bufferedItems,
+    itemId,
+    label: requiresConfirmation
+      ? `接口 ${portIndex + 1} 仍有 ${connectedBelts} 条线路和 ${bufferedItems} 件缓存`
+      : `接口 ${portIndex + 1} 可以清空`,
+  };
+}
+
+export function clearOrbitalCargoPort(
+  state: GameState,
+  entityId: string,
+  portIndex: number,
+  confirmProtection = false,
+): GameState {
+  const check = getOrbitalCargoPortClearCheck(state, entityId, portIndex);
+  if (!check.ok || !check.itemId || check.requiresConfirmation && !confirmProtection) return state;
+  const next = copyState(state);
+  const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+  const removedBelts = next.belts.filter((belt) => belt.target === entityId && belt.targetPortIndex === portIndex);
+  if (removedBelts.length > 0) {
+    refundBelts(next, removedBelts);
+    next.belts = next.belts.filter((belt) => belt.target !== entityId || belt.targetPortIndex !== portIndex);
+  }
+  const ports = getOrbitalCargoPortItems(entity);
+  ports[portIndex] = null;
+  entity.orbitalCargoPortItems = ports;
+  if (!ports.includes(check.itemId)) {
+    const buffered = Math.max(0, Math.floor(entity.inputs[check.itemId] ?? 0));
+    if (buffered > 0) addToPlanetTray(next, entity.planetId, check.itemId, buffered);
+    delete entity.inputs[check.itemId];
+  }
+  return next;
+}
+
 function refundBelts(state: GameState, belts: BeltConnection[]): void {
   for (const belt of belts) {
     const constructionId = getBeltConstructionId(belt.tier);
@@ -8972,10 +9085,13 @@ function refundBelts(state: GameState, belts: BeltConnection[]): void {
   }
 }
 
-function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
+function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: BeltInputPortIndex): boolean {
   if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) return false;
   if (entity.buildingId === "orbital_collector") {
     return (getPlanetOrbitalYields(state, entity.planetId)[itemId] ?? 0) > 0 && (!entity.storedItemId || entity.storedItemId === itemId);
+  }
+  if (entity.buildingId === "orbital_cargo_terminal") {
+    return orbitalCargoTerminalAccepts(state, entity, itemId, targetPortIndex);
   }
   const accepts = getBuilding(entity.buildingId).accepts ?? "any";
   const itemKind = ITEMS[itemId].kind;
@@ -8996,7 +9112,7 @@ function fuelGeneratorAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
     (!entity.fuelItemId || entity.fuelItemId === itemId));
 }
 
-function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
+function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: BeltInputPortIndex): boolean {
   if (entity.buildingId === "micro_black_hole_connector") return Boolean(ITEMS[itemId]);
   if (isElevatorStation(entity)) return Boolean(ITEMS[itemId]);
   if (entity.buildingId === "galactic_material_exporter") return ACTIVITY_MATERIAL_IDS.includes(itemId as import("./types").ActivityMaterialId);
@@ -9042,7 +9158,7 @@ function getAutoRecipeForInput(state: GameState, entity: FactoryEntity, itemId: 
   });
 }
 
-function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
+function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: BeltInputPortIndex): boolean {
   return targetConsumes(state, entity, itemId, targetPortIndex) || Boolean(getAutoRecipeForInput(state, entity, itemId));
 }
 
@@ -9066,8 +9182,10 @@ function configureAutoTargetRecipe(state: GameState, entity: FactoryEntity, item
   entity.proliferatorBonusProgress = {};
 }
 
-function configureTargetItem(entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): void {
-  if (entity.buildingId === "material_delivery_hub") {
+function configureTargetItem(entity: FactoryEntity, itemId: ItemId, targetPortIndex?: BeltInputPortIndex): void {
+  if (entity.buildingId === "orbital_cargo_terminal") {
+    configureOrbitalCargoPortMutable(entity, itemId, targetPortIndex);
+  } else if (entity.buildingId === "material_delivery_hub") {
     const resolved = resolveMaterialDeliverySlotIndex(entity, itemId, targetPortIndex);
     if (resolved === undefined) return;
     const slots = getMaterialDeliverySlots(entity);
@@ -9602,6 +9720,14 @@ export function pickFromTray(state: GameState, itemId: ItemId, amount = 100): Ga
 
 export const MAX_MANUAL_CRAFT_BATCHES = 100_000;
 
+export function isOrbitalCargoTerminalUnlocked(state: Pick<GameState, "mode" | "orbitalStation">): boolean {
+  return state.mode === "normal" && state.orbitalStation.status !== "locked";
+}
+
+function constructionDomainUnlocked(state: GameState, constructionId: ConstructionAutomationTargetId): boolean {
+  return constructionId !== "orbital_cargo_terminal" || isOrbitalCargoTerminalUnlocked(state);
+}
+
 function normalizeManualCraftBatches(batches: number): number {
   return Math.max(1, Math.min(MAX_MANUAL_CRAFT_BATCHES, Math.floor(Number.isFinite(batches) ? batches : 1)));
 }
@@ -9609,7 +9735,7 @@ function normalizeManualCraftBatches(batches: number): number {
 export function craftConstruction(state: GameState, buildingId: ConstructionId, batches = 1): GameState {
   const definition = CONSTRUCTION.find((item) => item.buildingId === buildingId);
   const amount = normalizeManualCraftBatches(batches);
-  if (!definition || (definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) ||
+  if (!definition || !constructionDomainUnlocked(state, buildingId) || (definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) ||
     definition.costs.some((cost) => (state.tray[cost.itemId] ?? 0) + EPSILON < cost.amount * amount)) return state;
   const next = copyState(state);
   for (const cost of definition.costs) {
@@ -9785,6 +9911,11 @@ export type ConstructionCraftNavigationResult =
 export function getConstructionCraftNavigation(state: GameState, buildingId: ConstructionId): ConstructionCraftNavigationResult {
   const definition = getConstructionDefinition(buildingId);
   if (!definition) return { status: "no-handcraft", itemId: "iron_ore" };
+  if (!constructionDomainUnlocked(state, buildingId)) return {
+    status: "technology",
+    itemId: definition.costs[0]?.itemId ?? "iron_ore",
+    technologyName: "首次生产宇宙矩阵后开放空间站货运终端",
+  };
   if (definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) {
     return {
       status: "technology",
@@ -9913,7 +10044,8 @@ function constructionAutomationCurrentStock(state: GameState, id: ConstructionAu
 }
 
 export function setConstructionAutomationTarget(state: GameState, constructionId: ConstructionAutomationTargetId, target: number): GameState {
-  if (!getConstructionAutomationTargetDefinition(constructionId) || !Number.isSafeInteger(target)) return state;
+  if (!getConstructionAutomationTargetDefinition(constructionId) || !Number.isSafeInteger(target) ||
+    (constructionId === "orbital_cargo_terminal" && !isOrbitalCargoTerminalUnlocked(state))) return state;
   const normalized = Math.max(0, Math.min(getConstructionAutomationStockLimit(state), Math.floor(target)));
   if ((state.constructionAutomation.targetStock[constructionId] ?? 0) === normalized) return state;
   const targetStock = { ...state.constructionAutomation.targetStock };
@@ -9964,8 +10096,8 @@ export function setConstructionAutomationTargetsForBuildings(state: GameState, t
     };
   }
   const definitions = getConstructionAutomationTargets();
-  const unlocked = definitions.filter((definition) => definition.kind === "building" && (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId)));
-  const skippedLockedCount = definitions.filter((definition) => definition.kind === "building" && definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)).length;
+  const unlocked = definitions.filter((definition) => definition.kind === "building" && constructionDomainUnlocked(state, definition.id) && (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId)));
+  const skippedLockedCount = definitions.filter((definition) => definition.kind === "building" && (!constructionDomainUnlocked(state, definition.id) || definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId))).length;
   if (unlocked.length === 0) {
     return { state, ok: false, changedCount: 0, affectedCount: 0, skippedLockedCount, error: "no-unlocked-buildings", label: "当前没有已解锁的可制造建筑" };
   }
@@ -10030,7 +10162,7 @@ function constructionAutomationTarget(state: GameState, cursor = state.construct
     if (!definition) continue;
     const target = state.constructionAutomation.targetStock[definition.id] ?? 0;
     const current = constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
-    if (target <= current || definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) continue;
+    if (target <= current || !constructionDomainUnlocked(state, definition.id) || definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) continue;
     return { index, definition };
   }
   return null;
@@ -10553,6 +10685,7 @@ function analyzeRepeatableConstructionAutomationPlan(
 
 function hasSingleConstructionAutomationTarget(state: GameState, targetId: ConstructionAutomationTargetId): boolean {
   const activeTargets = getConstructionAutomationTargets().filter((definition) => {
+    if (!constructionDomainUnlocked(state, definition.id)) return false;
     if (definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) return false;
     const target = state.constructionAutomation.targetStock[definition.id] ?? 0;
     return target > constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
@@ -10838,6 +10971,7 @@ function runConstructionCenters(
         const plan = resolved.plan;
         if (plan.blocker) break;
         const activeTargetCount = Math.max(1, getConstructionAutomationTargets().filter((candidate) => {
+          if (!constructionDomainUnlocked(state, candidate.id)) return false;
           if (candidate.requiredTechId && !isTechnologyCompleted(state, candidate.requiredTechId)) return false;
           return (state.constructionAutomation.targetStock[candidate.id] ?? 0) >
             constructionAutomationCurrentStock(state, candidate.id) + constructionAutomationPending(state, candidate.id);
@@ -10923,11 +11057,11 @@ function sourceProduces(entity: FactoryEntity, itemId: ItemId): boolean {
 function resolveBlackHolePortIndex(
   state: GameState,
   targetId: string,
-  requested?: 0 | 1 | 2,
+  requested?: BeltInputPortIndex,
 ): 0 | 1 | 2 | undefined {
   const occupied = new Set(state.belts.filter((belt) => belt.target === targetId && belt.targetPortIndex !== undefined)
     .map((belt) => belt.targetPortIndex));
-  if (requested !== undefined) return occupied.has(requested) ? undefined : requested;
+  if (requested !== undefined) return requested <= 2 && !occupied.has(requested) ? requested as 0 | 1 | 2 : undefined;
   return ([0, 1, 2] as const).find((index) => !occupied.has(index));
 }
 
@@ -10935,7 +11069,7 @@ export type BeltConnectionCheck =
   | { ok: true; code: "ready"; label: string }
   | { ok: false; code: "missing-belt" | "invalid-count" | "same-node" | "missing-node" | "different-planet" | "invalid-source" | "station-slots-full" | "item-conflict" | "invalid-target" | "target-port-occupied" | "line-limit"; label: string };
 
-export function getBeltConnectionCheck(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2, lanes = 1): BeltConnectionCheck {
+export function getBeltConnectionCheck(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: BeltInputPortIndex, lanes = 1): BeltConnectionCheck {
   const constructionId = getBeltConstructionId(tier);
   if (!Number.isSafeInteger(lanes) || lanes < 1) return { ok: false, code: "invalid-count", label: "新建传送带并联数量必须是正整数" };
   if (lanes > MAX_BELT_LANES) return { ok: false, code: "line-limit", label: `新建传送带并联数量不能超过 ${MAX_BELT_LANES}` };
@@ -10951,6 +11085,8 @@ export function getBeltConnectionCheck(state: GameState, sourceId: string, targe
   if (source.planetId !== target.planetId) return { ok: false, code: "different-planet", label: "传送带不能跨越行星" };
   const requestedPortIndex = target.buildingId === "micro_black_hole_connector"
     ? targetPortIndex
+    : target.buildingId === "orbital_cargo_terminal"
+      ? resolveOrbitalCargoPortIndex(state, target, itemId, targetPortIndex)
     : target.buildingId === "material_delivery_hub"
       ? resolveMaterialDeliverySlotIndex(target, itemId, targetPortIndex)
       : undefined;
@@ -10958,6 +11094,11 @@ export function getBeltConnectionCheck(state: GameState, sourceId: string, targe
     return { ok: false, code: "invalid-target", label: targetPortIndex === undefined
       ? "物资配送枢纽没有可自动识别的兼容接口"
       : `物资配送接口 ${targetPortIndex + 1} 已停用或指定了其他物资` };
+  }
+  if (target.buildingId === "orbital_cargo_terminal" && requestedPortIndex === undefined) {
+    return { ok: false, code: "invalid-target", label: targetPortIndex === undefined
+      ? "轨道货运终端没有可用于当前绑定目标的空闲接口"
+      : `轨道货运接口 ${targetPortIndex + 1} 不接受该物资或目标已完成` };
   }
   const existing = state.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
     belt.targetPortIndex === requestedPortIndex);
@@ -10988,7 +11129,7 @@ export function getBeltConnectionCheck(state: GameState, sourceId: string, targe
   return { ok: true, code: "ready", label: "可以建立运输线" };
 }
 
-export function canConnectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2, lanes = 1): boolean {
+export function canConnectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: BeltInputPortIndex, lanes = 1): boolean {
   return getBeltConnectionCheck(state, sourceId, targetId, itemId, tier, targetPortIndex, lanes).ok;
 }
 
@@ -10998,7 +11139,7 @@ export interface ConnectBeltResult {
   created: boolean;
 }
 
-export function connectBeltWithResult(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2, lanes = 1): ConnectBeltResult {
+export function connectBeltWithResult(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: BeltInputPortIndex, lanes = 1): ConnectBeltResult {
   const constructionId = getBeltConstructionId(tier);
   if (!canConnectBelt(state, sourceId, targetId, itemId, tier, targetPortIndex, lanes)) return { state, beltId: null, created: false };
   const source = state.entities.find((entity) => entity.id === sourceId);
@@ -11008,10 +11149,12 @@ export function connectBeltWithResult(state: GameState, sourceId: string, target
   const configuredTarget = next.entities.find((entity) => entity.id === targetId)!;
   const resolvedTargetPortIndex = configuredTarget.buildingId === "micro_black_hole_connector"
     ? resolveBlackHolePortIndex(next, targetId, targetPortIndex)
+    : configuredTarget.buildingId === "orbital_cargo_terminal"
+      ? resolveOrbitalCargoPortIndex(next, configuredTarget, itemId, targetPortIndex)
     : configuredTarget.buildingId === "material_delivery_hub"
       ? resolveMaterialDeliverySlotIndex(configuredTarget, itemId, targetPortIndex)
       : undefined;
-  if ((configuredTarget.buildingId === "micro_black_hole_connector" || configuredTarget.buildingId === "material_delivery_hub") && resolvedTargetPortIndex === undefined) return { state, beltId: null, created: false };
+  if ((configuredTarget.buildingId === "micro_black_hole_connector" || configuredTarget.buildingId === "material_delivery_hub" || configuredTarget.buildingId === "orbital_cargo_terminal") && resolvedTargetPortIndex === undefined) return { state, beltId: null, created: false };
   configureAutoTargetRecipe(next, configuredTarget, itemId);
   configureTargetItem(configuredTarget, itemId, resolvedTargetPortIndex);
   const configuredSource = next.entities.find((entity) => entity.id === sourceId)!;
@@ -11060,7 +11203,7 @@ export function connectBeltWithResult(state: GameState, sourceId: string, target
   return { state: next, beltId, created };
 }
 
-export function connectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2, lanes = 1): GameState {
+export function connectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: BeltInputPortIndex, lanes = 1): GameState {
   return connectBeltWithResult(state, sourceId, targetId, itemId, tier, targetPortIndex, lanes).state;
 }
 
@@ -11069,7 +11212,7 @@ export interface BatchBeltConnectionRequest {
   targetId: string;
   itemId: ItemId;
   tier?: BeltTier;
-  targetPortIndex?: 0 | 1 | 2;
+  targetPortIndex?: BeltInputPortIndex;
   lanes?: number;
 }
 
@@ -12484,7 +12627,9 @@ export function getConstructionCraftDeficits(state: GameState, buildingId: Const
   const amount = normalizeManualCraftBatches(batches);
   if (!definition) return { missingTechnology: null, missingItems: [] };
   return {
-    missingTechnology: definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)
+    missingTechnology: !constructionDomainUnlocked(state, buildingId)
+      ? "首次生产宇宙矩阵后开放空间站货运终端"
+      : definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)
       ? getTechnology(definition.requiredTechId)?.name ?? definition.requiredTechId
       : null,
     missingItems: definition.costs.flatMap((cost) => {
@@ -13317,6 +13462,21 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
   }
 
   if (entity.kind === "power") return { code: "running", label: "持续发电", tone: "running" };
+
+  if (entity.buildingId === "orbital_cargo_terminal") {
+    if (!entity.orbitalCargoBinding) return { code: "unconfigured", label: "未绑定空间站建设或出口合同", tone: "blocked" };
+    const pending = (Object.entries(entity.inputs) as Array<[ItemId, number]>).filter(([itemId, amount]) =>
+      Math.floor(amount ?? 0) > 0 && getOrbitalCargoTargetRemaining(state, entity.orbitalCargoBinding, itemId, entity.planetId) > 0n);
+    if (pending.length === 0) {
+      const hasCargo = Object.values(entity.inputs).some((amount) => Math.floor(amount ?? 0) > 0);
+      return hasCargo
+        ? { code: "output-blocked", label: "绑定目标已完成，尾货保留在终端", tone: "idle" }
+        : { code: "missing-input", label: "等待绑定目标所需物资", tone: "idle" };
+    }
+    if (entityPowerFactor <= EPSILON) return { code: "no-power", label: powerCoverageLabel(state, entity, lookup), tone: "blocked" };
+    if (entityPowerFactor < 0.999) return { code: "low-power", label: `低功率上传 · ${Math.round(entityPowerFactor * 100)}%`, tone: "warning" };
+    return { code: "running", label: "向全星系空间站上传物资", tone: "running" };
+  }
 
   if (entity.kind === "station") {
     if (entity.buildingId === "orbital_collector") {

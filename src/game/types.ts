@@ -256,6 +256,7 @@ export type BuildingId =
   | "orbital_collector"
   | "storage_mk1"
   | "material_delivery_hub"
+  | "orbital_cargo_terminal"
   | "storage_tank"
   | "splitter_4way"
   | "construction_center"
@@ -407,6 +408,131 @@ export type StationOperationMode = "legacy" | "elevator";
 export type StationModeTransition = "to-elevator" | "to-legacy" | null;
 export type SpaceStationStatus = "not-started" | "building" | "operational";
 export type SpaceStationOutputPortIndex = 0 | 1 | 2 | 3 | 4;
+export type BeltInputPortIndex = 0 | 1 | 2 | 3;
+
+export type OrbitalStationStatus =
+  | "locked"
+  | "eligible"
+  | "core-building"
+  | "dock-building"
+  | "showcase-building"
+  | "operational";
+export type OrbitalStationStageId = "core" | "dock" | "showcase";
+export type StationContractDifficulty = "P1" | "P2" | "P3";
+export type StationContractStatus = "offered" | "accepted" | "claimable" | "settled";
+export type StationContractChannel = "any" | "terminal" | "quantum";
+export type StationContractSettlementReason = "completed" | "abandoned" | "expired";
+export type StationDecorationRotation = 0 | 90 | 180 | 270;
+export type StationDecorationLayer = 0 | 1 | 2 | 3;
+export type PublicStationMetricKey =
+  | "total-generation"
+  | "peak-throughput"
+  | "dyson-power"
+  | "explored-systems"
+  | "colonized-planets"
+  | "universe-matrix-produced"
+  | "solar-sails-launched"
+  | "carrier-rockets-launched";
+
+export interface OrbitalStationStageRequirementSnapshot {
+  stageId: OrbitalStationStageId;
+  costs: Array<{ itemId: ItemId; amount: DecimalIntegerString }>;
+  fleetCosts: Partial<Record<PortableFleetItemId, number>>;
+  delivered: Partial<Record<ItemId, DecimalIntegerString>>;
+  deliveredFleet: Partial<Record<PortableFleetItemId, number>>;
+}
+
+export interface StationContractRequirement {
+  itemId: ItemId;
+  amount: DecimalIntegerString;
+  delivered: DecimalIntegerString;
+  /** Empty or missing means any colonized source planet is legal. */
+  sourcePlanetIds?: PlanetId[];
+  channel: StationContractChannel;
+  weight: number;
+}
+
+export interface StationContractRewards {
+  baseMarks: DecimalIntegerString;
+  baseReputation: DecimalIntegerString;
+  completionMarks: DecimalIntegerString;
+  completionReputation: DecimalIntegerString;
+}
+
+export interface StationContract {
+  id: string;
+  templateId: string;
+  slot: 0 | 1 | 2 | 3;
+  title: string;
+  summary: string;
+  taskDay: number;
+  expiresAtTaskDay: number;
+  special: boolean;
+  difficulty: StationContractDifficulty;
+  status: StationContractStatus;
+  requirements: StationContractRequirement[];
+  rewards: StationContractRewards;
+  acceptedAtTaskDay?: number;
+  settlementId?: string;
+  settlementReason?: StationContractSettlementReason;
+  settledAtTaskDay?: number;
+  completionBasisPoints?: number;
+}
+
+export interface StationContractBoardState {
+  rulesVersion: 1;
+  taskDay: number;
+  lastConfirmedWallClockMs: number;
+  offers: StationContract[];
+  accepted: StationContract[];
+  history: StationContract[];
+  settledIds: string[];
+  featuredContractId: string | null;
+}
+
+export interface StationDecorationPlacement {
+  id: string;
+  decorationId: string;
+  x: number;
+  y: number;
+  rotation: StationDecorationRotation;
+  layer: StationDecorationLayer;
+  variant: number;
+}
+
+export interface OrbitalStationState {
+  stateVersion: 1;
+  status: OrbitalStationStatus;
+  construction: {
+    costRevision: 1;
+    stageRequirements: OrbitalStationStageRequirementSnapshot[];
+  };
+  viewport: CanvasViewport;
+  contractBoard: StationContractBoardState;
+  economy: {
+    orbitalMarks: DecimalIntegerString;
+    stationReputation: DecimalIntegerString;
+    unlockedDecorationIds: string[];
+  };
+  layout: {
+    themeId: string;
+    placements: StationDecorationPlacement[];
+    featuredAchievementIds: AchievementId[];
+  };
+  profile: {
+    title: string;
+    motto: string;
+    featuredMetricKeys: PublicStationMetricKey[];
+  };
+  totals: {
+    completedContracts: number;
+    exportedByItem: Partial<Record<ItemId, DecimalIntegerString>>;
+  };
+}
+
+export type OrbitalCargoBinding =
+  | { kind: "construction" }
+  | { kind: "contract"; contractId: string };
 
 /**
  * Quantum logistics is deliberately independent from the deprecated space
@@ -773,6 +899,13 @@ export interface FactoryEntity {
   deliveryItemIds?: ItemId[];
   /** Stable per-port configuration for the three material delivery inputs. */
   deliverySlots?: MaterialDeliverySlot[];
+  /** Four stable input assignments for the global orbital cargo terminal. */
+  orbitalCargoPortItems?: Array<ItemId | null>;
+  /** Binding is deliberately not copied into blueprints. */
+  orbitalCargoBinding?: OrbitalCargoBinding | null;
+  /** Fractional upload budget retained across deterministic simulation steps. */
+  orbitalCargoProgress?: number;
+  orbitalCargoTotalUploaded?: DecimalIntegerString;
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   fuelRemainingMj?: number;
@@ -859,7 +992,7 @@ export interface BeltConnection {
   recentFlowSampling?: boolean;
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
-  targetPortIndex?: 0 | 1 | 2;
+  targetPortIndex?: BeltInputPortIndex;
   /** Stable output port used by a Mk.II space elevator. */
   elevatorOutputIndex?: SpaceStationOutputPortIndex;
 }
@@ -1268,6 +1401,7 @@ export interface BlueprintEntityTemplate {
   storedItemId?: ItemId;
   deliveryItemIds?: ItemId[];
   deliverySlots?: MaterialDeliverySlot[];
+  orbitalCargoPortItems?: Array<ItemId | null>;
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   energyMode?: EnergyMode;
@@ -1309,7 +1443,7 @@ export interface BlueprintBeltTemplate {
   monitorEnabled?: boolean;
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
-  targetPortIndex?: 0 | 1 | 2;
+  targetPortIndex?: BeltInputPortIndex;
   elevatorOutputIndex?: SpaceStationOutputPortIndex;
 }
 
@@ -1499,9 +1633,10 @@ export interface SpeedrunState {
 
 export interface GameState {
   /** v45 adds quantum item limits and collector endpoints; v46 adds immutable
-    * blueprint construction reservations. v43 is retained so
+    * blueprint construction reservations; v47 adds the isolated global
+    * orbital-station extension. v43 is retained so
     * old test fixtures can be inspected and rejected without unsafe casts. */
-  version: 43 | 44 | 45 | 46;
+  version: 43 | 44 | 45 | 46 | 47;
   /** Explicitly separates ordinary and ranked factory saves. */
   mode: SaveMode;
   nextId: number;
@@ -1550,6 +1685,8 @@ export interface GameState {
   systemSpaceStations: Partial<Record<StarSystemId, SystemSpaceStationState>>;
   galacticHubNetwork: GalacticHubNetworkState;
   quantumLogisticsNetwork: QuantumLogisticsNetworkState;
+  /** Independent from the deprecated per-system station/elevator experiment. */
+  orbitalStation: OrbitalStationState;
   timeWarp: TimeWarpState;
   endgame: EndgameState;
   paused: boolean;

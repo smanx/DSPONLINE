@@ -1,7 +1,7 @@
 {
   "name": "dsp-idle-network",
   "private": true,
-  "version": "1.0.44",
+  "version": "1.0.45",
   "releaseChannel": "stable",
   "updateBaseUrl": "",
   "cloudApiBaseUrl": "",
@@ -25,7 +25,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:nightly": "playwright test --config=playwright.nightly.config.ts",
-    "test:server": "npm --prefix server test",
+    "test:server": "npm --prefix server test && npm --prefix server run test:station",
     "test:native": "node --test scripts/native-release-tools.test.mjs scripts/verify-startup-budget.test.mjs desktop/release-channels.test.cjs desktop/cloud-transport.test.cjs desktop/message-port-transfer-smoke.test.cjs android/security-boundary.test.mjs",
     "test:backup": "node --test deploy/backup-tools.test.mjs",
     "test:ops": "node --test --test-concurrency=2 deploy/backup-tools.test.mjs deploy/nginx-config.test.mjs deploy/probe-node-health.test.mjs deploy/probe-api-readiness.test.mjs deploy/active-api-environment.test.mjs deploy/direct-invocation-symlink.test.mjs deploy/linux-release-control.test.mjs deploy/api-package-layout.test.mjs",

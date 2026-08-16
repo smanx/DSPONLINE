@@ -14,11 +14,17 @@ import {
   fetchCloudLeaderboard,
   fetchCloudLeaderboardMe,
   fetchCloudPublicStatus,
+  fetchCloudStationProfile,
+  fetchPublicStation,
   getCloudSyncMarker,
   importLegacyJsonCloudAccountArchive,
   markCloudSaveSynchronized,
+  publishCloudStation,
   readLastCloudUploadDiagnostics,
   resumeCloudSession,
+  sendCloudStationSignal,
+  setCloudStationFavorite,
+  setCloudStationVisibility,
   summarizeCloudPayload,
   uploadCloudSave,
   uploadCloudSaveWithOptions,
@@ -155,6 +161,44 @@ describe("cloud save synchronization markers", () => {
       serverMetrics: { peakThroughputPerMinute: 123, uploadedWhiteMatrix: 0 },
       latestWindowState: { status: "ranked", observedSeconds: 60 },
     });
+  });
+
+  it("uses strict station routes and never uploads a client-authored public snapshot", async () => {
+    const publicId = `station_${"a".repeat(32)}`;
+    const social = { favoriteCount: 0, viewerFavorite: false, signals: { spectacular: 0, precise: 0, industrial: 0, layout: 0 }, viewerSignal: null };
+    const profile = { visibility: "public", publicId, published: true, sourceRevision: 3, snapshot: null, social };
+    window.localStorage.setItem(CLOUD_TOKEN_STORAGE_KEY, "station-client-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ snapshot: { schema: "station-showcase-v1", publicId }, social }))
+      .mockResolvedValueOnce(jsonResponse(profile))
+      .mockResolvedValueOnce(jsonResponse({ ...profile, snapshot: { schema: "station-showcase-v1", publicId } }))
+      .mockResolvedValueOnce(jsonResponse(profile))
+      .mockResolvedValueOnce(jsonResponse({ ...profile, visibility: "private" }))
+      .mockResolvedValueOnce(jsonResponse({ ...profile, visibility: "private" }))
+      .mockResolvedValueOnce(jsonResponse({ social: { ...social, favoriteCount: 1, viewerFavorite: true } }))
+      .mockResolvedValueOnce(jsonResponse({ social }))
+      .mockResolvedValueOnce(jsonResponse({ social: { ...social, signals: { ...social.signals, layout: 1 }, viewerSignal: "layout" } }));
+
+    await expect(fetchPublicStation(publicId)).resolves.toMatchObject({ snapshot: { publicId } });
+    await expect(fetchCloudStationProfile()).resolves.toMatchObject({ sourceRevision: 3 });
+    await expect(publishCloudStation()).resolves.toMatchObject({ published: true, publicId });
+    await expect(setCloudStationVisibility("private")).resolves.toMatchObject({ visibility: "private" });
+    await expect(setCloudStationFavorite(publicId, true)).resolves.toMatchObject({ viewerFavorite: true });
+    await expect(setCloudStationFavorite(publicId, false)).resolves.toMatchObject({ viewerFavorite: false });
+    await expect(sendCloudStationSignal(publicId, "layout")).resolves.toMatchObject({ viewerSignal: "layout" });
+
+    const requests = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), init: init as RequestInit }));
+    expect(requests[0].url).toBe(`/api/stations/${publicId}`);
+    expect(new Headers(requests[0].init.headers).get("authorization")).toBe("Bearer station-client-token");
+    expect(requests[2]).toMatchObject({ url: "/api/station/publish", init: { method: "POST", body: "{}" } });
+    expect(requests[2].init.body).not.toContain("snapshot");
+    expect(requests[4]).toMatchObject({ url: "/api/station/visibility", init: { method: "POST", body: JSON.stringify({ visibility: "private" }) } });
+    expect(requests[6]).toMatchObject({ url: `/api/stations/${publicId}/favorite`, init: { method: "POST", body: "{}" } });
+    expect(requests[7]).toMatchObject({ url: `/api/stations/${publicId}/favorite`, init: { method: "DELETE" } });
+    expect(requests[8]).toMatchObject({ url: `/api/stations/${publicId}/signal`, init: { method: "POST", body: JSON.stringify({ signalId: "layout" }) } });
+    fetchMock.mockClear();
+    await expect(fetchPublicStation("station_bad")).rejects.toMatchObject({ status: 404 });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("posts the original legacy JSON Blob with Bearer auth and the guarded replacement contract", async () => {

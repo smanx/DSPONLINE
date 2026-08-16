@@ -21,6 +21,6 @@ describe("1.0.36 save/runtime field audit", () => {
     expect(payload).not.toContain("blockedStationDispatch");
     expect(payload).not.toContain("machineRuntimesByPlanet");
     expect(inspectSave(payload).checksum).toBe("valid");
-    expect(importGame(payload)?.version).toBe(46);
+    expect(importGame(payload)?.version).toBe(47);
   });
 });

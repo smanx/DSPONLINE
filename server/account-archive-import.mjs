@@ -16,6 +16,7 @@ export const ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER = "x-dsp-account-import-
 
 const SAVE_MODES = ["normal", "speedrun"];
 const SAVE_SLOTS = ["main", "1", "2", "3"];
+const SUPPORTED_ACCOUNT_ARCHIVE_SCHEMA_VERSIONS = new Set([7, 8]);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const MAXIMUM_ARCHIVE_BYTES = 0xffff_fffe;
 const DEFAULT_ARCHIVE_OVERHEAD_BYTES = 24 * 1024 * 1024;
@@ -283,7 +284,7 @@ export async function prepareAccountArchiveImport(archiveFile, options = {}) {
       },
     });
     const account = validateAccountDescriptor(inspection.accountData);
-    if (inspection.manifest.schemaVersion !== 7) {
+    if (!SUPPORTED_ACCOUNT_ARCHIVE_SCHEMA_VERSIONS.has(inspection.manifest.schemaVersion)) {
       fail("ACCOUNT_ARCHIVE_SCHEMA_UNSUPPORTED", "账号归档云 schema 版本不受支持");
     }
     const quota = validateImportQuota(inspection.manifest.refs, options.quotaPolicy);

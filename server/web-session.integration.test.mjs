@@ -300,8 +300,8 @@ test("deleting a cookie-authenticated account clears the cookie without changing
   });
   assert.equal(deleted.response.status, 200, JSON.stringify(deleted.body));
   assert.match(deleted.response.headers.get("set-cookie") ?? "", /Max-Age=0/);
-  assert.equal(server.store.data.schemaVersion, 7);
-  assert.equal(server.store.data.storageLayoutVersion, 2);
+  assert.equal(server.store.data.schemaVersion, 8);
+  assert.equal(server.store.data.storageLayoutVersion, 3);
   assert.equal((await call("/api/account", {
     headers: cookieAuth(registered.cookie, registered.csrf),
   })).response.status, 401);

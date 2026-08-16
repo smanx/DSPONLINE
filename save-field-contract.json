@@ -1,127 +1,127 @@
 {
   "contractVersion": 1,
-  "gameStateVersion": 46,
+  "gameStateVersion": 47,
   "scopes": {
     "entity": {
       "interactionLocked": {
         "default": { "kind": "literal", "value": false },
         "validation": { "type": "boolean" },
-        "missing": { "defaultVersions": [46], "requiredFromVersion": 35 },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47], "requiredFromVersion": 35 },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "powerGridId": {
         "default": { "kind": "literal", "value": "grid-a" },
         "validation": { "type": "string", "enum": ["grid-a", "grid-b", "grid-c"] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "powerPriority": {
         "default": { "kind": "literal", "value": 2 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "enum": [1, 2, 3] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "machineCount": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "minerCount": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "progress": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "finite": true, "minimum": 0 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "routingCursor": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "powerInputKw": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "finite": true, "minimum": 0 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "powerOutputKw": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "finite": true, "minimum": 0 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationProgress": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "finite": true, "minimum": 0 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationTrips": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationLastTransfer": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationCongestion": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "finite": true, "minimum": 0, "maximum": 1 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationDispatchCursor": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "proliferatorPoints": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "resourceDepletionRemainder": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationWarperAutoRefill": {
         "default": { "kind": "literal", "value": false },
         "validation": { "type": "boolean" },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationHubEnabled": {
         "default": { "kind": "literal", "value": false },
         "validation": { "type": "boolean" },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "quantumTarget": {
         "default": { "kind": "literal", "value": false },
         "validation": { "type": "boolean" },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationWarpEnabled": {
         "default": { "kind": "literal", "value": true },
         "validation": { "type": "boolean" },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "proliferatorBonusProgress": {
         "default": { "kind": "empty-object" },
@@ -130,8 +130,8 @@
           "keyPattern": "^[a-z][a-z0-9_]{1,80}$",
           "values": { "type": "number", "finite": true, "minimum": 0, "exclusiveMaximum": 1 }
         },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "inputs": {
         "default": { "kind": "empty-object" },
@@ -140,8 +140,8 @@
           "keyPattern": "^[a-z][a-z0-9_]{1,80}$",
           "values": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 }
         },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "outputs": {
         "default": { "kind": "empty-object" },
@@ -150,8 +150,8 @@
           "keyPattern": "^[a-z][a-z0-9_]{1,80}$",
           "values": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 }
         },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationLastSupplyPeerBySlot": {
         "default": { "kind": "empty-object" },
@@ -160,132 +160,132 @@
           "keyPattern": "^(local|remote):[0-4]$",
           "values": { "type": "string", "minimumLength": 0, "maximumLength": 160 }
         },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stationRoutes": {
         "default": { "kind": "empty-array" },
         "validation": { "type": "array", "maximumItems": 4096, "items": { "type": "record" } },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       }
     },
     "station-slot": {
       "localMode": {
         "default": { "kind": "literal", "value": "storage" },
         "validation": { "type": "string", "enum": ["storage", "supply", "demand"] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "remoteMode": {
         "default": { "kind": "literal", "value": "storage" },
         "validation": { "type": "string", "enum": ["storage", "supply", "demand"] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "minimumLoad": {
         "default": { "kind": "literal", "value": 1 },
         "validation": { "type": "number", "finite": true, "enum": [0.1, 0.25, 0.5, 1] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "minStock": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 100000000 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "maxStock": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 100000000 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "priority": {
         "default": { "kind": "literal", "value": 1 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "enum": [0, 1, 2] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "routePolicy": {
         "default": { "kind": "literal", "value": "relay-preferred" },
         "validation": { "type": "string", "enum": ["direct", "relay-preferred", "relay-required"] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "warperBudget": {
         "default": { "kind": "literal", "value": 2 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 1, "maximum": 4 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       }
     },
     "belt": {
       "lanes": {
         "default": { "kind": "literal", "value": 1 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 1, "maximum": 4096 },
-        "missing": { "defaultVersions": [46], "requiredFromVersion": 38 },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47], "requiredFromVersion": 38 },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "tier": {
         "default": { "kind": "literal", "value": 1 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 1, "maximum": 32 },
-        "missing": { "defaultVersions": [46], "requiredFromVersion": 40 },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47], "requiredFromVersion": 40 },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "sorterTier": {
         "default": { "kind": "sibling-integer-clamp", "field": "tier", "fallback": 1, "minimum": 1, "maximum": 3 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 1, "maximum": 3 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "progress": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "finite": true, "minimum": 0, "maximum": 100000000 },
-        "missing": { "defaultVersions": [46], "requiredFromVersion": 40 },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47], "requiredFromVersion": 40 },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "priority": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "enum": [0, 1, 2] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "stackSize": {
         "default": { "kind": "literal", "value": 1 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "enum": [1, 2, 4] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "monitorEnabled": {
         "default": { "kind": "literal", "value": false },
         "validation": { "type": "boolean" },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "totalTransferred": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "integer": true, "safeInteger": true, "minimum": 0, "maximum": 9007199254740991 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "congestion": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "finite": true, "minimum": 0, "maximum": 1 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "lastFlow": {
         "default": { "kind": "literal", "value": 0 },
         "validation": { "type": "number", "finite": true, "minimum": 0 },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       },
       "routeMode": {
         "default": { "kind": "literal", "value": "auto" },
         "validation": { "type": "string", "enum": ["bezier", "auto", "upper", "lower", "manual"] },
-        "missing": { "defaultVersions": [46] },
-        "projection": { "omitDefaultVersions": [46] }
+        "missing": { "defaultVersions": [46, 47] },
+        "projection": { "omitDefaultVersions": [46, 47] }
       }
     }
   }

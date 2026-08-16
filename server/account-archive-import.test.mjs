@@ -140,7 +140,7 @@ async function writeArchive(directory, saves, options = {}) {
   const archiveFile = path.join(directory, options.name ?? "account.dspaccount.zip");
   const prepared = createAccountArchiveZipStream({
     exportedAt: options.exportedAt ?? EXPORTED_AT,
-    schemaVersion: options.schemaVersion ?? 7,
+    schemaVersion: options.schemaVersion ?? 8,
     accountData: options.accountData ?? validAccountData(),
     saves,
   }, options.writerOptions);
@@ -483,7 +483,7 @@ test("prepare preserves all eight mode/slot histories and returns metadata plus 
     accountId: ACCOUNT_ID,
     exportedAt: EXPORTED_AT,
     archiveExportedAt: EXPORTED_AT,
-    schemaVersion: 7,
+    schemaVersion: 8,
   });
   assert.equal(result.refs.length, 16);
   assert.equal(result.quota.revisionCount, 16);
@@ -551,6 +551,19 @@ test("prepare rejects unsupported cloud schema before copying any payload", asyn
     workspaceDirectory,
     code: "ACCOUNT_ARCHIVE_SCHEMA_UNSUPPORTED",
   });
+});
+
+test("prepare keeps schema v7 archives importable after the v8 station-profile upgrade", async (t) => {
+  const sourceDirectory = await temporaryDirectory(t, "dspidle-import-schema-v7-source-");
+  const workspaceDirectory = await temporaryDirectory(t, "dspidle-import-schema-v7-workspace-");
+  const payload = smallPayload("normal", "schema-v7-compatible");
+  const archive = await writeArchive(sourceDirectory, [saveRef(payload)], { schemaVersion: 7 });
+  const result = await prepareAccountArchiveImport(archive.archiveFile, {
+    workspaceDirectory,
+    inspectPayload: validSyntheticInspector(new Map([[payload.checksum, payload.bytes]])),
+  });
+  assert.equal(result.source.schemaVersion, 7);
+  assert.equal(result.refs.length, 1);
 });
 
 test("prepare enforces revision, history, slot, mode, and account quotas before extraction", async (t) => {

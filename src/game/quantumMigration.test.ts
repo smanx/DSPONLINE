@@ -8,7 +8,7 @@ describe("quantum GameState migration", () => {
     (state as { version: number }).version = 42;
     delete (state as Partial<typeof state>).quantumLogisticsNetwork;
     const migrated = migrateGame(JSON.parse(JSON.stringify(state)));
-    expect(migrated?.version).toBe(46);
+    expect(migrated?.version).toBe(47);
     expect(migrated?.quantumLogisticsNetwork).toEqual({
       enabled: false,
       inventory: {},
@@ -34,7 +34,7 @@ describe("quantum GameState migration", () => {
       routingCursor: 0, machineCount: 3, minerCount: 0,
     });
     const migrated = migrateGame(JSON.parse(JSON.stringify(state)))!;
-    expect(migrated.version).toBe(46);
+    expect(migrated.version).toBe(47);
     expect(migrated.quantumLogisticsNetwork).toMatchObject({
       enabled: true,
       inventory: { hydrogen: "123" },
