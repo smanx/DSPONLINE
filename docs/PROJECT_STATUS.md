@@ -125,7 +125,7 @@
 
 > 香港正式节点已按 verified backup → dry-run → stopped-service transaction → post-check 顺序完成一次排行榜完整性处置。只删除 1 条公开 submission 并写入 1 条内部限制；账号、主云档、历史正文和其他同名账号均未删除或改写。上海没有执行该数据处置。
 
-> 香港 Web current 为 `web-1.0.44-3e580c715a5a`，公网 Build ID 为 `1.0.44+3e580c715a5a`；香港 API、上海 Web/API、上海下载站与原生 stable 均为 1.0.44。香港 generation 14 的直接 Web previous 为 `web-1.0.43-fceca3eda51c`，API previous 为 `api-1.0.42-c24e6247d257`，`NRestarts=0`；公开 `/canary/previous/` 仍为不可变 1.0.37。代码回滚只切不可变 Web/API 目录，不能恢复数据库。完整 1.0.44 生产证据见 [releases/1.0.44.md](./releases/1.0.44.md)，1.0.43 Web-only 历史见 [releases/1.0.43.md](./releases/1.0.43.md)。
+> 香港 Web current 为 `web-1.0.44-3e580c715a5a`，公网 Build ID 为 `1.0.44+3e580c715a5a`；香港 API、上海 Web/API、上海下载站与原生 stable 均为 1.0.44。香港 generation 14 的直接 Web previous 为 `web-1.0.43-fceca3eda51c`，API previous 为 `api-1.0.42-c24e6247d257`，`NRestarts=0`；公开 `/canary/previous/` 已更新为 302 → 不可变 `/canary/1.0.43-fceca3eda51c/`（1.0.37 保留为历史兼容入口）。代码回滚只切不可变 Web/API 目录，不能恢复数据库。完整 1.0.44 生产证据见 [releases/1.0.44.md](./releases/1.0.44.md)，1.0.43 Web-only 历史见 [releases/1.0.43.md](./releases/1.0.43.md)。
 
 ### `1.0.16` 存档冻结修复（双节点已上线）
 
