@@ -16,7 +16,7 @@
 | --- | --- |
 | TypeScript | `npm run typecheck` 通过 |
 | 存档/恢复聚焦单测 | 123 passed |
-| 全量 Vitest | 1,406 passed / 20 skipped |
+| 全量 Vitest | 1,408 passed / 20 skipped |
 | 服务端与空间站 | 357 passed / 2 skipped；station 3/3 |
 | 运维与切换模拟 | ops 56 passed / 6 Linux-only skipped；release switch 29/29 |
 | 原生静态安全 | 24/24 |

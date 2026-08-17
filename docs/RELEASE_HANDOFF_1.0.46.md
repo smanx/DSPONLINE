@@ -91,7 +91,7 @@ Manifest and aggregate hash: create only after `npm run build:web` in a clean ch
 Tests with exact counts:
 
 - `npm run typecheck`: passed
-- `npm test -- --maxWorkers=1`: 1,406 passed / 20 skipped (168 files passed, 7 skipped)
+- `npm test -- --maxWorkers=1`: 1,408 passed / 20 skipped (169 files passed, 7 skipped)
 - `npm run test:server`: 357 passed / 2 skipped; station profile 3/3
 - `npm run test:ops`: 56 passed / 6 Linux-only skipped
 - `npm run release:test-switch`: 29/29 passed
