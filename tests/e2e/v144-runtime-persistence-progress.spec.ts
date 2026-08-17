@@ -69,26 +69,21 @@ test("manual, autosave, and return publish ordered non-blocking persistence phas
   await expect(page.locator("[data-persistence-progress]")).toContainText("存档已验证完成");
 
   // Change the immutable state identity so the scheduled save cannot take the
-  // unchanged-save fast path and must exercise the delayed save Worker.
-  // Legacy direct-bypass loads intentionally resume the factory after
-  // migration, even when the serialized fixture carried `paused: true`.
-  // Normalize both states without waiting on a label that is not rendered.
+  // unchanged-save fast path and must exercise the delayed save Worker. Keep
+  // the simulation running: autosave is a persistence barrier, not a pause
+  // command, and must preserve the user's running state after completion.
   const resume = page.getByLabel("继续模拟");
-  const pause = page.getByLabel("暂停模拟");
   if (await resume.isVisible()) {
     await resume.click();
-    await expect(pause).toBeVisible();
-    await pause.click();
-  } else {
-    await expect(pause).toBeVisible();
-    await pause.click();
   }
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
   await expect.poll(() => page.evaluate(() => {
     const events = (window as typeof window & {
       __DSP_RUNTIME_TRANSITIONS__?: { events: Array<{ phase: string; detail?: { kind?: string; phase?: string } }> };
     }).__DSP_RUNTIME_TRANSITIONS__?.events ?? [];
     return events.some((event) => event.phase === "persistence-phase" && event.detail?.kind === "autosave" && event.detail.phase === "complete");
   }), { timeout: 10_000 }).toBe(true);
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
 
   await page.getByTitle("保存并返回主菜单").click();
   await expect(page.locator(".start-menu")).toBeVisible({ timeout: 10_000 });
@@ -106,4 +101,3 @@ test("manual, autosave, and return publish ordered non-blocking persistence phas
   expect(sequence("autosave")).toContain("complete");
   expect(sequence("return")).toEqual(["checkpoint", "serialize-write-readback", "complete"]);
 });
-

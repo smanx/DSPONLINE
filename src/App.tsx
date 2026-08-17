@@ -1498,7 +1498,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   // in-page recovery from replaying a durable journal twice after a resync.
   const durableRecoveryBaseStateRef = useRef<GameState>(loaded.state);
   const durableWorkerRecoveryInFlightRef = useRef<Promise<boolean> | null>(null);
-  const durableRecoveryRepairRef = useRef<() => void>(() => undefined);
+  const durableRecoveryRepairRef = useRef<(resumeAfterRepair?: boolean) => void>(() => undefined);
   const durableRecoveryPendingViewRef = useRef<GameState | null>(null);
   const pendingResumeAfterDurableRecoveryRef = useRef(false);
   const durableRecoveryFinalizeInFlightRef = useRef<number | null>(null);
@@ -2709,6 +2709,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     simulationCheckpointBarrierRef.current = true;
     let primaryWriteVerified = false;
     let repairDurableWorkerAfterSave = false;
+    // An automatic save may need an in-page recovery-head repair after T1 is
+    // verified. Preserve the pre-save running intent so the repair does not
+    // leave a healthy simulation permanently paused.
+    const resumeAfterDurableWorkerRepair = kind === "autosave" && !gameRef.current.paused;
     try {
       // Even an explicit replacement state (import/slot/cloud) must first
       // drain an in-flight simulation submission. Otherwise its T1 payload
@@ -2853,7 +2857,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         // write is in flight. Schedule it after this finally block releases
         // the lock, otherwise a verified T1 could remain paired with a stale
         // recovery head until the player refreshes or manually retries.
-        queueMicrotask(() => durableRecoveryRepairRef.current());
+        queueMicrotask(() => durableRecoveryRepairRef.current(resumeAfterDurableWorkerRepair));
       }
       window.setTimeout(() => setRuntimePersistenceProgress((current) => current?.id === progressId ? null : current), 8_000);
     }
@@ -2991,6 +2995,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       simulationRetrySecondsRef.current = 0;
       simulationRetryWallSecondsRef.current = 0;
       durableRecoveryPendingViewRef.current = pendingView;
+      // The replacement T1 and recovery head have both passed verification.
+      // Clear the transient save failure so the pure-idle recovery panel does
+      // not keep reporting an already-repaired checkpoint as actionable.
+      if (saved.bytes !== undefined) setPersistedPrimaryBytes(saved.bytes);
+      setSaveFailure(null);
       simulationWorkerRef.current?.terminate();
       simulationWorkerRef.current = null;
       simulationWorkerDisabledRef.current = false;
@@ -3014,8 +3023,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     durableWorkerRecoveryInFlightRef.current = recoveryPromise;
     return recoveryPromise;
   }, [invalidateFactoryAlertProjection, saveVerifiedPrimaryCheckpoint]);
-  durableRecoveryRepairRef.current = () => {
-    void recoverSimulationWorkerFromDurableRecovery(false);
+  durableRecoveryRepairRef.current = (resumeAfterRepair = false) => {
+    void recoverSimulationWorkerFromDurableRecovery(resumeAfterRepair);
   };
 
   const persistPureIdleTerminalEnvelope = useCallback(async (

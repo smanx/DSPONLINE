@@ -25,10 +25,12 @@ P0。玩家可能停留在暂停状态，模拟 Worker 被错误标记不可用�
 2. 注入第一次 persistence Worker finalize 故障，然后暂停模拟。
 3. 修复后页面读取 T0 recovery，Worker 回放 finalized/pending intent，验证 T1，替换 recovery head 并安装新模拟 Worker。
 4. 页面保持暂停，点击“继续模拟”后 `data-simulation-paused=false` 且 Worker active；pending intent 已清理。
+5. 对正在运行的模拟加速自动保存，并在 T1 后注入一次 recovery-head initialize 故障；页面重建 Worker 后保持 `data-simulation-paused=false`。
+6. 验证修复成功后 `.save-emergency-warning` 不存在，避免纯挂机“保存与恢复”继续显示已处理的 transient 保存失败。
 
 已覆盖：
 
-- `tests/e2e/v144-runtime-wal-integration.spec.ts`：5/5，覆盖 durable finalize failure 同页恢复、二次 persistence Worker failure、T1 已验证但 recovery-head 替换失败后的自动修复、WAL/pagehide/undo/redo/viewport/activity。
+- `tests/e2e/v144-runtime-wal-integration.spec.ts`：6/6，覆盖 durable finalize failure 同页恢复、二次 persistence Worker failure、T1 已验证但 recovery-head 替换失败后的自动修复、运行中自动保存恢复、WAL/pagehide/undo/redo/viewport/activity。
 - `src/game/*durable*`、startup recovery、UI preference focused Vitest 21/21。
 
 ## User-visible acceptance criteria
@@ -36,6 +38,8 @@ P0。玩家可能停留在暂停状态，模拟 Worker 被错误标记不可用�
 - finalize、recovery persistence 或模拟 Worker 单次失败不会要求玩家必须刷新；当前页可在安全暂停状态发起精确恢复。
 - 恢复期间 T0、pending intent、纯挂机恢复日志和宏观进度不被删除；T1 未完成前不清理旧 recovery。
 - 恢复完成后“继续模拟”可用；新 Worker 不继承旧实例的 disabled 状态。
+- 自动保存前正在运行时，恢复 head 的验证修复完成后自动继续；手动保存的暂停意图保持不变。
+- 已验证的替换 T1/recovery head 会清除旧 transient 保存失败提示，纯挂机恢复面板不再把已修复检查点显示为待处理。
 - 默认保护模式仍拒绝保存期间编辑，但 revision/head 竞态不会显示阻断错误或把会话锁死。
 - 实验性开关开启时，已接受操作保留在 durable 队列；保存失败时当前进度仍可继续或导出。
 - 纯挂机终态仍要求主存档验证、Worker 接管、恢复日志提交全部完成后才清理日志。
@@ -76,7 +80,7 @@ Web/PWA、Chromium/Firefox/WebKit、Windows unpacked/desktop、Android WebView�
 
 Commit SHA: the clean source SHA recorded by the immutable release manifest is authoritative. Do not infer it from a working-tree `dist` directory.
 
-Changed files: `src/App.tsx`, release metadata, release notes, targeted runtime WAL E2E, canonical status/testing docs.
+Changed files: `src/App.tsx`, `tests/e2e/v144-runtime-persistence-progress.spec.ts`, `tests/e2e/v144-runtime-wal-integration.spec.ts`, `docs/PROJECT_STATUS.md`, `docs/DEVELOPMENT_REPORT_1.0.46.md`, `docs/RELEASE_HANDOFF_1.0.46.md`.
 
 Artifact paths: create and retain them from an isolated clean checkout: Web `dist/`, expanded API directory from `node deploy/prepare-api-release.mjs --output <empty-directory>`, plus manifest/SBOM/provenance. Signed native artifacts are intentionally absent.
 
@@ -92,10 +96,10 @@ Tests with exact counts:
 - `npm run test:native`: 24/24 passed
 - `node --test scripts/generate-synthetic-save-fixtures.test.mjs scripts/release-gate.test.mjs`: 12/12 passed; v47/space-station fixture contracts
 - `npm run licenses:check`: 125 runtime packages consistent
-- `npm audit --omit=dev` and `npm --prefix server audit --omit=dev`: 0 vulnerabilities
+- `npm audit --audit-level=high` and `npm --prefix server audit --audit-level=high`: 0 vulnerabilities
 - `npm run build:web`: 1,959 modules; startup/menu gzip budgets passed
-- `npm run test:e2e -- --workers=4`: Chromium 407 passed / 14 skipped / 0 failed
-- production-preview performance set: 20/20 passed (serial worker gate)
+- `npm run test:e2e -- --workers=4`: Chromium 408 passed / 14 skipped / 0 failed
+- production-preview performance set: 19/19 passed (serial worker gate)
 - production-preview PWA: 1/1 passed
 - Firefox/WebKit compatibility: 2/2 passed
 

@@ -293,6 +293,62 @@ test("a verified T1 whose recovery-head rollover fails repairs itself after the 
   await expect(shell).toHaveAttribute("data-simulation-paused", "false", { timeout: 20_000 });
 });
 
+test("a running autosave resumes after a verified T1 recovery-head repair", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    const tracker = { armInitialize: false, initializeInjected: false };
+    (window as typeof window & { __v146AutosaveRepairTracker?: typeof tracker }).__v146AutosaveRepairTracker = tracker;
+    const nativeSetInterval = window.setInterval.bind(window);
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      const accelerated = timeout === 30_000 ? 2_000 : timeout;
+      return nativeSetInterval(handler, accelerated, ...args);
+    }) as typeof window.setInterval;
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args) as Worker;
+        const isPersistence = String(args[0]).includes("simulationRuntimeRecoveryPersistence.worker") &&
+          (args[1] as WorkerOptions | undefined)?.name === "runtime-recovery-persistence";
+        if (!isPersistence) return worker;
+        const nativePostMessage = worker.postMessage.bind(worker);
+        worker.postMessage = ((message: Record<string, unknown>, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
+          const failInitialize = message.type === "initialize" && tracker.armInitialize && !tracker.initializeInjected;
+          if (failInitialize) {
+            tracker.initializeInjected = true;
+            window.setTimeout(() => {
+              worker.onerror?.(new ErrorEvent("error", { message: "injected autosave recovery-head failure" }));
+              worker.terminate();
+            }, 0);
+            return;
+          }
+          if (transferOrOptions === undefined) nativePostMessage(message);
+          else nativePostMessage(message, transferOrOptions);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+  });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active", { timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+
+  await page.evaluate(() => {
+    const tracker = (window as typeof window & { __v146AutosaveRepairTracker?: { armInitialize: boolean } }).__v146AutosaveRepairTracker;
+    if (!tracker) throw new Error("autosave repair tracker missing");
+    tracker.armInitialize = true;
+  });
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __v146AutosaveRepairTracker?: { initializeInjected: boolean } }).__v146AutosaveRepairTracker?.initializeInjected ?? false,
+  ), { timeout: 30_000 }).toBe(true);
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active", { timeout: 40_000 });
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false", { timeout: 20_000 });
+  await expect(page.locator(".save-emergency-warning")).toHaveCount(0);
+});
+
 test("running and paused UI commands drain through WAL before pagehide without promoting an emergency primary", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/?menu=1");
