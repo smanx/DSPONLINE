@@ -53,7 +53,7 @@ Web/PWA、Chromium/Firefox/WebKit、Windows unpacked/desktop、Android WebView�
 ## Required tests
 
 - `npm run typecheck`
-- `npm run build`
+- `npm run build:web`
 - `npm test`
 - `npm run test:server`
 - `npm run test:ops`
@@ -74,13 +74,13 @@ Web/PWA、Chromium/Firefox/WebKit、Windows unpacked/desktop、Android WebView�
 
 ## Development handoff
 
-Commit SHA: `TBD until the local candidate commit; the immutable manifest must record the final source SHA`
+Commit SHA: the clean source SHA recorded by the immutable release manifest is authoritative. Do not infer it from a working-tree `dist` directory.
 
 Changed files: `src/App.tsx`, release metadata, release notes, targeted runtime WAL E2E, canonical status/testing docs.
 
-Artifact paths: `TBD after the clean candidate build (Web dist, API archive, unsigned native diagnostics only)`
+Artifact paths: create and retain them from an isolated clean checkout: Web `dist/`, expanded API directory from `node deploy/prepare-api-release.mjs --output <empty-directory>`, plus manifest/SBOM/provenance. Signed native artifacts are intentionally absent.
 
-Manifest and aggregate hash: TBD after `npm run release:manifest`; verify with `npm run release:verify`.
+Manifest and aggregate hash: create only after `npm run build:web` in a clean checkout, then verify with `npm run release:verify -- <manifest.json>`. A native-platform or dirty Web build is not a valid release candidate.
 
 Tests with exact counts:
 
@@ -92,10 +92,15 @@ Tests with exact counts:
 - `npm run test:native`: 24/24 passed
 - `npm run licenses:check`: 125 runtime packages consistent
 - `npm audit --omit=dev` and `npm --prefix server audit --omit=dev`: 0 vulnerabilities
-- `npm run build`: 1,959 modules; startup gzip 193,561 B; menu gzip 278,351 B
+- `npm run build:web`: 1,959 modules; startup gzip 193,546 B; menu gzip 278,348 B
 - `npm run test:e2e -- --workers=4`: Chromium 407 passed / 14 skipped / 0 failed
 - production-preview performance set: 20/20 passed (serial worker gate)
 - production-preview PWA: 1/1 passed
 - Firefox/WebKit compatibility: 2/2 passed
+
+Release-process hardening:
+
+- `package.json` provides `npm run build:web`, which forces `VITE_APP_PLATFORM=web`.
+- `.github/workflows/release-gate.yml` uses that command and runs the production-preview PWA lifecycle test after the Web build. Do not reuse a `dist` directory produced by `build:desktop` or `build:android`.
 
 Unverified gaps: Android/Windows signed artifacts and physical-device gates, real large-save fixture (the optional fixture remains skipped), production deployment/rollback checks, and public download-page update.

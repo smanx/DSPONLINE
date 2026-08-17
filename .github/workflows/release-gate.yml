@@ -78,11 +78,15 @@ jobs:
           npm audit --omit=dev
           npm --prefix server audit --omit=dev
       - name: Build production web candidate
-        run: npm run build
+        run: npm run build:web
       - name: Install Chromium for critical browser lifecycle gates
         run: npx playwright install --with-deps chrome
       - name: Critical Playwright save cloud offline and PWA gates
         run: npm run test:e2e -- --workers=1 --grep "cloud|save|offline|idle|PWA|leaderboard"
+      - name: Production-preview PWA lifecycle gate
+        env:
+          DSP_E2E_USE_PREVIEW: "1"
+        run: npx playwright test tests/e2e/v140-pwa-cache.spec.ts --workers=1
       - name: Create immutable release manifest
         run: node deploy/create-release-manifest.mjs --output "artifacts/release-gate/release-manifest-${RELEASE_SHA}.json"
       - name: Create CycloneDX SBOM
