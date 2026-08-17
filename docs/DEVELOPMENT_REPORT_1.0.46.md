@@ -24,7 +24,7 @@
 | Web 生产预览 | PWA 1/1；画布性能 20/20 |
 | Firefox / WebKit | 2/2 |
 | 依赖与 Git | root/server `npm audit` 均为 0 漏洞；`git fsck` 无对象损坏 |
-| 干净 Web 构建 | 1,959 modules；startup gzip 193,546 B；menu gzip 278,348 B |
+| 干净 Web 构建 | 1,959 modules；startup/menu gzip 预算通过 |
 
 Chromium 的 14 条跳过都需要未提供的真实大档或外部生产条件，不是失败。`git fsck` 列出历史不可达对象但没有 garbage 或损坏；为保护可恢复的本地历史，本次没有执行 Git 清理。
 

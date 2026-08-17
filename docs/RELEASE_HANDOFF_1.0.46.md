@@ -92,7 +92,7 @@ Tests with exact counts:
 - `npm run test:native`: 24/24 passed
 - `npm run licenses:check`: 125 runtime packages consistent
 - `npm audit --omit=dev` and `npm --prefix server audit --omit=dev`: 0 vulnerabilities
-- `npm run build:web`: 1,959 modules; startup gzip 193,546 B; menu gzip 278,348 B
+- `npm run build:web`: 1,959 modules; startup/menu gzip budgets passed
 - `npm run test:e2e -- --workers=4`: Chromium 407 passed / 14 skipped / 0 failed
 - production-preview performance set: 20/20 passed (serial worker gate)
 - production-preview PWA: 1/1 passed
