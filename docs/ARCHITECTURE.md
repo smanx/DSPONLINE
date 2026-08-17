@@ -1,5 +1,7 @@
 # 系统架构
 
+> **1.0.46 durable recovery 热修边界（2026-08-17，未发布）**：模拟 Worker 失败或 durable finalize 回执失败时，`FactoryGame` 保留 T0 recovery base，使用 `replaySimulationRuntimeStartupInWorker` 回放 finalized/pending intent，将精确结果验证写入 T1，并以持久化 Worker 原子替换 recovery head 后安装新模拟 Worker。新 Worker 安装会清除旧 disabled latch；暂停状态可在同页恢复。若主存档已先完成 T1 读回而旧 head 尚未替换，head 身份比较会跳过旧 journal，待保存锁释放后从 T1 建立新基线；仅实验性编辑模式的额外 UI 视图会作为新 durable patch 重排。默认保存保护模式的 revision/head 一拍竞态采用最新已验证 revision，不改变 GameState、save envelope、cloud schema 或 SQLite layout。
+
 > **1.0.45 空间站扩展候选（2026-08-17）**：`codex/1.0.45-space-station` 已合并 `codex/space-station-expansion`，启用 GameState v47 / cloud schema v8 / SQLite layout v3。默认开启全星系空间站；M0 桥接开关 `VITE_SPACE_STATION_ENABLED=false` 可构建不升级 v46 的桥接版。完整发布交接见 [RELEASE_HANDOFF_1.0.45.md](./RELEASE_HANDOFF_1.0.45.md)。
 
 > **1.0.44 本地存档目录开发态（未发布）**：IndexedDB 继续使用 version 2 与同一个 `records` store，存档正文仍是既有 `value: string`。每份正文旁增加小型 catalog side-record，和 payload/revision 在同一事务提交并绑定精确 UTF-8 byte length、正文 checksum 与 revision。启动只枚举 key 和读取小记录，禁止 `records.getAll()`；主页持有 handle/summary 而不保留 raw，只有玩家选择继续、槽位或恢复源后才逐份读取并在 inspection Worker 做完整解析和 checksum 核对。旧记录按 key 一次一份在 catalog Worker 完整 `JSON.parse` 后后台建索引，写入前再次读取并核对原文与 revision；Worker 不可用只允许带诊断的同步兼容回退。主档损坏仍按 primary → backup → snapshot 的既有顺序惰性回退，原 writer lease、fencing、CAS、冲突双副本与逐字读回合同不变；正文 LRU 只保留最多两个显式选中的 payload，主页 idle 为零。存档索引与云账号面板都位于动态加载边界，避免把 catalog builder 或云端管理代码重新并入菜单静态闭包。

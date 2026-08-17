@@ -350,9 +350,11 @@ import {
   commitSimulationRuntimeRecoveryCheckpointInPersistenceWorker,
   finalizeSimulationRuntimeRecoveryIntentInPersistenceWorker,
   initializeSimulationRuntimeRecoveryInPersistenceWorker,
+  readSimulationRuntimeRecoveryInPersistenceWorker,
   stageUnsignedSimulationRuntimeRecoveryIntentInPersistenceWorker,
 } from "./game/simulationRuntimeRecoveryPersistenceClient";
 import type { SimulationRuntimeStartupRecoveryBinding } from "./game/simulationRuntimeStartupRecovery";
+import { replaySimulationRuntimeStartupInWorker } from "./game/simulationRuntimeStartupRecoveryClient";
 import { getLocalSaveBackend, getLocalSaveRawCacheSize, getLocalSaveWriterStatus, getPrimaryLocalSaveRecoveryIdentity, listLocalSaveCatalogs, subscribeLocalSaveStorageStatus } from "./game/localSaveStore";
 import { resolveLargeSaveAutosavePolicy, type LargeSaveAutosavePolicy } from "./game/largeSaveAutosavePolicy";
 import type { AuthoritativeSaveCheckpointOverlay } from "./game/authoritativeSaveSerializationProtocol";
@@ -659,6 +661,16 @@ function pureIdleProgressLabel(progress: PureIdleMacroProgress): string {
   if (progress.phase === "finalizing") return "正在序列化、重载并验证存档";
   if (progress.phase === "recovering") return "正在恢复 Worker";
   return "正在执行宏观结算";
+}
+
+function sameDurableRecoveryBaseIdentity(
+  left: SimulationRuntimeDurableAppHead["baseIdentity"],
+  right: SimulationRuntimeDurableAppHead["baseIdentity"],
+): boolean {
+  return left.mode === right.mode &&
+    left.savedAt === right.savedAt &&
+    left.checksum === right.checksum &&
+    left.revision === right.revision;
 }
 
 function isCountedPureIdleWorkerFailure(error: unknown): boolean {
@@ -1480,6 +1492,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     registryFingerprint: loaded.runtimeRecovery.registryFingerprint,
   } : null);
   const durableRecoveryLifecycleRef = useRef<"active" | "degraded" | "unavailable">(loaded.runtimeRecovery ? "active" : "unavailable");
+  // This is the exact state represented by the current durable recovery
+  // checkpoint (T0/T1), before any finalized journal entries are replayed.
+  // Keeping it separate from the latest Worker projection prevents an
+  // in-page recovery from replaying a durable journal twice after a resync.
+  const durableRecoveryBaseStateRef = useRef<GameState>(loaded.state);
+  const durableWorkerRecoveryInFlightRef = useRef<Promise<boolean> | null>(null);
+  const durableRecoveryRepairRef = useRef<() => void>(() => undefined);
+  const durableRecoveryPendingViewRef = useRef<GameState | null>(null);
+  const pendingResumeAfterDurableRecoveryRef = useRef(false);
   const durableRecoveryFinalizeInFlightRef = useRef<number | null>(null);
   const durableRecoveryFinalizeReadyRef = useRef<number | null>(null);
   const durableRecoveryStageInFlightRef = useRef(false);
@@ -1499,6 +1520,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     writeAllowEditsDuringSavePreference(enabled);
   }, []);
   const rejectPlayerStateEditDuringPrimarySave = useCallback((): boolean => {
+    if (durableWorkerRecoveryInFlightRef.current) {
+      setNotice("正在从 durable recovery 精确重建模拟 Worker，请稍候");
+      return true;
+    }
     if (allowEditsDuringSaveRef.current) return false;
     if (!durablePrimarySaveInFlightRef.current) return false;
     const rejection = "本次操作未应用；保存完成后即可继续编辑";
@@ -2653,6 +2678,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       };
       durableRecoveryLifecycleRef.current = "active";
       simulationStateRevisionRef.current = checkpoint.stateRevision;
+      durableRecoveryBaseStateRef.current = state;
       latestAuthoritativeCheckpointRef.current = state;
       lastSimulationResultRef.current = state;
       simulationReplayJournalRef.current = [];
@@ -2681,6 +2707,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     recordRuntimeTransitionPhase("persistence-phase", startedAt, 0, { kind, phase: "checkpoint" });
     simulationSaveBarrierDepthRef.current += 1;
     simulationCheckpointBarrierRef.current = true;
+    let primaryWriteVerified = false;
+    let repairDurableWorkerAfterSave = false;
     try {
       // Even an explicit replacement state (import/slot/cloud) must first
       // drain an in-flight simulation submission. Otherwise its T1 payload
@@ -2697,8 +2725,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         sourceState = gameRef.current;
         barrierState = await requestAuthoritativeSimulationCheckpoint();
       }
-      const saveState = requestedState ?? barrierState;
-      const checkpointRevision = simulationStateRevisionRef.current;
+      let saveState = requestedState ?? barrierState;
+      let checkpointRevision = simulationStateRevisionRef.current;
       // The checkpoint Worker may resolve after pagehide. Do not turn that
       // late result into a new primary/IDB transaction; T0 remains the exact
       // recovery source for the next boot.
@@ -2707,7 +2735,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在验证 T1 主存档并滚动 recovery…" });
       recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "serialize-write-readback" });
-      const result = await saveVerifiedPrimaryCheckpoint(saveState);
+      let result = await saveVerifiedPrimaryCheckpoint(saveState);
       if (lifecycleExitStartedRef.current) return lifecycleSealedSaveResult();
       if (!result.success) {
         setSaveFailure(result);
@@ -2716,21 +2744,43 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         if (kind === "autosave") completeRuntimeTransition("autosave", "save-failed");
         return result;
       }
+      primaryWriteVerified = true;
+      // Once T1 has passed exact readback it is the only primary authority,
+      // even if replacing the old recovery head fails afterwards. Retrying
+      // from the old in-memory T0 would otherwise diverge from a refresh,
+      // which correctly selects this verified T1 and ignores its stale head.
+      durableRecoveryBaseStateRef.current = saveState;
       const mode = saveState.mode === "speedrun" ? "speedrun" : "normal";
-      const identity = getPrimaryLocalSaveRecoveryIdentity(mode);
+      let identity = getPrimaryLocalSaveRecoveryIdentity(mode);
       const status = getLocalSaveWriterStatus();
       const head = durableRecoveryHeadRef.current;
       if (!identity || status.role !== "primary" || status.fencingToken < 1 || !head) {
         throw new Error("T1 写入后未取得 durable identity/fence，已阻止继续模拟");
       }
       if (head.baseIdentity.mode !== mode) throw new Error("durable mode 与主存档不匹配");
-      if (simulationStateRevisionRef.current !== head.stateRevision) {
-        // 开启“保存期间允许继续编辑”后，保存过程中产生的编辑会把 UI/Worker
-        // revision 推到 checkpoint 之前。此时 head 落后是预期的可追赶状态：
-        // 用保存时的 checkpointRevision 滚动，下一次保存自然追平，不阻断游戏。
-        if (!allowEditsDuringSaveRef.current) {
-          throw new Error("模拟 revision 与 durable recovery head 不一致，已阻止滚动基线");
+      if (simulationStateRevisionRef.current !== head.stateRevision ||
+        (!requestedState && allowEditsDuringSaveRef.current && gameRef.current !== saveState)) {
+        // A checkpoint response can advance the Worker revision one step after
+        // the original recovery head was read. In the default protection mode
+        // there are no accepted edits to preserve, so adopting the latest
+        // verified revision is safe and avoids the old false-positive block.
+        // With experimental editing enabled, drain and persist the accepted
+        // edit before replacing T0; otherwise a head rollover could discard a
+        // command that was already durable in the pending-intent record.
+        if (!requestedState && allowEditsDuringSaveRef.current && gameRef.current !== saveState) {
+          const finalBarrierState = await requestAuthoritativeSimulationCheckpoint();
+          if (finalBarrierState !== saveState) {
+            saveState = finalBarrierState;
+            checkpointRevision = simulationStateRevisionRef.current;
+            const finalResult = await saveVerifiedPrimaryCheckpoint(saveState);
+            if (!finalResult.success) throw new Error(finalResult.message);
+            result = finalResult;
+            primaryWriteVerified = true;
+            identity = getPrimaryLocalSaveRecoveryIdentity(mode);
+            if (!identity) throw new Error("保存期间编辑已完成但未取得新的 durable identity");
+          }
         }
+        checkpointRevision = Math.max(checkpointRevision, simulationStateRevisionRef.current);
       }
       const fence = { ownerId: status.writerId, fencingToken: status.fencingToken };
       // The persistence Worker performs a fenced stale-base replacement as a
@@ -2759,6 +2809,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       if (simulationStateRevisionRef.current < checkpoint.stateRevision) {
         simulationStateRevisionRef.current = checkpoint.stateRevision;
       }
+      durableRecoveryBaseStateRef.current = saveState;
       latestAuthoritativeCheckpointRef.current = saveState;
       lastSimulationResultRef.current = saveState;
       simulationReplayJournalRef.current = [];
@@ -2780,6 +2831,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         // 保存失败时不再回滚/丢弃玩家在保存期间已接受的编辑；
         // 保留当前 UI 与 durable 队列，提示玩家导出或重试。
         setNotice(`${failure.message}；当前编辑已保留，可继续游戏或立即导出`);
+        repairDurableWorkerAfterSave = primaryWriteVerified;
         return failure;
       }
       const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
@@ -2788,6 +2840,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       gameRef.current = stopped;
       setGame(stopped);
       setNotice(`${failure.message}；已暂停，旧 recovery 保留供重试`);
+      repairDurableWorkerAfterSave = primaryWriteVerified;
       return failure;
     } finally {
       durablePrimarySaveInFlightRef.current = false;
@@ -2795,10 +2848,175 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       if (simulationSaveBarrierDepthRef.current === 0 && !simulationCheckpointRequestRef.current) {
         simulationCheckpointBarrierRef.current = false;
       }
+      if (repairDurableWorkerAfterSave && !lifecycleExitStartedRef.current) {
+        // The recovery function deliberately refuses to run while a primary
+        // write is in flight. Schedule it after this finally block releases
+        // the lock, otherwise a verified T1 could remain paired with a stale
+        // recovery head until the player refreshes or manually retries.
+        queueMicrotask(() => durableRecoveryRepairRef.current());
+      }
       window.setTimeout(() => setRuntimePersistenceProgress((current) => current?.id === progressId ? null : current), 8_000);
     }
   }, [requestAuthoritativeSimulationCheckpoint, saveVerifiedPrimaryCheckpoint]);
   persistDurablePrimaryCheckpointRef.current = persistDurablePrimaryCheckpoint;
+
+  /**
+   * Rebuild the authoritative simulation Worker in the current page after a
+   * durable finalize/checkpoint failure.  The recovery journal is the source
+   * of truth here: replay T0 (including a pending intent) in the startup
+   * recovery Worker, persist that exact result as a new T1, then atomically
+   * replace the old recovery head before installing a fresh simulation Worker.
+   * This keeps the refresh/recovery guarantee while making Continue usable
+   * without forcing a page reload.
+   */
+  const recoverSimulationWorkerFromDurableRecovery = useCallback(async (resume = false): Promise<boolean> => {
+    if (resume) pendingResumeAfterDurableRecoveryRef.current = true;
+    const existing = durableWorkerRecoveryInFlightRef.current;
+    if (existing) return existing;
+    const recoveryPromise = (async () => {
+      if (durableRecoveryLifecycleRef.current !== "active") {
+        setNotice("durable recovery 尚未就绪，暂时无法重建模拟 Worker");
+        return false;
+      }
+      if (typeof Worker === "undefined") {
+        setNotice("当前环境不支持模拟 Worker，请刷新后从 recovery 精确恢复");
+        return false;
+      }
+      if (durablePrimarySaveInFlightRef.current) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        if (durablePrimarySaveInFlightRef.current) {
+          setNotice("主存档仍在验证，保存完成后可从 recovery 重建模拟 Worker");
+          return false;
+        }
+      }
+      const head = durableRecoveryHeadRef.current;
+      const status = getLocalSaveWriterStatus();
+      if (!head || status.role !== "primary" || status.fencingToken < 1) {
+        setNotice("本地存档写入权不可用，请刷新后从 recovery 精确恢复");
+        return false;
+      }
+      const primaryIdentity = getPrimaryLocalSaveRecoveryIdentity(head.baseIdentity.mode);
+      if (!primaryIdentity) {
+        setNotice("当前主存档身份不可用，请刷新后从 recovery 精确恢复");
+        return false;
+      }
+      const primaryAdvancedBeyondHead = !sameDurableRecoveryBaseIdentity(head.baseIdentity, primaryIdentity);
+      // A stage callback can still be returning a pending intent after the
+      // simulation Worker has failed. Give it a short, bounded opportunity to
+      // finish so the replay sees the same durable boundary as a refresh.
+      const stageWaitStartedAt = performance.now();
+      while (durableRecoveryStageInFlightRef.current && performance.now() - stageWaitStartedAt < 5_000) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
+      }
+      if (durableRecoveryStageInFlightRef.current) {
+        throw new Error("durable recovery intent 仍在写入，请稍后重试");
+      }
+      const fence = { ownerId: status.writerId, fencingToken: status.fencingToken };
+      setNotice("模拟 Worker 不可用，正在从 durable recovery 精确重建…");
+      const registry = contentPackRuntimeSnapshotRef.current;
+      let recoveredState = durableRecoveryBaseStateRef.current;
+      let recoveredRevision = Math.max(1, head.stateRevision);
+      let pendingView: GameState | null = null;
+      if (primaryAdvancedBeyondHead) {
+        // T1 is already the selected primary authority. Its old T0 journal is
+        // intentionally no longer readable under the new identity, so replay
+        // neither belongs here nor may be applied twice. In the default
+        // protected mode T1 is the entire accepted UI boundary. Only the
+        // experimental mode may have a later accepted view to re-stage after
+        // the fresh Worker adopts T1.
+        recoveredRevision = Math.max(recoveredRevision, simulationStateRevisionRef.current);
+        if (allowEditsDuringSaveRef.current) pendingView = setPaused(gameRef.current, true);
+      } else {
+        const read = await readSimulationRuntimeRecoveryInPersistenceWorker(head.baseIdentity, fence);
+        if (!read.ok) throw new Error(read.message);
+        if (read.diagnostic === "corrupt-recovery-quarantined") {
+          throw new Error("durable recovery 已隔离损坏记录；请刷新后选择恢复");
+        }
+        if (read.recovery) {
+          const replay = await replaySimulationRuntimeStartupInWorker(recoveredState, read.recovery, {
+            registry,
+            timeoutMs: 120_000,
+          });
+          recoveredState = replay.state;
+          recoveredRevision = replay.replay.finalStateRevision;
+        }
+      }
+      // Stay paused while T1 and the replacement recovery head are verified.
+      // A failed write leaves the original T0 and pending intent untouched.
+      const stopped = setPaused(recoveredState, true);
+      latestAuthoritativeCheckpointTransferRef.current = null;
+      const saved = await saveVerifiedPrimaryCheckpoint(stopped);
+      if (!saved.success) throw new Error(saved.message);
+      // An initialize failure below leaves this verified T1 on disk while the
+      // old head remains intentionally available. Keep retries aligned with
+      // startup recovery, which will select the new primary rather than T0.
+      durableRecoveryBaseStateRef.current = stopped;
+      const mode = stopped.mode === "speedrun" ? "speedrun" : "normal";
+      const identity = getPrimaryLocalSaveRecoveryIdentity(mode);
+      const latestWriter = getLocalSaveWriterStatus();
+      if (!identity || latestWriter.role !== "primary" || latestWriter.fencingToken < 1) {
+        throw new Error("T1 写入后未取得 durable identity/fence");
+      }
+      const checkpoint = createSimulationRuntimeDurablePrimaryCheckpoint({
+        baseIdentity: identity,
+        sessionId: `repair_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
+        stateRevision: recoveredRevision,
+        registry,
+        committedAtMs: identity.savedAt,
+      });
+      const initialized = await initializeSimulationRuntimeRecoveryInPersistenceWorker(checkpoint, {
+        ownerId: latestWriter.writerId,
+        fencingToken: latestWriter.fencingToken,
+      });
+      if (!initialized.result.ok) throw new Error(initialized.result.message);
+      durableRecoveryHeadRef.current = {
+        baseIdentity: checkpoint.baseIdentity,
+        sessionId: checkpoint.sessionId,
+        generation: checkpoint.generation,
+        sequence: checkpoint.lastSequence,
+        stateRevision: checkpoint.stateRevision,
+        registryFingerprint: checkpoint.registryFingerprint,
+      };
+      durableRecoveryBaseStateRef.current = stopped;
+      simulationStateRevisionRef.current = recoveredRevision;
+      latestAuthoritativeCheckpointRef.current = stopped;
+      lastSimulationResultRef.current = stopped;
+      simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(stopped);
+      simulationReplayJournalRef.current = [];
+      simulationRecoveryRef.current = null;
+      simulationSubmissionRef.current = null;
+      deferredDurableUiSubmissionRef.current = null;
+      simulationPendingSecondsRef.current = stopped.timeWarp.pendingSimulationSeconds;
+      simulationPendingWallSecondsRef.current = stopped.timeWarp.pendingWallSeconds;
+      simulationRetrySecondsRef.current = 0;
+      simulationRetryWallSecondsRef.current = 0;
+      durableRecoveryPendingViewRef.current = pendingView;
+      simulationWorkerRef.current?.terminate();
+      simulationWorkerRef.current = null;
+      simulationWorkerDisabledRef.current = false;
+      setSimulationWorkerActive(false);
+      gameRef.current = stopped;
+      setGame(stopped);
+      invalidateFactoryAlertProjection();
+      setInitialSimulationWorkerReady(false);
+      setSimulationWorkerGeneration((generation) => generation + 1);
+      setNotice(pendingResumeAfterDurableRecoveryRef.current
+        ? "存档已从 recovery 精确恢复，正在重建模拟 Worker…"
+        : "存档已从 recovery 精确恢复，模拟已暂停");
+      return true;
+    })().catch((error) => {
+      const message = error instanceof Error ? error.message : "durable recovery 重建失败";
+      setNotice(`${message}；当前仍暂停，刷新后可从 recovery 精确恢复`);
+      return false;
+    }).finally(() => {
+      durableWorkerRecoveryInFlightRef.current = null;
+    });
+    durableWorkerRecoveryInFlightRef.current = recoveryPromise;
+    return recoveryPromise;
+  }, [invalidateFactoryAlertProjection, saveVerifiedPrimaryCheckpoint]);
+  durableRecoveryRepairRef.current = () => {
+    void recoverSimulationWorkerFromDurableRecovery(false);
+  };
 
   const persistPureIdleTerminalEnvelope = useCallback(async (
     record: PureIdleRecoveryRecord,
@@ -2900,7 +3118,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const sourceStateTransfer = saved.sourceStateTransfer;
       if (!sourceStateTransfer) throw new Error("纯挂机保存未返还模拟 Worker state transfer");
       setRuntimePersistenceProgress({ id: progressId, kind: "pure-idle-stop", phase: "serialize-write-readback", startedAt, message: "主存档已验证，正在等待模拟 Worker 接管…" });
-      await replaceSimulationAuthorityFromStateTransfer(sourceStateTransfer, durableRecoveryHeadRef.current);
+      const replacement = await replaceSimulationAuthorityFromStateTransfer(sourceStateTransfer, durableRecoveryHeadRef.current);
+      durableRecoveryBaseStateRef.current = replacement.state;
       const cleared = await clearPureIdleRecovery(record.sessionId, pureIdleOwnerTokenRef.current);
       if (saved.bytes !== undefined) setPersistedPrimaryBytes(saved.bytes);
       setRuntimePersistenceProgress({ id: progressId, kind: "pure-idle-stop", phase: "complete", startedAt, message: "纯挂机终态已保存并由模拟 Worker 接管" });
@@ -3345,6 +3564,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [persistPrimarySave]);
 
   const togglePause = useCallback(() => {
+    if (gameRef.current.paused && durableRecoveryLifecycleRef.current === "active" &&
+      (!simulationWorkerRef.current || simulationWorkerDisabledRef.current)) {
+      void recoverSimulationWorkerFromDurableRecovery(true);
+      return;
+    }
     if (rejectPlayerStateEditDuringPrimarySave()) return;
     if (gameRef.current.timeWarp.enabled) return;
     const wasPaused = gameRef.current.paused;
@@ -3356,7 +3580,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       dispatchDurableUiCommandRef.current();
     }
     setNotice(wasPaused ? "模拟已继续" : "模拟已暂停");
-  }, [invalidateFactoryAlertProjection, publishRuntimeGame, rejectPlayerStateEditDuringPrimarySave]);
+  }, [invalidateFactoryAlertProjection, publishRuntimeGame, recoverSimulationWorkerFromDurableRecovery, rejectPlayerStateEditDuringPrimarySave]);
 
   const handleTimeWarpEnabledChange = useCallback((enabled: boolean) => {
     if (rejectPlayerStateEditDuringPrimarySave()) return;
@@ -3934,6 +4158,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       return;
     }
+    // A newly installed Worker is a fresh authority. Never carry the old
+    // instance's disabled latch into this generation; doing so leaves a live
+    // Worker permanently classified as unavailable after a recovery retry.
+    simulationWorkerDisabledRef.current = false;
     // A replacement Worker has no registry state even when the previous
     // instance acknowledged the same fingerprint. Force the first request to
     // carry the runtime registry and rebuild the authoritative cache safely.
@@ -4149,6 +4377,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           gameRef.current = stopped;
           setGame(stopped);
           setNotice("durable 模拟回执缺少可确认 revision，已暂停；刷新后将从 pending intent 精确恢复");
+          void recoverSimulationWorkerFromDurableRecovery(false);
           return;
         }
         const status = getLocalSaveWriterStatus();
@@ -4264,6 +4493,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                 stateRevision: nextCheckpoint.stateRevision,
                 registryFingerprint: nextCheckpoint.registryFingerprint,
               };
+              durableRecoveryBaseStateRef.current = confirmed;
               simulationStateRevisionRef.current = nextStateRevision;
               simulationReplayJournalRef.current = [];
               acceptFactoryAlertProjection(event.data.projection?.alerts, event.data.factoryAlertsGeneration);
@@ -4294,6 +4524,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               gameRef.current = stopped;
               setGame(stopped);
               setNotice(`durable 回执检查点吸收失败（${error instanceof Error ? error.message : "未知错误"}），已暂停；刷新后精确恢复`);
+              void recoverSimulationWorkerFromDurableRecovery(false);
             }
           })();
           return;
@@ -4332,6 +4563,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           gameRef.current = stopped;
           setGame(stopped);
           setNotice(`durable 模拟回执未能写入确认（${error instanceof Error ? error.message : "未知错误"}），已暂停；刷新后精确恢复`);
+          void recoverSimulationWorkerFromDurableRecovery(false);
         });
         return;
       }
@@ -4536,7 +4768,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         setTimeWarpPendingUi(simulationPendingSecondsRef.current);
       }
       const responseApplyStartedAt = performance.now();
-      const current = gameRef.current;
+      // A recovery-head repair can have a verified T1 plus UI edits accepted
+      // during the experimental save window. Install the Worker from T1, then
+      // rebase that preserved view as the first ordinary durable command.
+      const current = submission.kind === "initialize"
+        ? durableRecoveryPendingViewRef.current ?? gameRef.current
+        : gameRef.current;
       let confirmed = submission.state;
       let projectionIndex = simulationProjectionIndexRef.current;
       let responseAccepted = true;
@@ -4597,8 +4834,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         const next = rebaseConfirmedView(current);
         publishRuntimeGame(next);
         if (submission.kind === "initialize") {
+          durableRecoveryPendingViewRef.current = null;
           setSimulationWorkerActive(true);
           setInitialSimulationWorkerReady(true);
+          simulationWorkerDisabledRef.current = false;
+          if (pendingResumeAfterDurableRecoveryRef.current) {
+            pendingResumeAfterDurableRecoveryRef.current = false;
+            const resumed = setPaused(gameRef.current, false);
+            publishRuntimeGame(resumed, true);
+            setNotice("模拟 Worker 已从 recovery 精确恢复，模拟已继续");
+            if (durableRecoveryLifecycleRef.current === "active") {
+              dispatchDurableUiCommandRef.current();
+            }
+          }
         }
       }
       recordRuntimeTransitionPhase("worker-response-setGame", responseApplyStartedAt, performance.now() - responseApplyStartedAt, {
@@ -4728,7 +4976,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         simulationSubmissionRef.current = null;
       }
     };
-  }, [abortPureIdleForWorkerFailure, acceptFactoryAlertProjection, publishRuntimeGame, publishTimeWarpComputeState, simulationWorkerGeneration]);
+  }, [abortPureIdleForWorkerFailure, acceptFactoryAlertProjection, publishRuntimeGame, publishTimeWarpComputeState, recoverSimulationWorkerFromDurableRecovery, simulationWorkerGeneration]);
 
   useEffect(() => {
     if (!loaded.state.timeWarp.enabled || loaded.state.speedrun?.enabled) {
@@ -5114,7 +5362,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         lastSimulationResultRef.current = stopped;
         gameRef.current = stopped;
         setGame(stopped);
-        setNotice("durable 模拟 Worker 不可用，已暂停；刷新后从 recovery 精确恢复");
+        void recoverSimulationWorkerFromDurableRecovery(false);
         return;
       }
       if (currentState.timeWarp.enabled) {
@@ -5140,7 +5388,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, [abortPureIdleForWorkerFailure, publishTimeWarpComputeState, stageAndPostDurableSimulationRequest]);
+  }, [abortPureIdleForWorkerFailure, publishTimeWarpComputeState, recoverSimulationWorkerFromDurableRecovery, stageAndPostDurableSimulationRequest]);
 
   useEffect(() => {
     const timer = largeSaveAutosavePolicy.effectiveIntervalSeconds > 0
@@ -6056,6 +6304,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     simulationStateRevisionRef.current = durableRecoveryHeadRef.current?.stateRevision ?? 0;
     simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(state);
     invalidateFactoryAlertProjection();
+    durableRecoveryBaseStateRef.current = state;
     latestAuthoritativeCheckpointRef.current = state;
     latestAuthoritativeCheckpointTransferRef.current = null;
     simulationReplayJournalRef.current = [];

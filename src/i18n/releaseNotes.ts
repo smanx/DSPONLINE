@@ -56,6 +56,40 @@ const release1043Copy = {
   },
 } as const;
 
+const release1046Copy = {
+  date: { "zh-CN": "2026年8月17日", en: "August 17, 2026" },
+  title: { "zh-CN": "存档恢复与模拟 Worker 热修", en: "Save Recovery and Simulation Worker Hotfix" },
+  summary: {
+    "zh-CN": "1.0.46 修复 durable 存档 finalize 失败后只能刷新恢复、暂停后模拟 Worker 被永久判定不可用，以及默认保存保护模式下 revision 与 recovery head 竞态阻断的问题。失败时先保留 T0 与 pending intent，再在当前页面按原始边界回放、验证 T1、原子重建 recovery head 和模拟 Worker；纯挂机恢复日志、宏观进度和导出保护保持不变。GameState v47、存档 envelope v2、cloud schema v8 与 SQLite layout v3 不变。",
+    en: "Version 1.0.46 fixes durable-save finalize failures that previously required a refresh, simulation Workers remaining permanently marked unavailable after a pause, and revision/recovery-head races in the default protected save mode. T0 and pending intents stay intact while the current page replays exact boundaries, verifies T1, atomically rebuilds the recovery head, and reinstalls the simulation Worker. Pure-idle recovery logs, macro progress, and export protection remain intact. GameState v47, save envelope v2, cloud schema v8, and SQLite layout v3 remain unchanged.",
+  },
+  recoveryTitle: { "zh-CN": "同页精确恢复", en: "Exact in-page recovery" },
+  recoveryDescription: {
+    "zh-CN": "durable Worker 或 finalize 失败后，当前页读取 T0 recovery、回放 finalized/pending intent 并写入新的 T1；恢复完成后“继续模拟”可直接使用，不再强制刷新。",
+    en: "After a durable Worker or finalize failure, the current page reads T0 recovery, replays finalized and pending intents, and writes a new T1. Continue Simulation works after recovery without forcing a refresh.",
+  },
+  workerTitle: { "zh-CN": "Worker 状态自动解锁", en: "Worker state self-heals" },
+  workerDescription: {
+    "zh-CN": "每次新 Worker 安装都会清除旧实例的 disabled 标志；暂停、恢复、保存和 Worker 重建不再被旧失败状态卡住。",
+    en: "Every new Worker installation clears the previous instance's disabled latch, so pause, resume, save, and Worker rebuilds are no longer blocked by stale failure state.",
+  },
+  saveTitle: { "zh-CN": "默认保护与实验性编辑都安全", en: "Protected and experimental save modes stay safe" },
+  saveDescription: {
+    "zh-CN": "默认关闭时保存期间操作继续受保护并被明确拒绝；revision 竞态会安全重查而不再显示阻断错误。开启“保存期间允许继续操作”时，已接受编辑会留在 durable 队列并在 T1 重建前一并落盘。",
+    en: "With the default setting off, edits remain protected and are explicitly rejected while saving; revision races are rechecked safely instead of blocking the session. When Allow editing while saving is enabled, accepted edits remain in the durable queue and are persisted before T1 recovery is rebuilt.",
+  },
+  idleTitle: { "zh-CN": "纯挂机日志与宏观进度保留", en: "Pure-idle logs and macro progress are preserved" },
+  idleDescription: {
+    "zh-CN": "纯挂机终态保存仍要求主存档验证、Worker 接管和恢复日志提交全部完成；失败时可继续重试或立即导出，不会清空当前进度。",
+    en: "Pure-idle terminal saves still require verified primary persistence, Worker hand-off, and recovery-log commit. Failures remain retryable and exportable without clearing current progress.",
+  },
+  compatibilityTitle: { "zh-CN": "协议与存档格式保持兼容", en: "Save and online formats remain compatible" },
+  compatibilityDescription: {
+    "zh-CN": "本热修不升级 GameState、存档封装、云 schema、SQLite layout 或 IndexedDB records；回放、checksum、writer lease 和跨标签保护继续有效。",
+    en: "This hotfix does not upgrade GameState, the save envelope, cloud schema, SQLite layout, or IndexedDB records. Replay, checksums, writer leases, and cross-tab protection remain active.",
+  },
+} as const;
+
 const release1045Copy = {
   date: { "zh-CN": "2026年8月17日", en: "August 17, 2026" },
   title: { "zh-CN": "全星系空间站扩展", en: "Global Orbital Station Expansion" },
@@ -287,7 +321,11 @@ function release1044Message(locale: AppLocale, key: keyof typeof currentCopy): s
   return currentCopy[key][locale];
 }
 
-function currentMessage(locale: AppLocale, key: keyof typeof release1045Copy): string {
+function currentMessage(locale: AppLocale, key: keyof typeof release1046Copy): string {
+  return release1046Copy[key][locale];
+}
+
+function release1045Message(locale: AppLocale, key: keyof typeof release1045Copy): string {
   return release1045Copy[key][locale];
 }
 
@@ -302,17 +340,34 @@ function release1042Message(locale: AppLocale, key: keyof typeof release1042Copy
 /** Stable-key release copy; current text does not use the legacy DOM translation bridge. */
 export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteRecord {
   return {
-    id: "2026-08-17-v1.0.45",
+    id: "2026-08-17-v1.0.46",
     date: currentMessage(locale, "date"),
-    version: "1.0.45",
+    version: "1.0.46",
     title: currentMessage(locale, "title"),
     summary: currentMessage(locale, "summary"),
     items: [
-      { id: "global-orbital-station", title: currentMessage(locale, "stationTitle"), description: currentMessage(locale, "stationDescription") },
-      { id: "contracts-and-economy", title: currentMessage(locale, "contractsTitle"), description: currentMessage(locale, "contractsDescription") },
-      { id: "public-profile-and-social", title: currentMessage(locale, "publicTitle"), description: currentMessage(locale, "publicDescription") },
-      { id: "m0-bridge", title: currentMessage(locale, "bridgeTitle"), description: currentMessage(locale, "bridgeDescription") },
+      { id: "in-page-durable-recovery", title: currentMessage(locale, "recoveryTitle"), description: currentMessage(locale, "recoveryDescription") },
+      { id: "worker-rebuild", title: currentMessage(locale, "workerTitle"), description: currentMessage(locale, "workerDescription") },
+      { id: "save-modes", title: currentMessage(locale, "saveTitle"), description: currentMessage(locale, "saveDescription") },
+      { id: "pure-idle-preservation", title: currentMessage(locale, "idleTitle"), description: currentMessage(locale, "idleDescription") },
       { id: "version-upgrade", title: currentMessage(locale, "compatibilityTitle"), description: currentMessage(locale, "compatibilityDescription") },
+    ],
+  };
+}
+
+export function getReleaseNotes1045(locale: AppLocale): LocalizedReleaseNoteRecord {
+  return {
+    id: "2026-08-17-v1.0.45",
+    date: release1045Message(locale, "date"),
+    version: "1.0.45",
+    title: release1045Message(locale, "title"),
+    summary: release1045Message(locale, "summary"),
+    items: [
+      { id: "global-orbital-station", title: release1045Message(locale, "stationTitle"), description: release1045Message(locale, "stationDescription") },
+      { id: "contracts-and-economy", title: release1045Message(locale, "contractsTitle"), description: release1045Message(locale, "contractsDescription") },
+      { id: "public-profile-and-social", title: release1045Message(locale, "publicTitle"), description: release1045Message(locale, "publicDescription") },
+      { id: "m0-bridge", title: release1045Message(locale, "bridgeTitle"), description: release1045Message(locale, "bridgeDescription") },
+      { id: "version-upgrade", title: release1045Message(locale, "compatibilityTitle"), description: release1045Message(locale, "compatibilityDescription") },
     ],
   };
 }

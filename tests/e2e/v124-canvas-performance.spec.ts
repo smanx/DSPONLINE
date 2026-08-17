@@ -51,7 +51,7 @@ function seedDensePausedFactory(canvasDetail: "minimal" | null = null) {
       paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.45");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
     window.localStorage.setItem("dsp-idle-network.endgame-extreme-ack.v1", "true");
@@ -143,9 +143,26 @@ test("turning extreme mode off restores full visuals without writing a GameState
   await expect(page.locator(".factory-node-lod")).toHaveCount(0);
   await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
   expect(await page.locator(".react-flow__viewport").getAttribute("style")).toBe(viewportBefore);
-  const persisted = await page.evaluate(() => {
-    const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
-    return raw ? JSON.parse(raw).state?.endgameExtremeMode : "missing";
+  const persisted = await page.evaluate(async () => {
+    const raw = await new Promise<string | null>((resolve, reject) => {
+      const open = indexedDB.open("dsp-idle-network.local-saves", 2);
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const database = open.result;
+        const read = database.transaction("records", "readonly").objectStore("records")
+          .get("dsp-idle-network.save.v1") as IDBRequest<{ value?: unknown } | undefined>;
+        read.onerror = () => {
+          database.close();
+          reject(read.error);
+        };
+        read.onsuccess = () => {
+          database.close();
+          resolve(typeof read.result?.value === "string" ? read.result.value : null);
+        };
+      };
+    });
+    if (!raw) throw new Error("current IndexedDB primary save is missing");
+    return JSON.parse(raw).state?.endgameExtremeMode;
   });
   expect(persisted).toBeUndefined();
 });
@@ -221,4 +238,3 @@ test("canvas failures automatically restore the complete React Flow renderers", 
   await expect(page.locator(".react-flow__minimap-svg")).toBeVisible();
   expect(await page.locator(".factory-edge-visual-layer").count()).toBe(await page.locator(".react-flow__edge").count());
 });
-

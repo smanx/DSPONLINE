@@ -1,0 +1,101 @@
+# 1.0.46 存档恢复热修开发交接
+
+> 状态：本地开发候选，未发布；不授权线上切换。
+> 分支：`codex/1.0.46-save-recovery`
+> 基线：`codex/1.0.45-space-station`
+> 版本：`1.0.46` / Android `1000046`
+
+## Task ID / title
+
+`DSPIDLE-1046-DURABLE-RECOVERY`：修复保存期间、暂停/恢复和 Worker 故障导致的 durable 存档阻断。
+
+## Priority
+
+P0。玩家可能停留在暂停状态，模拟 Worker 被错误标记不可用；T0/pending intent 必须优先保留，不能用清理日志或刷新绕过一致性。
+
+## Source and attachments
+
+- 用户反馈：暂停模拟后显示“durable 模拟 Worker 不可用，已暂停；刷新后从 recovery 精确恢复”。
+- 用户设置语义：关闭“保存期间允许继续操作（实验性）”时，保存期间操作应被拒绝；开启时操作进入 durable 队列，失败可保留并导出。
+- 附件截图：`C:\Users\WINDOWS\AppData\Local\Temp\codex-clipboard-4a1257b9-e87d-45a2-b802-8147696dac98.png`，显示“模拟 revision 与 durable recovery head 不一致，已阻止滚动基线”。
+
+## Reproduction and fix evidence
+
+1. 启动普通工厂并等待 `data-runtime-recovery=active`、模拟 Worker active。
+2. 注入第一次 persistence Worker finalize 故障，然后暂停模拟。
+3. 修复后页面读取 T0 recovery，Worker 回放 finalized/pending intent，验证 T1，替换 recovery head 并安装新模拟 Worker。
+4. 页面保持暂停，点击“继续模拟”后 `data-simulation-paused=false` 且 Worker active；pending intent 已清理。
+
+已覆盖：
+
+- `tests/e2e/v144-runtime-wal-integration.spec.ts`：5/5，覆盖 durable finalize failure 同页恢复、二次 persistence Worker failure、T1 已验证但 recovery-head 替换失败后的自动修复、WAL/pagehide/undo/redo/viewport/activity。
+- `src/game/*durable*`、startup recovery、UI preference focused Vitest 21/21。
+
+## User-visible acceptance criteria
+
+- finalize、recovery persistence 或模拟 Worker 单次失败不会要求玩家必须刷新；当前页可在安全暂停状态发起精确恢复。
+- 恢复期间 T0、pending intent、纯挂机恢复日志和宏观进度不被删除；T1 未完成前不清理旧 recovery。
+- 恢复完成后“继续模拟”可用；新 Worker 不继承旧实例的 disabled 状态。
+- 默认保护模式仍拒绝保存期间编辑，但 revision/head 竞态不会显示阻断错误或把会话锁死。
+- 实验性开关开启时，已接受操作保留在 durable 队列；保存失败时当前进度仍可继续或导出。
+- 纯挂机终态仍要求主存档验证、Worker 接管、恢复日志提交全部完成后才清理日志。
+
+## Compatibility and data preservation
+
+- 保持 GameState v47、save envelope v2、cloud schema v8、SQLite layout v3、IndexedDB records 和空间站 M0-M5 语义。
+- 不迁移、不重写玩家云存档，不访问生产数据库，不改变排行榜历史。
+- 1.0.45 空间站候选作为历史代码基线保留；线上回退/发布由其他会话负责。
+
+## Target platforms
+
+Web/PWA、Chromium/Firefox/WebKit、Windows unpacked/desktop、Android WebView。当前开发会话只验证本地 Web 与可生成的诊断制品。
+
+## Required tests
+
+- `npm run typecheck`
+- `npm run build`
+- `npm test`
+- `npm run test:server`
+- `npm run test:ops`
+- `npm run test:native`
+- `npm run licenses:check`
+- 空间站专项、`npm run test:e2e:fast`、全量 Chromium；可用时 Firefox/WebKit 与 production-preview PWA。
+- `git diff --check`、版本一致性、release manifest/hash 检查。
+
+## Release target and version
+
+仅本地 `1.0.46` 开发候选；本交接不授权发布、下载页更新、生产切换或签名制品进入 stable。
+
+## Known risks / rollback
+
+- 超大真实存档 fixture 未提供时，真实大档纯挂机/保存性能只能报告跳过，不能宣称完成。
+- Android 长期签名证书、Windows 签名环境未在本会话提供；unsigned 诊断 APK/AAB/EXE 不可作为稳定制品。
+- 若发布前门禁失败，代码回退到本分支父级 1.0.45 候选；不要清理 T0/recovery，也不要回写线上数据。
+
+## Development handoff
+
+Commit SHA: `TBD until the local candidate commit; the immutable manifest must record the final source SHA`
+
+Changed files: `src/App.tsx`, release metadata, release notes, targeted runtime WAL E2E, canonical status/testing docs.
+
+Artifact paths: `TBD after the clean candidate build (Web dist, API archive, unsigned native diagnostics only)`
+
+Manifest and aggregate hash: TBD after `npm run release:manifest`; verify with `npm run release:verify`.
+
+Tests with exact counts:
+
+- `npm run typecheck`: passed
+- `npm test -- --maxWorkers=1`: 1,406 passed / 20 skipped (168 files passed, 7 skipped)
+- `npm run test:server`: 357 passed / 2 skipped; station profile 3/3
+- `npm run test:ops`: 56 passed / 6 Linux-only skipped
+- `npm run release:test-switch`: 29/29 passed
+- `npm run test:native`: 24/24 passed
+- `npm run licenses:check`: 125 runtime packages consistent
+- `npm audit --omit=dev` and `npm --prefix server audit --omit=dev`: 0 vulnerabilities
+- `npm run build`: 1,959 modules; startup gzip 193,561 B; menu gzip 278,351 B
+- `npm run test:e2e -- --workers=4`: Chromium 407 passed / 14 skipped / 0 failed
+- production-preview performance set: 20/20 passed (serial worker gate)
+- production-preview PWA: 1/1 passed
+- Firefox/WebKit compatibility: 2/2 passed
+
+Unverified gaps: Android/Windows signed artifacts and physical-device gates, real large-save fixture (the optional fixture remains skipped), production deployment/rollback checks, and public download-page update.

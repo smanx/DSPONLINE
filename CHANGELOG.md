@@ -4,7 +4,15 @@ All notable player-facing changes are recorded here. Game-state migration versio
 
 ## [Unreleased]
 
-### 1.0.45（候选）
+### 1.0.46（本地候选，未发布）
+
+- 修复 durable finalize/Worker 故障后只能刷新恢复的问题：当前页面会从 T0 recovery 精确回放、验证 T1 并原子重建模拟 Worker，暂停后可继续模拟。
+- 修复新 Worker 沿用旧 `disabled` 标志导致的“durable 模拟 Worker 不可用”假失败。
+- 默认保存保护模式下 revision 与 recovery head 的竞态改为安全重查，不再以截图中的阻断错误卡住会话。
+- 保存期间允许继续操作（实验性）开启时，已接受编辑会在 recovery head 重建前一起保留；纯挂机恢复日志、宏观进度和导出保护不变。
+- 更新 Android 版本为 `1.0.46 / 1000046`；不执行线上发布。
+
+### 1.0.45（历史候选）
 
 - 新增全星系唯一空间站：三阶段建设、轨道货运终端、量子手动交付、每日出口合同、轨道徽记/声望、装饰画布、公开只读主页与轻社交。
 - 普通存档升级到 GameState v47；服务端升级到 cloud schema v8 / SQLite layout v3。

@@ -1,7 +1,7 @@
 {
   "name": "dsp-idle-network",
   "private": true,
-  "version": "1.0.45",
+  "version": "1.0.46",
   "releaseChannel": "stable",
   "updateBaseUrl": "",
   "cloudApiBaseUrl": "",
@@ -45,7 +45,7 @@
     "release:manifest": "node deploy/create-release-manifest.mjs",
     "release:verify": "node deploy/create-release-manifest.mjs --verify",
     "download:page": "node scripts/create-download-site.mjs",
-    "release:test-switch": "bash deploy/test-switch-release.sh",
+    "release:test-switch": "node --test deploy/release-backup-evidence.test.mjs deploy/api-handoff-proxy.test.mjs deploy/release-switch.test.mjs",
     "build:desktop": "node scripts/build-platform.mjs desktop",
     "build:android": "node scripts/build-platform.mjs android",
     "desktop:dev": "cross-env DSP_DESKTOP_DEV_URL=http://127.0.0.1:4318 electron .",

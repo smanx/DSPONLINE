@@ -71,9 +71,226 @@ async function findBlankCanvasPoint(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.45");
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
   });
+});
+
+test("durable finalize failure rebuilds the simulation Worker in-page and resume remains usable", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    const tracker = { finalizeFailures: 1, injected: false };
+    (window as typeof window & { __v146DurableRecoveryTracker?: typeof tracker }).__v146DurableRecoveryTracker = tracker;
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args) as Worker;
+        const isPersistence = String(args[0]).includes("simulationRuntimeRecoveryPersistence.worker") &&
+          (args[1] as WorkerOptions | undefined)?.name === "runtime-recovery-persistence";
+        if (!isPersistence) return worker;
+        const nativePostMessage = worker.postMessage.bind(worker);
+        worker.postMessage = ((message: Record<string, unknown>, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
+          if (message.type === "finalize" && tracker.finalizeFailures > 0) {
+            tracker.finalizeFailures -= 1;
+            tracker.injected = true;
+            window.setTimeout(() => {
+              worker.onerror?.(new ErrorEvent("error", { message: "injected durable finalize failure" }));
+              worker.terminate();
+            }, 0);
+            return;
+          }
+          if (transferOrOptions === undefined) nativePostMessage(message);
+          else nativePostMessage(message, transferOrOptions);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+  });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active");
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active", { timeout: 20_000 });
+
+  await page.getByLabel("暂停模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "true", { timeout: 20_000 });
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __v146DurableRecoveryTracker?: { injected: boolean } }).__v146DurableRecoveryTracker?.injected ?? false,
+  )).toBe(true);
+
+  // The recovery path is asynchronous and deliberately keeps the game paused
+  // until T1 and the replacement durable head have both been verified.
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active", { timeout: 40_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 40_000 });
+  await expect(shell).toHaveAttribute("data-simulation-paused", "true");
+  await expect(page.locator(".game-notice")).not.toContainText("模拟 revision 与 durable recovery head 不一致");
+
+  await page.getByLabel("继续模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false", { timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active");
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending;
+  }, { timeout: 20_000 }).toBe(false);
+});
+
+test("a recovery-head retry keeps verified T1 state after a second persistence Worker failure", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    const tracker = { armFinalize: false, finalizeInjected: false, initializeInjected: false };
+    (window as typeof window & { __v146RecoveryHeadRetryTracker?: typeof tracker }).__v146RecoveryHeadRetryTracker = tracker;
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args) as Worker;
+        const isPersistence = String(args[0]).includes("simulationRuntimeRecoveryPersistence.worker") &&
+          (args[1] as WorkerOptions | undefined)?.name === "runtime-recovery-persistence";
+        if (!isPersistence) return worker;
+        const nativePostMessage = worker.postMessage.bind(worker);
+        worker.postMessage = ((message: Record<string, unknown>, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
+          const failOnce = (label: string) => {
+            window.setTimeout(() => {
+              worker.onerror?.(new ErrorEvent("error", { message: `injected durable ${label} failure` }));
+              worker.terminate();
+            }, 0);
+          };
+          if (message.type === "finalize" && tracker.armFinalize && !tracker.finalizeInjected) {
+            tracker.finalizeInjected = true;
+            failOnce("finalize");
+            return;
+          }
+          if (message.type === "initialize" && tracker.finalizeInjected && !tracker.initializeInjected) {
+            tracker.initializeInjected = true;
+            failOnce("initialize");
+            return;
+          }
+          if (transferOrOptions === undefined) nativePostMessage(message);
+          else nativePostMessage(message, transferOrOptions);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+  });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 20_000 });
+
+  await page.getByLabel("打开设置").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.getByRole("button", { name: "教程、版本与其他", exact: true }).first().click();
+  const beforeDifficulty = await readRecoveryProof(page);
+  await operations.getByRole("button", { name: "舒缓", exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(beforeDifficulty.commandCount);
+  await operations.getByLabel("关闭运营中心").click();
+  await page.evaluate(() => {
+    const tracker = (window as typeof window & {
+      __v146RecoveryHeadRetryTracker?: { armFinalize: boolean };
+    }).__v146RecoveryHeadRetryTracker;
+    if (!tracker) throw new Error("recovery retry tracker missing");
+    tracker.armFinalize = true;
+  });
+
+  await page.getByLabel("暂停模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "true");
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __v146RecoveryHeadRetryTracker?: { finalizeInjected: boolean; initializeInjected: boolean } })
+      .__v146RecoveryHeadRetryTracker,
+  )).toMatchObject({ finalizeInjected: true, initializeInjected: true });
+
+  await page.getByLabel("继续模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active", { timeout: 40_000 });
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false", { timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+});
+
+test("a verified T1 whose recovery-head rollover fails repairs itself after the save lock releases", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    const tracker = { armInitialize: false, initializeInjected: false };
+    (window as typeof window & { __v146PostT1RepairTracker?: typeof tracker }).__v146PostT1RepairTracker = tracker;
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args) as Worker;
+        const isPersistence = String(args[0]).includes("simulationRuntimeRecoveryPersistence.worker") &&
+          (args[1] as WorkerOptions | undefined)?.name === "runtime-recovery-persistence";
+        if (!isPersistence) return worker;
+        const nativePostMessage = worker.postMessage.bind(worker);
+        worker.postMessage = ((message: Record<string, unknown>, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
+          if (message.type === "initialize" && tracker.armInitialize && !tracker.initializeInjected) {
+            tracker.initializeInjected = true;
+            window.setTimeout(() => {
+              worker.onerror?.(new ErrorEvent("error", { message: "injected post-T1 recovery-head failure" }));
+              worker.terminate();
+            }, 0);
+            return;
+          }
+          if (transferOrOptions === undefined) nativePostMessage(message);
+          else nativePostMessage(message, transferOrOptions);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+  });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 20_000 });
+
+  await page.getByLabel("暂停模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "true");
+  await page.getByLabel("打开设置").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.getByRole("button", { name: "教程、版本与其他", exact: true }).first().click();
+  await operations.getByRole("button", { name: "舒缓", exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }).toBeGreaterThan(0);
+  const beforeSave = await readRecoveryProof(page);
+
+  await page.evaluate(() => {
+    const tracker = (window as typeof window & {
+      __v146PostT1RepairTracker?: { armInitialize: boolean };
+    }).__v146PostT1RepairTracker;
+    if (!tracker) throw new Error("post-T1 repair tracker missing");
+    tracker.armInitialize = true;
+  });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
+  await operations.getByRole("button", { name: "立即保存" }).click();
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __v146PostT1RepairTracker?: { initializeInjected: boolean } })
+      .__v146PostT1RepairTracker?.initializeInjected ?? false,
+  )).toBe(true);
+
+  await expect.poll(async () => {
+    try {
+      const proof = await readRecoveryProof(page);
+      return proof.identity.revision > beforeSave.identity.revision &&
+        proof.sequence === 0 && !proof.pending && proof.finalized;
+    } catch {
+      return false;
+    }
+  }, { timeout: 40_000 }).toBe(true);
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active", { timeout: 40_000 });
+  await expect(shell).toHaveAttribute("data-simulation-paused", "true");
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+
+  await operations.getByLabel("关闭运营中心").click();
+  await page.getByLabel("继续模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false", { timeout: 20_000 });
 });
 
 test("running and paused UI commands drain through WAL before pagehide without promoting an emergency primary", async ({ page }) => {
@@ -302,4 +519,3 @@ test("undo, redo, viewport and galactic activity edits survive immediate pagehid
     .toBe(activity.id);
   await expect(shell).toHaveAttribute("data-runtime-recovery", "active");
 });
-
