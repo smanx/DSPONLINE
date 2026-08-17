@@ -4,6 +4,13 @@ import { serializeEnvelope } from "../../src/game/storage";
 
 const RELEASE_NOTE_ID = "2026-08-17-v1.0.46";
 
+test.beforeEach(async ({ page }) => {
+  const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
+  await page.addLocatorHandler(offlineReport, async () => {
+    await offlineReport.getByRole("button", { name: "确认结算" }).click({ force: true });
+  });
+});
+
 async function seedUiState(page: Page, options: { theme?: "dark" | "light"; fontScale?: number; paused?: boolean } = {}) {
   await page.addInitScript(({ theme, fontScale, paused, releaseNoteId }) => {
     const entityBase = {
@@ -124,7 +131,7 @@ test("exact-value tooltip and classic progress share one visible value", async (
   await expect(power).toBeVisible();
   await expect(tooltip).toBeHidden();
   await expect(async () => {
-    await power.hover();
+    await power.hover({ timeout: 1_000 });
     await expect(tooltip).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
   await expect(page.locator(".quantity-value__tooltip:visible")).toHaveCount(1);
@@ -365,4 +372,3 @@ test("dark light dark switching and the classic mobile tablet matrix stay bounde
     await page.screenshot({ path: `artifacts/qa/v101-${viewport.name}-dark-font-200-${viewport.width}x${viewport.height}.png`, fullPage: true });
   }
 });
-

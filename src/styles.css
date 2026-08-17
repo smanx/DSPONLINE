@@ -5237,17 +5237,19 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 }
 
 /* Keep canvas navigation clickable while the persistent selection bar is open. */
-.factory-canvas:has(.selection-toolbar) .react-flow__controls,
-.factory-canvas:has(.selection-toolbar) .react-flow__minimap {
-  bottom: 64px;
+@media (min-width: 761px) and (min-height: 561px), (min-width: 1101px) {
+  .factory-canvas:has(.selection-toolbar) .selection-toolbar {
+    left: calc(50% - 95px);
+    max-width: calc(100% - 288px);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
 }
 
-.factory-canvas:has(.selection-toolbar) .canvas-minimap-toggle {
-  bottom: 215px;
-}
-
-.factory-canvas:has(.selection-toolbar) .canvas-minimap-toggle--collapsed {
-  bottom: 64px;
+@media (max-width: 760px), (orientation: landscape) and (max-height: 560px) and (max-width: 1100px) {
+  .factory-canvas:has(.selection-toolbar) .react-flow__controls {
+    bottom: 64px;
+  }
 }
 
 .game-shell:has(.selection-toolbar) .interaction-event-feed {
