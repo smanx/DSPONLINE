@@ -1,7 +1,7 @@
 {
   "contractVersion": 1,
-  "generatorVersion": "p2-06-v1",
-  "gameStateVersion": 46,
+  "generatorVersion": "p2-07-v1",
+  "gameStateVersion": 47,
   "envelopeVersion": 2,
   "seed": 1040406,
   "savedAt": 1767225600000,
@@ -10,72 +10,72 @@
       "targetBytes": 1048576,
       "normalResourceMode": "finite",
       "normal": {
-        "sha256": "99a58b5c9eee41cd2cef2173f30d40cbd1b5b761b58d4ca77418296030b5eb67",
-        "stateChecksum": "3eb1c8c9",
-        "entityCount": 963,
-        "beltCount": 1699,
-        "paddingBytes": 24
+        "sha256": "09ce1ccdbccfb3f82ce21b100d760f57b766e4a845a30494e13e1684de9f5788",
+        "stateChecksum": "65c7def8",
+        "entityCount": 962,
+        "beltCount": 1696,
+        "paddingBytes": 43
       },
       "speedrun": {
-        "sha256": "9f56df536aa3d4398c6367b1ab31c700d537bb12379ad9f0d69ea23a0055bb62",
-        "stateChecksum": "fe60be7d",
-        "entityCount": 963,
-        "beltCount": 1697,
-        "paddingBytes": 249
+        "sha256": "05e1dcee90b5a59542e65f1d2a6271f315e9a9a752b44edd12aab4383ec6058d",
+        "stateChecksum": "37155905",
+        "entityCount": 961,
+        "beltCount": 1696,
+        "paddingBytes": 36
       }
     },
     "8m": {
       "targetBytes": 8388608,
       "normalResourceMode": "infinite",
       "normal": {
-        "sha256": "4a30118aa0977dc700f61eebfb98376946dc8a2718a03ec78c3e49aa8ebbd6c1",
-        "stateChecksum": "bb34c921",
-        "entityCount": 7727,
-        "beltCount": 13909,
-        "paddingBytes": 113
+        "sha256": "12f7f40607ec25538bbeab7cc86ba8eb216e76d1209e3a191bf336191e6c1eb3",
+        "stateChecksum": "c29a2c39",
+        "entityCount": 7726,
+        "beltCount": 13906,
+        "paddingBytes": 78
       },
       "speedrun": {
-        "sha256": "dc642d4751927440513417bf398a69230f976865159c7164078dba41483c2f87",
-        "stateChecksum": "03e7506d",
-        "entityCount": 7727,
-        "beltCount": 13907,
-        "paddingBytes": 216
+        "sha256": "a857c1431dd6e21207175a82d7bb5dd6c81b4dba2c1eb5836ac0de8dbef72a12",
+        "stateChecksum": "edd92a91",
+        "entityCount": 7725,
+        "beltCount": 13905,
+        "paddingBytes": 293
       }
     },
     "20m": {
       "targetBytes": 20971520,
       "normalResourceMode": "finite",
       "normal": {
-        "sha256": "158d4d41773c6076f35dd1f9b3196d54532ab31b2a8ae9793d09bafc2149f7ae",
-        "stateChecksum": "b3fe8a52",
-        "entityCount": 19299,
-        "beltCount": 34838,
-        "paddingBytes": 256
+        "sha256": "fe7b9da487a31aaed605e521cb80d5b54054a9edb77dcb57b0d8fe183a8e7517",
+        "stateChecksum": "1700ec77",
+        "entityCount": 19297,
+        "beltCount": 34837,
+        "paddingBytes": 17
       },
       "speedrun": {
-        "sha256": "ebb1d2f13b963a278c930aa8e2e8659f974d5d5fa4e2070aa2ca0aad4d4ca0ad",
-        "stateChecksum": "e89ed319",
-        "entityCount": 19298,
-        "beltCount": 34838,
-        "paddingBytes": 300
+        "sha256": "2283fae26ab3284eed87d7a53f5639f404b4fb830253a8dbb4e046bdfc3ebd7d",
+        "stateChecksum": "d46e7a33",
+        "entityCount": 19297,
+        "beltCount": 34835,
+        "paddingBytes": 231
       }
     },
     "29m": {
       "targetBytes": 30408704,
       "normalResourceMode": "infinite",
       "normal": {
-        "sha256": "26456571f55bd4e7afef15556318839254e3156d83286e331d5d0e38d8e893e7",
-        "stateChecksum": "b59fec7f",
-        "entityCount": 27977,
-        "beltCount": 50538,
-        "paddingBytes": 138
+        "sha256": "f93c6728ea139120c7b0ae2924ed203ff7a664e120eaef68a3f77b03663b6588",
+        "stateChecksum": "1022a48e",
+        "entityCount": 27975,
+        "beltCount": 50537,
+        "paddingBytes": 203
       },
       "speedrun": {
-        "sha256": "59e7f03cc43e45790c2eb87818c15550d61f41a72d624285d1a114f63f36ec6c",
-        "stateChecksum": "ed16ca0e",
-        "entityCount": 27976,
-        "beltCount": 50538,
-        "paddingBytes": 134
+        "sha256": "95712fdcea7aae6b7bda6f8807e8663e32229853b1c02c0b35de29e1afcf8cbe",
+        "stateChecksum": "3db0d799",
+        "entityCount": 27975,
+        "beltCount": 50535,
+        "paddingBytes": 293
       }
     }
   },

@@ -7,11 +7,11 @@ import { once } from "node:events";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const SYNTHETIC_FIXTURE_GENERATOR_VERSION = "p2-06-v1";
+export const SYNTHETIC_FIXTURE_GENERATOR_VERSION = "p2-07-v1";
 export const SYNTHETIC_FIXTURE_SEED = 1_040_406;
 export const SYNTHETIC_FIXTURE_SAVED_AT = 1_767_225_600_000;
 export const SYNTHETIC_FIXTURE_FORMAT_VERSION = 2;
-export const SYNTHETIC_FIXTURE_STATE_VERSION = 46;
+export const SYNTHETIC_FIXTURE_STATE_VERSION = 47;
 export const SYNTHETIC_FIXTURE_MAX_BUFFER_BYTES = 64 * 1024;
 
 const MEBIBYTE = 1024 * 1024;
@@ -704,6 +704,48 @@ function stateHeader(plan) {
   };
 }
 
+function syntheticOrbitalStation(plan) {
+  const taskDay = Math.floor((SYNTHETIC_FIXTURE_SAVED_AT + 8 * 60 * 60 * 1_000) / (24 * 60 * 60 * 1_000));
+  const stage = (stageId, costs, logisticsVessels = 0) => ({
+    stageId,
+    costs: costs.map(([itemId, amount]) => ({ itemId, amount })),
+    fleetCosts: logisticsVessels > 0 ? { logistics_vessel: logisticsVessels } : {},
+    delivered: {},
+    deliveredFleet: {},
+  });
+  return {
+    stateVersion: 1,
+    status: plan.mode === "normal" ? "eligible" : "locked",
+    construction: {
+      costRevision: 1,
+      stageRequirements: [
+        stage("core", [["titanium_alloy", "200000"], ["frame_material", "100000"], ["processor", "200000"], ["universe_matrix", "20000"]]),
+        stage("dock", [["quantum_chip", "100000"], ["particle_container", "200000"], ["space_warper", "20000"]], 200),
+        stage("showcase", [["titanium_glass", "300000"], ["particle_broadband", "200000"], ["plastic", "500000"], ["universe_matrix", "50000"]]),
+      ],
+    },
+    viewport: { x: 0, y: 0, zoom: 0.72 },
+    contractBoard: {
+      rulesVersion: 1,
+      taskDay,
+      lastConfirmedWallClockMs: SYNTHETIC_FIXTURE_SAVED_AT,
+      offers: [],
+      accepted: [],
+      history: [],
+      settledIds: [],
+      featuredContractId: null,
+    },
+    economy: { orbitalMarks: "0", stationReputation: "0", unlockedDecorationIds: [] },
+    layout: { themeId: "orbital_teal", placements: [], featuredAchievementIds: [] },
+    profile: {
+      title: "Synthetic orbital station",
+      motto: "Deterministic fixture state.",
+      featuredMetricKeys: ["total-generation", "peak-throughput", "dyson-power"],
+    },
+    totals: { completedContracts: 0, exportedByItem: {} },
+  };
+}
+
 function stateTail(plan) {
   const { profile, mode, seed, resourceMode, slot } = plan;
   const metrics = emptyMetrics({
@@ -927,6 +969,7 @@ function stateTail(plan) {
       routingCursors: { titanium_ingot: 17, hydrogen: 18, processor: 0 },
       uploadRoutingCursors: { titanium_ingot: 19, hydrogen: 20, processor: 0 },
     },
+    orbitalStation: syntheticOrbitalStation(plan),
     timeWarp: {
       controllerEntityId: "syn_time_warp_controller",
       enabled: false,
@@ -1321,7 +1364,7 @@ export function auditSyntheticFixtureContract(options = {}) {
 }
 
 export function syntheticFixtureFilename({ profile, mode, slot = "main", seed = SYNTHETIC_FIXTURE_SEED }) {
-  return `dsp-idle-synthetic-v46-${profile}-${mode}-slot-${slot}-seed-${seed}.json`;
+  return `dsp-idle-synthetic-v47-${profile}-${mode}-slot-${slot}-seed-${seed}.json`;
 }
 
 function parseList(value, allowed, label) {
@@ -1347,7 +1390,7 @@ function parseArguments(argv) {
 
 function usage() {
   return [
-    "Generate deterministic, anonymous DSPidle v46 save fixtures.",
+    "Generate deterministic, anonymous DSPidle v47 save fixtures.",
     "",
     "  node scripts/generate-synthetic-save-fixtures.mjs --profile=1m,8m,20m,29m --mode=normal,speedrun --output-dir=<dir>",
     "  node scripts/generate-synthetic-save-fixtures.mjs --profile=29m --mode=normal --dry-run --json",

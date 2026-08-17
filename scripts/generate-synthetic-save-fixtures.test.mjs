@@ -75,7 +75,7 @@ async function sha256File(path) {
   return hash.digest("hex");
 }
 
-test("fixture description pins v46/envelope-v2, exact sizes, and the full production coverage contract", () => {
+test("fixture description pins the current GameState/envelope-v2, exact sizes, and the full production coverage contract", () => {
   assert.equal(manifest.contractVersion, 1);
   assert.equal(manifest.generatorVersion, SYNTHETIC_FIXTURE_GENERATOR_VERSION);
   assert.equal(manifest.gameStateVersion, SYNTHETIC_FIXTURE_STATE_VERSION);
@@ -170,7 +170,7 @@ test("largest normal/speedrun plans are non-negative, anonymous, mode-isolated, 
   assert.equal(infinitePlan.slot, 3);
 });
 
-test("representative normal and speedrun payloads pass current client and server v46 contracts without cross-mode markers", async (t) => {
+test("representative normal and speedrun payloads pass current client and server contracts without cross-mode markers", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "dsp-synthetic-contract-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const vite = await createServer({
@@ -202,7 +202,7 @@ test("representative normal and speedrun payloads pass current client and server
     assert.equal(parsed.savedAt, SYNTHETIC_FIXTURE_SAVED_AT);
     assert.equal(parsed.slot, "main");
     assert.equal(parsed.mode, mode);
-    assert.equal(parsed.state.version, 46);
+    assert.equal(parsed.state.version, SYNTHETIC_FIXTURE_STATE_VERSION);
     assert.equal(parsed.state.mode, mode);
     assert.equal(parsed.checksum, generated.stateChecksum);
     assert.equal(integrity.valid, true);
@@ -210,7 +210,7 @@ test("representative normal and speedrun payloads pass current client and server
     assert.equal(serverInspection.validPayload, true);
     assert.equal(serverInspection.integrity.valid, true);
     assert.equal(serverInspection.payloadMode, mode);
-    assert.equal(serverInspection.summary.stateVersion, 46);
+    assert.equal(serverInspection.summary.stateVersion, SYNTHETIC_FIXTURE_STATE_VERSION);
     assert.equal(serverInspection.summary.entityCount, generated.entityCount);
     assert.equal(serverInspection.payloadSize, 1024 * 1024);
     assert.equal(clientInspection.valid, true);
@@ -218,9 +218,13 @@ test("representative normal and speedrun payloads pass current client and server
     assert.equal(clientInspection.integrity, "valid");
     assert.equal(clientInspection.mode, mode);
     assert.equal(clientInspection.slot, "main");
-    assert.equal(clientInspection.state.version, 46);
+    assert.equal(clientInspection.state.version, SYNTHETIC_FIXTURE_STATE_VERSION);
     assert.equal(clientInspection.state.mode, mode);
     assert.deepEqual(findForbiddenIdentityPaths(parsed), []);
+    assert.equal(parsed.state.orbitalStation.stateVersion, 1);
+    assert.equal(parsed.state.orbitalStation.status, mode === "normal" ? "eligible" : "locked");
+    assert.equal(clientInspection.state.orbitalStation.stateVersion, 1);
+    assert.equal(clientInspection.state.orbitalStation.status, mode === "normal" ? "eligible" : "locked");
 
     if (mode === "normal") {
       assert.equal(Object.hasOwn(parsed.state, "speedrun"), false);

@@ -23,6 +23,7 @@
 | Chromium | 407 passed / 14 explicit fixture skips / 0 failed |
 | Web 生产预览 | PWA 1/1；画布性能 20/20 |
 | Firefox / WebKit | 2/2 |
+| 匿名大档发布夹具 | 12/12；当前客户端与服务端 v47/空间站合同均通过 |
 | 依赖与 Git | root/server `npm audit` 均为 0 漏洞；`git fsck` 无对象损坏 |
 | 干净 Web 构建 | 1,959 modules；startup/menu gzip 预算通过 |
 
@@ -32,6 +33,7 @@ Chromium 的 14 条跳过都需要未提供的真实大档或外部生产条件�
 
 - P0 durable 恢复阻断：已修复并由 `v144-runtime-wal-integration.spec.ts` 5/5 覆盖，包括二次 persistence 故障、T1 已验证但 head rollover 失败和暂停后继续模拟。
 - P1 Web 制品平台错配：发现隔离目录里旧 Android `dist` 会让 PWA 注册代码被编译剔除。已新增 `npm run build:web`，release gate 改为强制该命令并在构建后运行 production-preview PWA 生命周期门禁。
+- P1 发布夹具漂移：1.0.45 将 GameState 升为 v47 后，匿名 1/8/20/29 MiB 夹具仍生成 v46，客户端会正常迁移并标记 `repaired`，无法证明当前 v47 合同。已更新为 `p2-07-v1`、加入最小合法空间站快照并重算固定摘要；12/12 生成、客户端和服务端合同测试通过。
 - P2 开发服务器日志噪声：全量开发 E2E 会记录预期的本地 API `ECONNREFUSED`，且在尺寸变化密集场景观察到非阻断的 `ResizeObserver loop` 浏览器诊断。所有断言通过；后续应在 production preview 独立采样后再决定是否改动 React Flow 的尺寸更新链。
 
 ## 残余风险与优化方向

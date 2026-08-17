@@ -1,4 +1,4 @@
-# Deterministic synthetic v46 save fixtures
+# Deterministic synthetic v47 save fixtures
 
 This directory intentionally stores only the small fixture contract and fixed
 digests. The 1, 8, 20, and 29 MiB JSON files are generated on demand so the
@@ -6,8 +6,9 @@ repository does not permanently carry roughly 116 MiB of duplicate test data.
 
 The generator uses public game IDs and a fixed synthetic seed. It never reads a
 player save, browser profile, cloud database, account, environment credential,
-or production path. Every output is ASCII JSON with GameState v46, save
-envelope v2, an exact state checksum, and a whole-file SHA-256.
+or production path. Every output is ASCII JSON with GameState v47, save
+envelope v2, a valid orbital-station snapshot, an exact state checksum, and a
+whole-file SHA-256.
 
 The payload body is production-shaped rather than one large padding string:
 

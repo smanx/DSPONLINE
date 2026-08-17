@@ -90,6 +90,7 @@ Tests with exact counts:
 - `npm run test:ops`: 56 passed / 6 Linux-only skipped
 - `npm run release:test-switch`: 29/29 passed
 - `npm run test:native`: 24/24 passed
+- `node --test scripts/generate-synthetic-save-fixtures.test.mjs scripts/release-gate.test.mjs`: 12/12 passed; v47/space-station fixture contracts
 - `npm run licenses:check`: 125 runtime packages consistent
 - `npm audit --omit=dev` and `npm --prefix server audit --omit=dev`: 0 vulnerabilities
 - `npm run build:web`: 1,959 modules; startup/menu gzip budgets passed
