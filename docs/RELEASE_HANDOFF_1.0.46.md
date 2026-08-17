@@ -27,6 +27,7 @@ P0。玩家可能停留在暂停状态，模拟 Worker 被错误标记不可用�
 4. 页面保持暂停，点击“继续模拟”后 `data-simulation-paused=false` 且 Worker active；pending intent 已清理。
 5. 对正在运行的模拟加速自动保存，并在 T1 后注入一次 recovery-head initialize 故障；页面重建 Worker 后保持 `data-simulation-paused=false`。
 6. 验证修复成功后 `.save-emergency-warning` 不存在，避免纯挂机“保存与恢复”继续显示已处理的 transient 保存失败。
+7. 连续三次加速自动保存时，recovery head 使用生成该检查点的 revision；保存窗口内若有较新的回执，重新取得权威检查点并验证新的 T1，模拟始终保持 `data-simulation-paused=false`。
 
 已覆盖：
 
@@ -41,6 +42,7 @@ P0。玩家可能停留在暂停状态，模拟 Worker 被错误标记不可用�
 - 自动保存前正在运行时，恢复 head 的验证修复完成后自动继续；手动保存的暂停意图保持不变。
 - 已验证的替换 T1/recovery head 会清除旧 transient 保存失败提示，纯挂机恢复面板不再把已修复检查点显示为待处理。
 - 默认保护模式仍拒绝保存期间编辑，但 revision/head 竞态不会显示阻断错误或把会话锁死。
+- recovery head 的 revision 必须与其 T1 payload 的精确 Worker 检查点相同；后到回执必须生成新的 T1，不能仅提升 head revision。
 - 实验性开关开启时，已接受操作保留在 durable 队列；保存失败时当前进度仍可继续或导出。
 - 纯挂机终态仍要求主存档验证、Worker 接管、恢复日志提交全部完成后才清理日志。
 

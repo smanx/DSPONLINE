@@ -26,7 +26,7 @@ test("manual, autosave, and return publish ordered non-blocking persistence phas
 
     const nativeSetInterval = window.setInterval.bind(window);
     window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      const delay = timeout === 30_000 ? 3_500 : timeout;
+      const delay = timeout === 30_000 ? 1_500 : timeout;
       return nativeSetInterval(handler, delay, ...args);
     }) as typeof window.setInterval;
 
@@ -81,8 +81,8 @@ test("manual, autosave, and return publish ordered non-blocking persistence phas
     const events = (window as typeof window & {
       __DSP_RUNTIME_TRANSITIONS__?: { events: Array<{ phase: string; detail?: { kind?: string; phase?: string } }> };
     }).__DSP_RUNTIME_TRANSITIONS__?.events ?? [];
-    return events.some((event) => event.phase === "persistence-phase" && event.detail?.kind === "autosave" && event.detail.phase === "complete");
-  }), { timeout: 10_000 }).toBe(true);
+    return events.filter((event) => event.phase === "persistence-phase" && event.detail?.kind === "autosave" && event.detail.phase === "complete").length;
+  }), { timeout: 20_000 }).toBeGreaterThanOrEqual(3);
   await expect(shell).toHaveAttribute("data-simulation-paused", "false");
 
   await page.getByTitle("保存并返回主菜单").click();

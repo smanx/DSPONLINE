@@ -2756,36 +2756,35 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       durableRecoveryBaseStateRef.current = saveState;
       const mode = saveState.mode === "speedrun" ? "speedrun" : "normal";
       let identity = getPrimaryLocalSaveRecoveryIdentity(mode);
+      // The recovery head must describe the exact state encoded in T1. A
+      // Worker callback can settle between the first checkpoint and T1
+      // readback, so take one fresh authoritative checkpoint instead of
+      // assigning its newer revision to the older T1 payload. The latter
+      // creates a head/state mismatch that eventually pauses on the next WAL
+      // operation.
+      const checkpointAdvancedDuringSave = () =>
+        simulationStateRevisionRef.current !== checkpointRevision ||
+        (!requestedState && allowEditsDuringSaveRef.current && gameRef.current !== saveState);
+      if (checkpointAdvancedDuringSave()) {
+        const finalBarrierState = await requestAuthoritativeSimulationCheckpoint();
+        const finalCheckpointRevision = simulationStateRevisionRef.current;
+        if (finalBarrierState !== saveState || finalCheckpointRevision !== checkpointRevision) {
+          saveState = finalBarrierState;
+          checkpointRevision = finalCheckpointRevision;
+          const finalResult = await saveVerifiedPrimaryCheckpoint(saveState);
+          if (!finalResult.success) throw new Error(finalResult.message);
+          result = finalResult;
+          primaryWriteVerified = true;
+          durableRecoveryBaseStateRef.current = saveState;
+          identity = getPrimaryLocalSaveRecoveryIdentity(mode);
+        }
+      }
       const status = getLocalSaveWriterStatus();
       const head = durableRecoveryHeadRef.current;
       if (!identity || status.role !== "primary" || status.fencingToken < 1 || !head) {
         throw new Error("T1 写入后未取得 durable identity/fence，已阻止继续模拟");
       }
       if (head.baseIdentity.mode !== mode) throw new Error("durable mode 与主存档不匹配");
-      if (simulationStateRevisionRef.current !== head.stateRevision ||
-        (!requestedState && allowEditsDuringSaveRef.current && gameRef.current !== saveState)) {
-        // A checkpoint response can advance the Worker revision one step after
-        // the original recovery head was read. In the default protection mode
-        // there are no accepted edits to preserve, so adopting the latest
-        // verified revision is safe and avoids the old false-positive block.
-        // With experimental editing enabled, drain and persist the accepted
-        // edit before replacing T0; otherwise a head rollover could discard a
-        // command that was already durable in the pending-intent record.
-        if (!requestedState && allowEditsDuringSaveRef.current && gameRef.current !== saveState) {
-          const finalBarrierState = await requestAuthoritativeSimulationCheckpoint();
-          if (finalBarrierState !== saveState) {
-            saveState = finalBarrierState;
-            checkpointRevision = simulationStateRevisionRef.current;
-            const finalResult = await saveVerifiedPrimaryCheckpoint(saveState);
-            if (!finalResult.success) throw new Error(finalResult.message);
-            result = finalResult;
-            primaryWriteVerified = true;
-            identity = getPrimaryLocalSaveRecoveryIdentity(mode);
-            if (!identity) throw new Error("保存期间编辑已完成但未取得新的 durable identity");
-          }
-        }
-        checkpointRevision = Math.max(checkpointRevision, simulationStateRevisionRef.current);
-      }
       const fence = { ownerId: status.writerId, fencingToken: status.fencingToken };
       // The persistence Worker performs a fenced stale-base replacement as a
       // single stage/publish/readback operation. Never clear the old head
