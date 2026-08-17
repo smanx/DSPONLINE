@@ -82,7 +82,7 @@ Web/PWA、Chromium/Firefox/WebKit、Windows unpacked/desktop、Android WebView�
 
 Commit SHA: the clean source SHA recorded by the immutable release manifest is authoritative. Do not infer it from a working-tree `dist` directory.
 
-Changed files: `src/App.tsx`, `tests/e2e/v144-runtime-persistence-progress.spec.ts`, `tests/e2e/v144-runtime-wal-integration.spec.ts`, `docs/PROJECT_STATUS.md`, `docs/DEVELOPMENT_REPORT_1.0.46.md`, `docs/RELEASE_HANDOFF_1.0.46.md`.
+Changed files: `src/App.tsx`, `src/styles.css`, `tests/e2e/v144-runtime-persistence-progress.spec.ts`, `tests/e2e/v144-runtime-wal-integration.spec.ts`, `docs/PROJECT_STATUS.md`, `docs/TESTING_RELEASE.md`, `docs/DEVELOPMENT_REPORT_1.0.46.md`, `docs/RELEASE_HANDOFF_1.0.46.md`, `docs/releases/1.0.46-candidate.md`.
 
 Artifact paths: create and retain them from an isolated clean checkout: Web `dist/`, expanded API directory from `node deploy/prepare-api-release.mjs --output <empty-directory>`, plus manifest/SBOM/provenance. Signed native artifacts are intentionally absent.
 

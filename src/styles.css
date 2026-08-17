@@ -5236,6 +5236,24 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   transform: translateX(-50%);
 }
 
+/* Keep canvas navigation clickable while the persistent selection bar is open. */
+.factory-canvas:has(.selection-toolbar) .react-flow__controls,
+.factory-canvas:has(.selection-toolbar) .react-flow__minimap {
+  bottom: 64px;
+}
+
+.factory-canvas:has(.selection-toolbar) .canvas-minimap-toggle {
+  bottom: 215px;
+}
+
+.factory-canvas:has(.selection-toolbar) .canvas-minimap-toggle--collapsed {
+  bottom: 64px;
+}
+
+.game-shell:has(.selection-toolbar) .interaction-event-feed {
+  bottom: 168px;
+}
+
 .selection-toolbar > span {
   display: flex;
   height: 100%;

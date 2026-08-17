@@ -34,6 +34,7 @@ Chromium 的 14 条跳过都需要未提供的真实大档或外部生产条件�
 - P0 durable 恢复阻断：已修复并由 `v144-runtime-wal-integration.spec.ts` 6/6 覆盖，包括二次 persistence 故障、T1 已验证但 head rollover 失败、自动保存前运行态恢复、已修复保存失败横幅清除，以及暂停后继续模拟。`v144-runtime-persistence-progress.spec.ts` 现在连续完成三次加速自动保存并断言模拟始终运行，覆盖 revision 必须与 T1 payload 绑定的回归。
 - P1 Web 制品平台错配：发现隔离目录里旧 Android `dist` 会让 PWA 注册代码被编译剔除。已新增 `npm run build:web`，release gate 改为强制该命令并在构建后运行 production-preview PWA 生命周期门禁。
 - P1 发布夹具漂移：1.0.45 将 GameState 升为 v47 后，匿名 1/8/20/29 MiB 夹具仍生成 v46，客户端会正常迁移并标记 `repaired`，无法证明当前 v47 合同。已更新为 `p2-07-v1`、加入最小合法空间站快照并重算固定摘要；12/12 生成、客户端和服务端合同测试通过。
+- P2 画布控件遮挡：最终 Chromium 复核发现节点拖动后，选区工具栏会在 `1280x820` 下覆盖 React Flow 的“适应视图”控件并拦截点击，同时压住小地图底边和运行记录。现在选区打开时会为缩放控件、小地图、折叠按钮和运行记录预留互不重叠的底部空间；原失败旅程连续 3/3，手机竖屏/横屏选区旅程 2/2 通过。
 - P2 开发服务器日志噪声：全量开发 E2E 会记录预期的本地 API `ECONNREFUSED`，且在尺寸变化密集场景观察到非阻断的 `ResizeObserver loop` 浏览器诊断。所有断言通过；后续应在 production preview 独立采样后再决定是否改动 React Flow 的尺寸更新链。
 
 ## 残余风险与优化方向
