@@ -16,6 +16,19 @@ export const CANVAS_STACK_PROXY_WIDTH = 96;
 export const CANVAS_STACK_PROXY_HEIGHT = 32;
 export const CANVAS_STACK_MARKER_WIDTH = 88;
 export const CANVAS_STACK_MARKER_HEIGHT = 44;
+export const CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE = 480;
+export const CANVAS_FULL_ALL_COMPACT_SAFETY_VISIBLE = 1_000;
+
+export function resolveCanvasFullAllSafetyStage(
+  detailPreference: CanvasDetailPreference,
+  overlapPreference: CanvasOverlapPreference,
+  visibleNodeCount: number,
+): CanvasDetailStage | null {
+  if (detailPreference !== "full" || overlapPreference !== "all") return null;
+  if (visibleNodeCount > CANVAS_FULL_ALL_COMPACT_SAFETY_VISIBLE) return "compact";
+  if (visibleNodeCount > CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE) return "medium";
+  return null;
+}
 
 export interface CanvasDensityNode {
   id: string;

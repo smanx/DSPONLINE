@@ -361,9 +361,9 @@ test("extreme LOD compact labels and side panels preserve selection", async ({ p
   const compactSmelter = page.locator('.react-flow__node[data-id="visual-smelter"] .factory-node-compact');
   await expect(compactSmelter).toBeVisible();
   await expect(compactSmelter).toHaveAttribute("data-node-lod", "compact");
-  await expect(compactSmelter).toHaveAttribute("title", "电弧熔炉 ×2");
-  await expect(compactSmelter).toHaveAttribute("aria-label", /电弧熔炉/);
-  await expect(compactSmelter.locator("strong")).toHaveText("熔炉");
+  await expect(compactSmelter).toHaveAttribute("title", "配方：铁块；产物：铁块；数量 2");
+  await expect(compactSmelter).toHaveAttribute("aria-label", /配方：铁块；产物：铁块/);
+  await expect(compactSmelter.locator("strong")).toHaveText("铁块");
   await page.screenshot({ path: "artifacts/qa/ui-2026-08-04/E1-endgame-node-title-after.png", fullPage: true });
 
   await page.locator('.react-flow__node[data-id="visual-smelter"]').evaluate((element) => {
@@ -382,4 +382,3 @@ test("extreme LOD compact labels and side panels preserve selection", async ({ p
   await expect(page.locator(".inspector-panel")).toContainText("熔炉");
   await expect(page.locator('.react-flow__node[data-id="visual-smelter"] .factory-node')).toHaveClass(/factory-node--selected/);
 });
-

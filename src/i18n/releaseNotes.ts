@@ -60,8 +60,8 @@ const release1046Copy = {
   date: { "zh-CN": "2026年8月17日", en: "August 17, 2026" },
   title: { "zh-CN": "存档稳定性与手机连续拉线热修", en: "Save Stability and Mobile Belt Batch Hotfix" },
   summary: {
-    "zh-CN": "1.0.46 将普通游戏恢复为 1.0.43-compatible 的验证主存档协调器，修复自动保存后模拟被暂停、暂停后 Worker 无法恢复，以及保存失败污染纯挂机状态的问题；durable WAL 仅保留为显式开发验证路径。手机连续拉线改为不遮挡地图的可折叠底栏，重复或无效点击不会破坏已有候选，6～100 条候选可完整查看和原子提交。画布卡片、重叠处理和交互展开现可分别设置，重叠位置保留紧凑数量入口。GameState v47、存档 envelope v2、cloud schema v8 与 SQLite layout v3 不变。",
-    en: "Version 1.0.46 restores the 1.0.43-compatible verified-primary coordinator for normal play, fixing autosaves that paused simulation, Workers that could not resume after a pause, and save failures that polluted pure-idle status. The durable WAL remains an explicit development-only validation path. Mobile continuous connections now use a collapsible non-blocking bottom bar; duplicate or invalid taps preserve valid candidates, and 6-100 candidates remain inspectable and atomically committable. Canvas card detail, overlap handling, and interaction expansion are now separate settings, with a compact count marker preserving every overlap location. GameState v47, save envelope v2, cloud schema v8, and SQLite layout v3 remain unchanged.",
+    "zh-CN": "1.0.46 将普通游戏恢复为 1.0.43-compatible 的验证主存档协调器，修复自动保存后模拟被暂停、暂停后 Worker 无法恢复，以及保存失败污染纯挂机状态的问题；durable WAL 仅保留为显式开发验证路径。手机连续拉线改为不遮挡地图的可折叠底栏，重复或无效点击不会破坏已有候选，6～100 条候选可完整查看和原子提交。画布卡片、重叠处理和交互展开现可分别设置，重叠位置保留紧凑数量入口；交互卡片不会再变淡、消失或阻断画布拖动，极密集视口会自动保护流畅度。GameState v47、存档 envelope v2、cloud schema v8 与 SQLite layout v3 不变。",
+    en: "Version 1.0.46 restores the 1.0.43-compatible verified-primary coordinator for normal play, fixing autosaves that paused simulation, Workers that could not resume after a pause, and save failures that polluted pure-idle status. The durable WAL remains an explicit development-only validation path. Mobile continuous connections now use a collapsible non-blocking bottom bar; duplicate or invalid taps preserve valid candidates, and 6-100 candidates remain inspectable and atomically committable. Canvas card detail, overlap handling, and interaction expansion are now separate settings, with a compact count marker preserving every overlap location. Interactive cards no longer fade, vanish, or block canvas panning, and extremely dense views use a safety detail level to remain responsive. GameState v47, save envelope v2, cloud schema v8, and SQLite layout v3 remain unchanged.",
   },
   recoveryTitle: { "zh-CN": "自动保存保持模拟运行", en: "Autosaves keep simulation running" },
   recoveryDescription: {
@@ -85,8 +85,8 @@ const release1046Copy = {
   },
   canvasTitle: { "zh-CN": "画布显示可独立控制", en: "Canvas presentation controls are independent" },
   canvasDescription: {
-    "zh-CN": "基础卡片、重叠建筑和选择/悬停展开不再混在一个自动档中。重叠组默认留下紧凑的层叠图标与数量；选中或悬停展开的卡片会稳定置顶，不再被附近建筑盖住或瞬间消失。一行卡不会再被裁成半截，空白视角可用适应全部或小地图恢复。",
-    en: "Base card detail, overlapping buildings, and selection or hover expansion are no longer mixed into one automatic mode. Overlap groups keep a compact layers-and-count marker by default. Selected or hovered expanded cards stay above nearby buildings instead of being covered or vanishing. One-line cards are no longer clipped, and a blank saved view can recover through Fit View or the minimap.",
+    "zh-CN": "基础卡片、重叠建筑和选择/悬停展开不再混在一个自动档中。重叠组默认留下紧凑的层叠图标与数量；选中或悬停展开的卡片会保持清晰、稳定置顶，不再被网络聚焦误变淡、被附近建筑盖住或瞬间消失，淡化的背景卡也不会卡住画布拖动。一行卡显示配方与产物且不会再被裁成半截；空白视角可用适应全部或小地图恢复，完整卡片与全部重叠在极密集视口下会统一降级以防卡死。",
+    en: "Base card detail, overlapping buildings, and selection or hover expansion are no longer mixed into one automatic mode. Overlap groups keep a compact layers-and-count marker by default. Selected or hovered cards stay clear and above nearby buildings instead of being dimmed by network focus, covered, or made to vanish; dimmed context cards no longer trap canvas panning. One-line cards identify their recipe and products without clipping. Blank saved views can recover through Fit View or the minimap, while Full plus All Overlaps uses a uniform safety level in extremely dense views to prevent freezes.",
   },
   idleTitle: { "zh-CN": "纯挂机日志与宏观进度保留", en: "Pure-idle logs and macro progress are preserved" },
   idleDescription: {

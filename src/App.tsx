@@ -415,6 +415,7 @@ import {
   canvasNodeIntersectsWorldRectangle,
   countVisibleCanvasNodes,
   groupCanvasNodeStacks,
+  resolveCanvasFullAllSafetyStage,
   resolveCanvasDetailStage,
   type CanvasDetailPreference,
   type CanvasDetailStage,
@@ -513,6 +514,18 @@ function getFactoryFlowNodePresentationSize(node: FactoryFlowNode): { width: num
     width: node.measured?.width ?? CANVAS_FULL_NODE_FALLBACK_WIDTH,
     height: node.measured?.height ?? CANVAS_FULL_NODE_FALLBACK_HEIGHT,
   };
+}
+
+function getFactoryFlowNodeInitialSize(
+  lod: CanvasLod,
+  stackHidden: boolean,
+  stackMarker: boolean,
+): { initialWidth: number; initialHeight: number } {
+  if (stackHidden) return { initialWidth: CANVAS_STACK_PROXY_WIDTH, initialHeight: CANVAS_STACK_PROXY_HEIGHT };
+  if (stackMarker) return { initialWidth: CANVAS_STACK_MARKER_WIDTH, initialHeight: CANVAS_STACK_MARKER_HEIGHT };
+  if (lod === "compact") return { initialWidth: CANVAS_STACK_PROXY_WIDTH, initialHeight: CANVAS_STACK_PROXY_HEIGHT };
+  if (lod === "medium") return { initialWidth: CANVAS_MEDIUM_NODE_WIDTH, initialHeight: CANVAS_MEDIUM_NODE_HEIGHT };
+  return { initialWidth: CANVAS_FULL_NODE_FALLBACK_WIDTH, initialHeight: CANVAS_FULL_NODE_FALLBACK_HEIGHT };
 }
 
 /** Keep just enough off-screen topology in React Flow for its Fit View command. */
@@ -8234,18 +8247,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   useEffect(() => {
     setCanvasDetailStage((current) => resolveCanvasDetailStage(canvasDetailPreference, canvasVisibleNodeCount, current));
   }, [canvasDetailPreference, canvasVisibleNodeCount]);
-  const canvasDetailProgressSnapshot = useMemo(
-    () => canvasDetailProgress(canvasDetailStage, canvasVisibleNodeCount),
-    [canvasDetailStage, canvasVisibleNodeCount],
+  // “Full + all cards” is the only combination that can intentionally mount
+  // thousands of heavy, mutually covering cards. Preserve the player's exact
+  // choices for ordinary views, but apply one uniform emergency stage at
+  // extreme viewport density so the canvas remains recoverable. Interaction
+  // targets still expand through fullDetailCanvasNodeIds below.
+  const canvasFullAllSafetyStage = resolveCanvasFullAllSafetyStage(
+    canvasDetailPreference,
+    canvasOverlapPreference,
+    canvasVisibleNodeCount,
   );
-  const stackVisibleCanvasNodeIds = useMemo(() => {
-    const ids = new Set<string>(selectedEntityIds);
-    if (miningEntityId) ids.add(miningEntityId);
-    if (connectionDraft?.nodeId) ids.add(connectionDraft.nodeId);
-    if (connectionCandidateNodeId) ids.add(connectionCandidateNodeId);
-    for (const id of draggedEntityIds) ids.add(id);
-    return ids;
-  }, [connectionCandidateNodeId, connectionDraft?.nodeId, draggedEntityIds, miningEntityId, selectedEntityIds]);
+  const canvasPresentationDetailStage = canvasFullAllSafetyStage ?? canvasDetailStage;
+  const canvasDetailProgressSnapshot = useMemo(
+    () => canvasDetailProgress(canvasPresentationDetailStage, canvasVisibleNodeCount),
+    [canvasPresentationDetailStage, canvasVisibleNodeCount],
+  );
   const fullDetailCanvasNodeIds = useMemo(() => {
     const ids = new Set<string>();
     if (canvasInteractionDetailPreference !== "base" && selectedEntityIds.length === 1) ids.add(selectedEntityIds[0]);
@@ -8257,6 +8273,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (draggedEntityIds[0]) ids.add(draggedEntityIds[0]);
     return ids;
   }, [canvasInteractionDetailPreference, connectionCandidateNodeId, connectionDraft?.nodeId, draggedEntityIds, focusedNodeId, hoveredNodeId, miningEntityId, selectedEntityIds]);
+  const stackVisibleCanvasNodeIds = useMemo(() => {
+    // Selection and pointer hover must remove a node from overlap hiding.
+    // Keyboard focus is intentionally not included: replacing a focused
+    // count-marker button with a full card would destroy the focused DOM node
+    // before Enter/Space can activate it.
+    const ids = new Set<string>(selectedEntityIds);
+    if (canvasInteractionDetailPreference === "hover" && hoveredNodeId) ids.add(hoveredNodeId);
+    if (miningEntityId) ids.add(miningEntityId);
+    if (connectionDraft?.nodeId) ids.add(connectionDraft.nodeId);
+    if (connectionCandidateNodeId) ids.add(connectionCandidateNodeId);
+    for (const id of draggedEntityIds) ids.add(id);
+    return ids;
+  }, [canvasInteractionDetailPreference, connectionCandidateNodeId, connectionDraft?.nodeId, draggedEntityIds, hoveredNodeId, miningEntityId, selectedEntityIds]);
   const activeAlertEntityIds = useMemo(() => {
     const ids = new Set<string>();
     for (const [entityId, planetId] of visibleFactoryAlertProjection.rows) {
@@ -8315,7 +8344,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const canvasConnectedEntityIds = useMemo(() => new Set(reactFlowBelts.flatMap((belt) => [belt.source, belt.target])),
     [reactFlowBelts]);
   const canvasFlowStaticPresentationCandidate = !connectionDraft && draggedEntityIds.length === 0 && (
-    canvasDetailStage === "compact" || (
+    canvasPresentationDetailStage === "compact" || (
       canvasDetailPreference !== "full" && canvasVisibleNodeCount === 0 && fullDetailCanvasNodeIds.size === 0 &&
       !(nextMobileShell && game.settings.fontScale >= 2)
     )
@@ -8414,8 +8443,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             height: previous?.measured?.height,
           }, activeConnectionViewportBounds.enter);
           const preserveMobileConstructionCenterDetail = nextMobileShell && game.settings.fontScale >= 2 && entity.buildingId === "construction_center";
-          const forceDynamicPresentation = interactionProtected || preserveMobileConstructionCenterDetail ||
-            canvasDetailPreference === "full" || Boolean(connectionDraft && connectExpandAll);
           const topologyStable = Boolean(previous && previous.type === entity.kind &&
             previous.position.x === entity.position.x && previous.position.y === entity.position.y &&
             previous.data.entity.buildingId === entity.buildingId && previous.data.entity.resourceId === entity.resourceId);
@@ -8434,6 +8461,34 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           stackMemberIdReferenceCount += stackPresentation.memberIds.length;
           const stackHidden = stackPresentation.hidden;
           const stackMarker = stackPresentation.marker;
+          const forceDynamicPresentation = interactionProtected || preserveMobileConstructionCenterDetail ||
+            (canvasDetailPreference === "full" && canvasPresentationDetailStage !== "compact" && presentationVisible && !stackHidden && !stackMarker) ||
+            Boolean(connectionDraft && connectExpandAll);
+          const lineTraceActive = Boolean(lineFindTrace && lineFindTrace.planetId === canvasGame.activePlanetId);
+          const preserveInteractionVisibility = selected || interactionProtected;
+          const focusClassName = lineTraceActive
+            ? entity.id === lineFindTrace?.entityId
+              ? "factory-flow-node--line-find-center"
+              : lineFindUpstreamEntityIds.has(entity.id)
+                ? "factory-flow-node--line-find-upstream"
+                : lineFindDownstreamEntityIds.has(entity.id)
+                  ? "factory-flow-node--line-find-downstream"
+                  : preserveInteractionVisibility ? undefined : "factory-flow-node--line-find-dim"
+            : highlightedTaskId
+              ? taskHighlight.entityIds.has(entity.id)
+                ? "factory-flow-node--task-focus"
+                : preserveInteractionVisibility ? undefined : "factory-flow-node--task-dim"
+              : productionLineFocus?.planetId === canvasGame.activePlanetId
+                ? locatedProductionEntityIds.has(entity.id)
+                  ? "factory-flow-node--network-focus"
+                  : preserveInteractionVisibility ? undefined : "factory-flow-node--network-dim"
+                : focusedBeltNetwork
+                  ? focusedNetworkEntityIds.has(entity.id)
+                    ? "factory-flow-node--network-focus"
+                    : preserveInteractionVisibility ? undefined : "factory-flow-node--network-dim"
+                  : undefined;
+          const focusDimmed = focusClassName === "factory-flow-node--line-find-dim" ||
+            focusClassName === "factory-flow-node--task-dim" || focusClassName === "factory-flow-node--network-dim";
           // A compact/medium card grows well beyond its old footprint when it
           // is selected, focused or hovered. Keep that interaction target
           // above later siblings for the entire transition; otherwise the
@@ -8446,7 +8501,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               : stackPresentation.halo ? CANVAS_STACK_HALO_Z_INDEX : 0;
           const stackGeometryHandlesRequired = canvasConnectedEntityIds.has(entity.id);
           const nodeHidden = stackHidden && !stackGeometryHandlesRequired;
-          const nodeDraggable = draggable && !stackHidden && !stackMarker;
+          // Context-only nodes remain clickable, but must not create hundreds
+          // of near-transparent `nopan` islands while a focused network is
+          // active. Clicking one exits focus and restores normal node drag.
+          const nodeDraggable = draggable && !stackHidden && !stackMarker && !focusDimmed;
           const nodeSelectable = !stackHidden && !stackMarker;
           const nodeFocusable = !stackHidden && !stackMarker;
           const nodeConnectable = !stackHidden && !stackMarker;
@@ -8455,7 +8513,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             ? { "aria-hidden": true, "data-stack-hidden-wrapper": "true" }
             : undefined;
           const staticAlertActive = stackPresentation.halo && stackPresentation.alertCount > 0;
-          const staticPresentation = !forceDynamicPresentation && (!presentationVisible || canvasDetailStage === "compact");
+          const staticPresentation = !forceDynamicPresentation && (!presentationVisible || canvasPresentationDetailStage === "compact");
+          const staticClassName = [
+            "factory-flow-node--lod-compact",
+            "factory-flow-node--density-compact",
+            "factory-flow-node--effects-static",
+            stackPresentation.hidden ? "factory-flow-node--stack-hidden" : undefined,
+            stackPresentation.marker ? "factory-flow-node--stack-marker" : undefined,
+            stackPresentation.halo ? "factory-flow-node--stack-halo" : undefined,
+            focusClassName,
+          ].filter(Boolean).join(" ");
           const staticPresentationStable = Boolean(previous && topologyStable && previous.data.lod === "compact" &&
             previous.data.alertActive === staticAlertActive &&
             previous.draggable === nodeDraggable && previous.selectable === nodeSelectable &&
@@ -8466,7 +8533,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             previous.data.stackAlertCount === stackPresentation.alertCount &&
             previous.data.stackCriticalAlertCount === stackPresentation.criticalAlertCount &&
             previous.data.stackGeometryHandlesRequired === stackGeometryHandlesRequired && previous.hidden === nodeHidden &&
-            previous.zIndex === nodeZIndex &&
+            previous.zIndex === nodeZIndex && previous.className === staticClassName &&
             previous.data.stackMembershipToken === stackPresentation.membershipToken);
           if (staticPresentation && staticPresentationStable && previous) {
             stableNodeCount += 1;
@@ -8480,16 +8547,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             const blackHolePortConnections = canvasTopology.targetPortItemsByEntity.get(entity.id) ?? previous?.data.blackHolePortConnections ?? {};
             const acceptedInputItemIds = topologyStable && previous ? previous.data.acceptedInputItemIds : getAcceptedInputs(entity, canvasGame);
             const producedOutputItemIds = topologyStable && previous ? previous.data.producedOutputItemIds : getProducedOutputs(entity);
-            const className = [
-              "factory-flow-node--lod-compact",
-              "factory-flow-node--density-compact",
-              "factory-flow-node--effects-static",
-              stackPresentation.hidden ? "factory-flow-node--stack-hidden" : undefined,
-              stackPresentation.marker ? "factory-flow-node--stack-marker" : undefined,
-              stackPresentation.halo ? "factory-flow-node--stack-halo" : undefined,
-            ].filter(Boolean).join(" ");
             const stablePresentationVisible = previous?.data.lod === "compact" ? previous.data.presentationVisible : presentationVisible;
-            const presentationSignature = ["static", entity.id, nodeDraggable, staticAlertActive,
+            const presentationSignature = ["static", entity.id, nodeDraggable, staticAlertActive, focusClassName,
               stackPresentation.groupId, stackPresentation.count, stackPresentation.hidden, stackPresentation.marker, stackPresentation.halo,
               stackPresentation.alertCount, stackPresentation.criticalAlertCount,
               stackGeometryHandlesRequired,
@@ -8501,14 +8560,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               ...(stackHidden ? {
                 width: CANVAS_STACK_PROXY_WIDTH,
                 height: CANVAS_STACK_PROXY_HEIGHT,
-                initialWidth: CANVAS_STACK_PROXY_WIDTH,
-                initialHeight: CANVAS_STACK_PROXY_HEIGHT,
               } : stackMarker ? {
                 width: CANVAS_STACK_MARKER_WIDTH,
                 height: CANVAS_STACK_MARKER_HEIGHT,
-                initialWidth: CANVAS_STACK_MARKER_WIDTH,
-                initialHeight: CANVAS_STACK_MARKER_HEIGHT,
               } : {}),
+              ...getFactoryFlowNodeInitialSize("compact", stackHidden, stackMarker),
               measured: previous?.data.lod === "compact" && previous.data.stackHidden === stackPresentation.hidden &&
                 previous.data.stackMarker === stackPresentation.marker ? previous.measured : undefined,
               data: {
@@ -8549,7 +8605,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               } as FactoryNodeData,
               selected,
               zIndex: nodeZIndex,
-              className,
+              className: staticClassName,
               draggable: nodeDraggable,
               selectable: nodeSelectable,
               focusable: nodeFocusable,
@@ -8592,30 +8648,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           const lod: CanvasLod = connectionDraft
             ? connectionPresentation.full && connectionPresentation.reason !== "viewport"
               ? "full"
-              : canvasDetailStage
-            : interactionProtected || preserveMobileConstructionCenterDetail || canvasDetailStage === "full"
+              : canvasPresentationDetailStage
+            : interactionProtected || preserveMobileConstructionCenterDetail || canvasPresentationDetailStage === "full"
               ? "full"
-              : canvasDetailStage;
-          const dynamicEffects = lod === "full" && canvasDetailStage === "full" && !stackPresentation.hidden;
+              : canvasPresentationDetailStage;
+          const dynamicEffects = lod === "full" && canvasPresentationDetailStage === "full" && !stackPresentation.hidden;
           const nodeConnectionDraft = connectionPresentation.exposeConnectionDraft ? connectionDraft : null;
           const acceptedInputItemIds = getAcceptedInputs(entity, canvasGame);
           const producedOutputItemIds = getProducedOutputs(entity);
-          const lineTraceActive = Boolean(lineFindTrace && lineFindTrace.planetId === canvasGame.activePlanetId);
-          const focusClassName = lineTraceActive
-            ? entity.id === lineFindTrace?.entityId
-              ? "factory-flow-node--line-find-center"
-              : lineFindUpstreamEntityIds.has(entity.id)
-                ? "factory-flow-node--line-find-upstream"
-                : lineFindDownstreamEntityIds.has(entity.id)
-                  ? "factory-flow-node--line-find-downstream"
-                  : "factory-flow-node--line-find-dim"
-            : highlightedTaskId
-            ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
-            : productionLineFocus?.planetId === canvasGame.activePlanetId
-              ? locatedProductionEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
-            : focusedBeltNetwork
-              ? focusedNetworkEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
-              : undefined;
           const connectionClassName = nodeConnectionDraft
             ? entity.id === nodeConnectionDraft.nodeId
               ? "factory-flow-node--connection-origin"
@@ -8631,7 +8671,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             : undefined;
           const className = [
             `factory-flow-node--lod-${lod}`,
-            `factory-flow-node--density-${canvasDetailStage}`,
+            `factory-flow-node--density-${canvasPresentationDetailStage}`,
             stackPresentation.hidden ? "factory-flow-node--stack-hidden" : undefined,
             stackPresentation.marker ? "factory-flow-node--stack-marker" : undefined,
             stackPresentation.halo ? "factory-flow-node--stack-halo" : undefined,
@@ -8699,14 +8739,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             ...(stackHidden ? {
               width: CANVAS_STACK_PROXY_WIDTH,
               height: CANVAS_STACK_PROXY_HEIGHT,
-              initialWidth: CANVAS_STACK_PROXY_WIDTH,
-              initialHeight: CANVAS_STACK_PROXY_HEIGHT,
             } : stackMarker ? {
               width: CANVAS_STACK_MARKER_WIDTH,
               height: CANVAS_STACK_MARKER_HEIGHT,
-              initialWidth: CANVAS_STACK_MARKER_WIDTH,
-              initialHeight: CANVAS_STACK_MARKER_HEIGHT,
             } : {}),
+            ...getFactoryFlowNodeInitialSize(lod, stackHidden, stackMarker),
             measured: previous?.data.lod === lod && previous.data.stackHidden === stackPresentation.hidden &&
               previous.data.stackMarker === stackPresentation.marker ? previous.measured : undefined,
             data: {
@@ -8786,7 +8823,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeAlertEntityIds, activeCriticalAlertEntityIds, activeConnectionViewportBounds, activeLogisticsEntityIdSet, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasConnectedEntityIds, canvasDetailPreference, canvasDetailStage, canvasDisplayLookup, canvasGame, canvasRenderSnapshot.runtimeRevision, canvasStackGrouping.byNodeId, canvasTopology.targetPortItemsByEntity, commonNodeData, connectExpandAll, connectionCandidateNodeId, connectionDraft, denseNodeLodActive, focusedBeltNetwork, focusedNetworkEntityIds, fullDetailCanvasNodeIds, game.settings.fontScale, highlightedTaskId, lineFindDownstreamEntityIds, lineFindTrace, lineFindUpstreamEntityIds, locatedProductionEntityIds, nextMobileShell, performanceMonitor.isActive, performanceMonitor.recordCanvas, placement, productionLineFocus, selectedEntityIdSet, selectedEntityIds.length, setNodes, taskHighlight.entityIds, viewportZoom]);
+  }, [activeAlertEntityIds, activeCriticalAlertEntityIds, activeConnectionViewportBounds, activeLogisticsEntityIdSet, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasConnectedEntityIds, canvasDetailPreference, canvasDisplayLookup, canvasGame, canvasPresentationDetailStage, canvasRenderSnapshot.runtimeRevision, canvasStackGrouping.byNodeId, canvasTopology.targetPortItemsByEntity, commonNodeData, connectExpandAll, connectionCandidateNodeId, connectionDraft, denseNodeLodActive, focusedBeltNetwork, focusedNetworkEntityIds, fullDetailCanvasNodeIds, game.settings.fontScale, highlightedTaskId, lineFindDownstreamEntityIds, lineFindTrace, lineFindUpstreamEntityIds, locatedProductionEntityIds, nextMobileShell, performanceMonitor.isActive, performanceMonitor.recordCanvas, placement, productionLineFocus, selectedEntityIdSet, selectedEntityIds.length, setNodes, taskHighlight.entityIds, viewportZoom]);
 
   useLayoutEffect(() => {
     const startedAt = canvasNodeCommitStartedAtRef.current;
@@ -8867,7 +8904,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const selected = selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id);
       const detailBypass = selected || hoveredBeltId === belt.id || focusTone === "focus";
       const previous = edgeRenderCacheRef.current.get(belt.id);
-      if (canvasDetailStage === "compact" && !detailBypass && previous) {
+      if (canvasPresentationDetailStage === "compact" && !detailBypass && previous) {
         stableEdgeCount += 1;
         nextCache.set(belt.id, previous);
         return previous;
@@ -8959,7 +8996,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     }
     return result;
-  }, [activeEntityById, activePlanetBelts.length, beltBundleMap, beltDiagnosticIndex, canvasBatchRendererEnabled, canvasDetailStage, canvasGame, coarsePointer, edgeRouteCenters, extremeVisualsActive, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, hoveredBeltId, lineFindDownstreamBeltIds, lineFindTrace, lineFindUpstreamBeltIds, locatedProductionBeltIds, performanceMonitor.isActive, performanceMonitor.recordCanvas, performanceVisualMode, productionLineFocus, reactFlowBelts, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
+  }, [activeEntityById, activePlanetBelts.length, beltBundleMap, beltDiagnosticIndex, canvasBatchRendererEnabled, canvasGame, canvasPresentationDetailStage, coarsePointer, edgeRouteCenters, extremeVisualsActive, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, hoveredBeltId, lineFindDownstreamBeltIds, lineFindTrace, lineFindUpstreamBeltIds, locatedProductionBeltIds, performanceMonitor.isActive, performanceMonitor.recordCanvas, performanceVisualMode, productionLineFocus, reactFlowBelts, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
   const handleCanvasBatchUnavailable = useCallback(() => {
     setCanvasBatchFailed(true);
     setNotice("批量线路画布不可用，已自动回退到完整 SVG 线路");
@@ -9728,6 +9765,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     const mobileSelecting = nextMobileShell && mobileCanvasMode === "select";
     const clickedEntity = gameRef.current.entities.find((entity) => entity.id === node.id);
+    // Network focus is a temporary inspection lens. Selecting a building is a
+    // new primary action, so leave that lens instead of retaining a dimming
+    // context around the newly expanded card.
+    setFocusedBeltNetworkId(null);
     setSelectedEntityIds((current) => {
       const nextIds = event.shiftKey || selectionMode || mobileSelecting
         ? current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id]
@@ -10121,6 +10162,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
     setSelectedBeltIds([]);
+    setFocusedBeltNetworkId(null);
     if (nextMobileShell && mobileNavigation.overlay?.kind === "sheet" && mobileNavigation.overlay.id === "inspector") mobileNavigation.requestBack();
   }, [blueprintAllowOverlap, blueprintPlacementId, canvasBatchRendererEnabled, commitGame, completeClickConnectionAtPoint, connectionDraft, expandEntityGroup, flowStore, mobileCanvasMode, mobileContinuousPlacement, mobileNavigation.openSheet, mobileNavigation.overlay, mobileNavigation.requestBack, nextMobileShell, nodes, placement, placementCount, playTone, regionMode, screenToFlowPosition, selectionMode, spawnInteractionBurst, viewportZoom]);
 
@@ -10708,7 +10750,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     canvasGame.activePlanetId,
     `${canvasViewportSize.width}x${canvasViewportSize.height}`,
     canvasDetailPreference,
-    canvasDetailStage,
+    canvasPresentationDetailStage,
     canvasOverlapPreference,
     canvasInteractionDetailPreference,
     connectionPointSize,
@@ -10877,7 +10919,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-local-save-raw-cache-size={getLocalSaveRawCacheSize()}
       data-primary-save-bytes={persistedPrimaryBytes ?? -1}
       data-canvas-detail-preference={canvasDetailPreference}
-      data-canvas-detail-stage={canvasDetailStage}
+      data-canvas-detail-stage={canvasPresentationDetailStage}
+      data-canvas-requested-detail-stage={canvasDetailStage}
+      data-canvas-full-all-safety={canvasFullAllSafetyStage ?? "off"}
       data-canvas-overlap-preference={canvasOverlapPreference}
       data-canvas-interaction-detail-preference={canvasInteractionDetailPreference}
       data-canvas-visible-node-count={canvasVisibleNodeCount}
@@ -11279,7 +11323,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             style={{ "--canvas-stack-marker-inverse-zoom": String(1 / Math.max(0.05, viewportZoom)) } as CSSProperties}
             data-batch-renderer={canvasBatchRendererEnabled ? "true" : "false"}
             data-minimap-throttled={denseMinimapThrottleActive && !minimapCanvasFailed ? "true" : "false"}
-            data-detail-stage={canvasDetailStage}
+            data-detail-stage={canvasPresentationDetailStage}
             data-flow-commit-static={canvasFlowStaticPresentation ? "true" : "false"}
             data-flow-fully-deferred={canvasFlowFullyDeferred ? "true" : "false"}
             aria-label="生产网络画布"
@@ -11344,17 +11388,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onPaneClick(event);
           }}
           onDoubleClick={(event) => {
-            if (canvasBatchRendererEnabled && !regionMode && event.target instanceof Element && event.target.classList.contains("react-flow__pane") && !placement && !blueprintPlacementId) {
-              const flowPoint = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-              const hit = canvasBeltLayerRef.current?.findNearestBelt(flowPoint, 42 / Math.max(0.3, viewportZoom));
-              if (hit) {
-                setFocusedBeltNetworkId((current) => current === hit.beltId ? null : hit.beltId);
-                setHighlightedTaskId(null);
-                const snapshot = analyzeBeltNetwork(gameRef.current, hit.beltId);
-                if (snapshot) focusEntityIds(snapshot.entityIds);
-                return;
-              }
-            }
             if (game.settings.allowDoubleClickZoom && !regionMode && event.target instanceof Element && event.target.classList.contains("react-flow__pane") && !placement && !blueprintPlacementId) {
               void fitView({ padding: 0.18, minZoom: canvasMinimumZoom, duration: game.settings.reducedMotion ? 0 : 260 });
             }
@@ -11498,7 +11531,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             {minimapCollapsed ? <MapIcon size={16} /> : <PanelRightClose size={16} />}
           </button>
           <div className="canvas-density-status nodrag nopan" role="group" aria-live="polite" aria-label="画布自适应细节状态">
-            <span>{canvasDetailPreference === "auto" ? "自动" : canvasDetailPreference === "full" ? "完整" : canvasDetailPreference === "medium" ? "中等" : "一行"} · {canvasDetailStage === "full" ? "完整卡片" : canvasDetailStage === "medium" ? "中等细节" : "一行卡片"}</span>
+            <span>{canvasDetailPreference === "auto" ? "自动" : canvasDetailPreference === "full" ? "完整" : canvasDetailPreference === "medium" ? "中等" : "一行"} · {canvasPresentationDetailStage === "full" ? "完整卡片" : canvasPresentationDetailStage === "medium" ? "中等细节" : "一行卡片"}{canvasFullAllSafetyStage ? "（密集保护）" : ""}</span>
             <strong>{canvasVisibleNodeCount.toLocaleString("zh-CN")} 可见</strong>
             <i aria-hidden="true"><b style={{ transform: `scaleX(${canvasDetailProgressSnapshot.ratio})` }} /></i>
             {canvasStackGrouping.groupCount > 0 ? <small>{canvasStackGrouping.groupCount} 组重叠 · {canvasStackGrouping.markerCount} 个标记 · {canvasStackGrouping.hiddenCount} 个隐藏成员</small> : null}
@@ -12280,7 +12313,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             canvasDetailPreference={canvasDetailPreference}
             canvasOverlapPreference={canvasOverlapPreference}
             canvasInteractionDetailPreference={canvasInteractionDetailPreference}
-            canvasDetailStage={canvasDetailStage}
+            canvasDetailStage={canvasPresentationDetailStage}
             canvasVisibleNodeCount={canvasVisibleNodeCount}
             canvasStackGroupCount={canvasStackGrouping.groupCount}
             canvasStackHiddenCount={canvasStackGrouping.hiddenCount}

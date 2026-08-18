@@ -528,18 +528,30 @@ function FactoryNodeCompactView({ data, selected }: NodeProps<FactoryFlowNode>) 
   const resource = entity.resourceId ? getItem(entity.resourceId) : null;
   const building = entity.buildingId ? getBuilding(entity.buildingId) : null;
   const recipe = entity.recipeId ? getRecipe(entity.recipeId) : null;
-  const label = resource?.symbol ?? building?.shortName ?? recipe?.name ?? "节点";
-  const name = resource?.name ?? building?.name ?? recipe?.name ?? "工厂节点";
+  const outputItemIds = uniqueItemIds(data.producedOutputItemIds, recipe?.outputs.map((output) => output.itemId) ?? []);
+  const outputNames = outputItemIds.map((itemId) => ITEMS[itemId]?.name).filter((name): name is string => Boolean(name));
+  const recipeName = entity.recipeId === "matrix_research" ? data.researchLabel ?? "科研模式" : recipe?.name;
+  const outputName = outputNames.join("/");
+  const productionName = recipeName && outputName
+    ? recipeName === outputName ? outputName : `${recipeName} · ${outputName}`
+    : recipeName || outputName || undefined;
+  // Dense one-line rows should identify production rather than repeat the
+  // host building name (for example, every assembler looking identical).
+  const name = resource?.name ?? productionName ?? building?.name ?? "工厂节点";
+  const description = recipeName
+    ? `配方：${recipeName}${outputName ? `；产物：${outputName}` : ""}`
+    : name;
   const count = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
   return <article
     className={`factory-node factory-node-compact factory-node--status-${data.status.tone}${selected ? " factory-node--selected" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}`}
     data-node-lod="compact"
     data-heavy-card="false"
-    title={`${name} ×${count}`}
-    aria-label={`${name}，数量 ${count}${data.alertActive ? "，有生产告警" : ""}`}
+    title={`${description}；数量 ${count}`}
+    aria-label={`${description}，数量 ${count}${data.alertActive ? "，有生产告警" : ""}`}
+    data-compact-label={name}
   >
     <LightweightNodeHandles data={data} />
-    <span aria-hidden="true"><strong>{label}</strong><small>×{count}</small></span>
+    <span aria-hidden="true"><strong>{name}</strong><small>×{count}</small></span>
   </article>;
 }
 

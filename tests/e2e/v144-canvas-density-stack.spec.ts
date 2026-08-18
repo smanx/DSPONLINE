@@ -10,7 +10,7 @@ const CANVAS_INTERACTION_DETAIL_KEY = "dsp-idle-network.ui.canvas-interaction-de
 const BLUEPRINT_OVERLAP_KEY = "dsp-idle-network.ui.blueprint-allow-overlap.v1";
 const MOBILE_UI_KEY = "dsp-idle-network.mobile-ui.v1";
 
-function anonymousCanvasFixture(options: { count: number; exactStack?: number; blueprint?: boolean; hiddenStackAlert?: boolean; spacingX?: number; zoom?: number; savedViewport?: { x: number; y: number; zoom: number } }) {
+function anonymousCanvasFixture(options: { count: number; exactStack?: number; blueprint?: boolean; hiddenStackAlert?: boolean; productionRecipe?: boolean; networkFocus?: boolean; spacingX?: number; zoom?: number; savedViewport?: { x: number; y: number; zoom: number } }) {
   let state = createInitialState(144_441, false);
   state.paused = true;
   state.settings.reducedMotion = true;
@@ -21,10 +21,11 @@ function anonymousCanvasFixture(options: { count: number; exactStack?: number; b
   state.construction.arc_smelter = 1;
   state = placeBuilding(state, "arc_smelter", { x: 800, y: 800 });
   const alertTemplate = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+  const productionTemplate = { ...alertTemplate, recipeId: "diamond_from_kimberlite" as const };
   const columns = options.count >= 1_000 ? 50 : 25;
   const zoom = options.count >= 1_000 ? 0.2 : options.count >= 300 ? 0.32 : 0.84;
   state.entities = Array.from({ length: options.count }, (_, index) => ({
-    ...(options.hiddenStackAlert && index === 1 ? alertTemplate : template),
+    ...(options.productionRecipe ? productionTemplate : options.hiddenStackAlert && index === 1 ? alertTemplate : template),
     id: `anonymous-node-${index}`,
     position: index < (options.exactStack ?? 0)
       ? { x: 0, y: 0 }
@@ -35,7 +36,23 @@ function anonymousCanvasFixture(options: { count: number; exactStack?: number; b
     progress: 0.4,
     utilization: 0.8,
   }));
-  state.belts = options.exactStack
+  state.belts = options.networkFocus
+    ? [{
+        id: "anonymous-edge-focus",
+        planetId: "home" as const,
+        source: "anonymous-node-0",
+        target: "anonymous-node-1",
+        itemId: "iron_ore" as const,
+        lanes: 1,
+        tier: 1 as const,
+        sorterTier: 1 as const,
+        stackSize: 1 as const,
+        progress: 0,
+        priority: 0,
+        routeMode: "lower" as const,
+        lastFlow: 0,
+      }]
+    : options.exactStack
     ? Array.from({ length: Math.min(3, options.exactStack - 1) }, (_, index) => ({
         id: `anonymous-edge-${index}`,
         planetId: "home" as const,
@@ -60,7 +77,7 @@ function anonymousCanvasFixture(options: { count: number; exactStack?: number; b
   return serializeEnvelope(state, Date.now());
 }
 
-async function seedCanvas(page: Page, options: { count: number; exactStack?: number; blueprint?: boolean; detail?: string; overlap?: string; interactionDetail?: string; hiddenStackAlert?: boolean; spacingX?: number; zoom?: number; savedViewport?: { x: number; y: number; zoom: number }; viewport?: { width: number; height: number } }) {
+async function seedCanvas(page: Page, options: { count: number; exactStack?: number; blueprint?: boolean; detail?: string; overlap?: string; interactionDetail?: string; hiddenStackAlert?: boolean; productionRecipe?: boolean; networkFocus?: boolean; spacingX?: number; zoom?: number; savedViewport?: { x: number; y: number; zoom: number }; viewport?: { width: number; height: number } }) {
   const raw = anonymousCanvasFixture(options);
   await page.route("**/api/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -131,8 +148,8 @@ async function expectNodePaintedAndHitTestable(node: Locator): Promise<void> {
     const style = getComputedStyle(content);
     const wrapperStyle = getComputedStyle(wrapper);
     const painted = right - left >= 2 && bottom - top >= 2 && style.display !== "none" &&
-      style.visibility !== "hidden" && Number(style.opacity) > 0 && wrapperStyle.display !== "none" &&
-      wrapperStyle.visibility !== "hidden" && Number(wrapperStyle.opacity) > 0;
+      style.visibility !== "hidden" && Number(style.opacity) >= 0.95 && wrapperStyle.display !== "none" &&
+      wrapperStyle.visibility !== "hidden" && Number(wrapperStyle.opacity) >= 0.95;
     const hit = painted ? document.elementFromPoint((left + right) / 2, (top + bottom) / 2) : null;
     const topNode = hit?.closest<HTMLElement>(".react-flow__node[data-id]");
     return {
@@ -255,6 +272,93 @@ test("minimal detail keeps one-line card and React Flow wrapper geometry at 96x3
   });
 });
 
+test("one-line production cards name their recipe and product instead of the host building", async ({ page }) => {
+  await seedCanvas(page, {
+    count: 3,
+    detail: "minimal",
+    overlap: "all",
+    interactionDetail: "base",
+    productionRecipe: true,
+    spacingX: 340,
+    zoom: 1,
+  });
+  const compact = page.locator('.react-flow__node[data-id="anonymous-node-0"] .factory-node-compact');
+  await expect(compact).toBeVisible();
+  await expect(compact.locator("strong")).toHaveText("金伯利矿提炼 · 金刚石");
+  await expect(compact).toHaveAttribute("title", /配方：金伯利矿提炼；产物：金刚石/);
+  await expect(compact).not.toContainText("电弧熔炉");
+});
+
+test("network focus keeps interaction cards opaque and permits panning from contextual nodes", async ({ page }) => {
+  await seedCanvas(page, {
+    count: 4,
+    detail: "medium",
+    overlap: "all",
+    interactionDetail: "hover",
+    networkFocus: true,
+    spacingX: 190,
+    zoom: 1,
+  });
+  await page.locator('.react-flow__edge[data-id="anonymous-edge-focus"]').dispatchEvent("dblclick");
+  await expect(page.locator(".network-focus-indicator")).toBeVisible();
+
+  const contextual = page.locator('.react-flow__node[data-id="anonymous-node-2"]');
+  await expect(contextual).toHaveClass(/factory-flow-node--network-dim/);
+  await expect.poll(() => contextual.evaluate((element) => ({
+    opacity: Number(getComputedStyle(element).opacity),
+    draggable: element.classList.contains("draggable"),
+    noPan: element.classList.contains("nopan"),
+  }))).toEqual({ opacity: 0.5, draggable: false, noPan: false });
+
+  const visibilitySamples = await contextual.evaluate((wrapper) => {
+    const target = window as typeof window & {
+      __canvasLodVisibilityRecorder?: { samples: string[]; stop: () => void };
+    };
+    const samples: string[] = [];
+    let active = true;
+    const sample = () => {
+      if (!active) return;
+      samples.push(getComputedStyle(wrapper).visibility);
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+    target.__canvasLodVisibilityRecorder = { samples, stop: () => { active = false; } };
+    return samples.length;
+  });
+  expect(visibilitySamples).toBe(0);
+  await contextual.hover();
+  await expect(contextual).toHaveClass(/factory-flow-node--lod-full/);
+  await expect(contextual).not.toHaveClass(/factory-flow-node--network-dim/);
+  await expectNodePaintedAndHitTestable(contextual);
+  const hiddenDuringExpansion = await page.evaluate(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const recorder = (window as typeof window & {
+      __canvasLodVisibilityRecorder?: { samples: string[]; stop: () => void };
+    }).__canvasLodVisibilityRecorder;
+    recorder?.stop();
+    return recorder?.samples.includes("hidden") ?? true;
+  });
+  expect(hiddenDuringExpansion).toBe(false);
+
+  const panTarget = page.locator('.react-flow__node[data-id="anonymous-node-3"]');
+  await panTarget.hover();
+  await page.mouse.move(5, 5);
+  await expect(panTarget).toHaveClass(/factory-flow-node--network-dim/);
+  const beforeTransform = await page.locator(".react-flow__viewport").evaluate((element) => getComputedStyle(element).transform);
+  const panBox = await panTarget.locator("article.factory-node").boundingBox();
+  if (!panBox) throw new Error("contextual focus node has no pan geometry");
+  await page.mouse.move(panBox.x + panBox.width / 2, panBox.y + panBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(panBox.x + panBox.width / 2 + 80, panBox.y + panBox.height / 2 + 40, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => page.locator(".react-flow__viewport").evaluate((element) => getComputedStyle(element).transform)).not.toBe(beforeTransform);
+
+  await contextual.click({ force: true });
+  await expect(page.locator(".network-focus-indicator")).toHaveCount(0);
+  await expect(contextual).toHaveClass(/selected/);
+  await expectNodePaintedAndHitTestable(contextual);
+});
+
 test("a large translated compact viewport still paints and hit-tests its one-line card", async ({ page }) => {
   await seedCanvas(page, {
     count: 50,
@@ -345,6 +449,44 @@ test("count-marker overlap mode never leaves an exact stack visually empty", asy
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
   expect(axe.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
+});
+
+test("hover expansion promotes a count marker out of overlap hiding", async ({ page }) => {
+  await seedCanvas(page, { count: 8, exactStack: 8, detail: "minimal", overlap: "marker", interactionDetail: "hover" });
+  const marker = page.locator(".factory-node-stack-marker").first();
+  await expect(marker).toBeVisible();
+  const markerId = await marker.evaluate((element) => element.closest<HTMLElement>(".react-flow__node[data-id]")?.dataset.id);
+  expect(markerId).toBeTruthy();
+  const wrapper = page.locator(`.react-flow__node[data-id="${markerId}"]`);
+  await marker.hover();
+  await expect(wrapper).toHaveClass(/factory-flow-node--lod-full/);
+  await expect(wrapper).not.toHaveClass(/factory-flow-node--stack-marker/);
+  await expect(wrapper.locator('.factory-node[data-heavy-card="true"]')).toBeVisible();
+  await expectNodePaintedAndHitTestable(wrapper);
+});
+
+test("full plus all cards uses a uniform emergency stage without disabling interaction expansion", async ({ page }) => {
+  test.setTimeout(90_000);
+  await seedCanvas(page, {
+    count: 1_200,
+    exactStack: 1_200,
+    detail: "full",
+    overlap: "all",
+    interactionDetail: "hover",
+  });
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-canvas-detail-preference", "full");
+  await expect(shell).toHaveAttribute("data-canvas-overlap-preference", "all");
+  await expect(shell).toHaveAttribute("data-canvas-full-all-safety", "compact");
+  await expect(shell).toHaveAttribute("data-canvas-detail-stage", "compact");
+  await expect(page.locator('.factory-node[data-heavy-card="true"]')).toHaveCount(0);
+  await expect.poll(() => page.locator('.factory-node-compact[data-compact-label]').count()).toBeGreaterThan(1_000);
+
+  const target = page.locator('.react-flow__node[data-id="anonymous-node-0"]');
+  await target.hover();
+  await expect(target).toHaveClass(/factory-flow-node--lod-full/);
+  await expect(page.locator('.factory-node[data-heavy-card="true"]')).toHaveCount(1);
+  await expectNodePaintedAndHitTestable(target);
 });
 
 test("count marker and canvas controls stay usable across target phone sizes and font scales", async ({ page }) => {

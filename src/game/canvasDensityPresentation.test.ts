@@ -4,12 +4,15 @@ import {
   CANVAS_DETAIL_COMPACT_EXIT_VISIBLE,
   CANVAS_DETAIL_MEDIUM_ENTER_VISIBLE,
   CANVAS_DETAIL_MEDIUM_EXIT_VISIBLE,
+  CANVAS_FULL_ALL_COMPACT_SAFETY_VISIBLE,
+  CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE,
   CANVAS_STACK_MARKER_HEIGHT,
   CANVAS_STACK_MARKER_WIDTH,
   CANVAS_STACK_ENTER_PX,
   CANVAS_STACK_EXIT_PX,
   countVisibleCanvasNodes,
   groupCanvasNodeStacks,
+  resolveCanvasFullAllSafetyStage,
   resolveCanvasDetailStage,
 } from "./canvasDensityPresentation";
 
@@ -39,6 +42,14 @@ describe("visible-density canvas presentation", () => {
     expect(resolveCanvasDetailStage("full", 2_000, "compact")).toBe("full");
     expect(resolveCanvasDetailStage("medium", 2_000, "compact")).toBe("medium");
     expect(resolveCanvasDetailStage("minimal", 1, "full")).toBe("compact");
+  });
+
+  it("keeps full plus all-card views recoverable with one uniform emergency stage", () => {
+    expect(resolveCanvasFullAllSafetyStage("full", "all", CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE)).toBeNull();
+    expect(resolveCanvasFullAllSafetyStage("full", "all", CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE + 1)).toBe("medium");
+    expect(resolveCanvasFullAllSafetyStage("full", "all", CANVAS_FULL_ALL_COMPACT_SAFETY_VISIBLE + 1)).toBe("compact");
+    expect(resolveCanvasFullAllSafetyStage("full", "marker", 4_213)).toBeNull();
+    expect(resolveCanvasFullAllSafetyStage("medium", "all", 4_213)).toBeNull();
   });
 
   it("keeps every collapsed overlap location visible through one count marker", () => {

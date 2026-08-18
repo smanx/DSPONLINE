@@ -61,8 +61,8 @@ async function expectExpandedNodePainted(node: Locator): Promise<void> {
     const contentStyle = getComputedStyle(content);
     const wrapperStyle = getComputedStyle(wrapper);
     const painted = right - left >= 2 && bottom - top >= 2 && contentStyle.display !== "none" &&
-      contentStyle.visibility !== "hidden" && Number(contentStyle.opacity) > 0 && wrapperStyle.display !== "none" &&
-      wrapperStyle.visibility !== "hidden" && Number(wrapperStyle.opacity) > 0;
+      contentStyle.visibility !== "hidden" && Number(contentStyle.opacity) >= 0.95 && wrapperStyle.display !== "none" &&
+      wrapperStyle.visibility !== "hidden" && Number(wrapperStyle.opacity) >= 0.95;
     let hit = false;
     if (painted) {
       // A centered node can legitimately grow beneath the fixed minimap or

@@ -80,6 +80,7 @@ import type {
   CanvasInteractionDetailPreference,
   CanvasOverlapPreference,
 } from "../game/canvasDensityPresentation";
+import { CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE } from "../game/canvasDensityPresentation";
 import { readSettingsCategoryPreference, writeSettingsCategoryPreference, type ConnectionHitArea, type ConnectionPointSize, type SettingsCategory } from "../game/uiPreferences";
 import { deleteLocalSaveManagedEntries, dismissLocalSaveRecoveryPrompt, requestLocalSavePersistentStorage, subscribeLocalSaveStorageStatus } from "../game/localSaveStore";
 
@@ -556,7 +557,9 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
               key={preference}
             >{preference === "auto" ? locale === "en" ? "Auto" : "自动" : preference === "full" ? locale === "en" ? "Full" : "完整" : preference === "medium" ? locale === "en" ? "Medium" : "中等" : locale === "en" ? "One line" : "一行"}</button>)}
           </div>
-          <small>{locale === "en" ? "Auto is recommended; fixed levels are never replaced by density thresholds." : "推荐自动档；完整、中等和一行均为固定档位，不会被密度阈值覆盖。"}</small>
+          <small>{locale === "en"
+            ? "Auto is recommended. Fixed levels stay exact except for the uniform Full + All cards emergency guard above 480 visible nodes."
+            : `推荐自动档；固定档通常保持原样，仅“完整 + 全部卡片”超过 ${CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE} 个视口节点时启用统一安全级别。`}</small>
         </div>
         <div className="canvas-detail-control">
           <strong>{locale === "en" ? "Overlapping buildings" : "重叠建筑显示"}</strong>
@@ -598,6 +601,9 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <p className="settings-help">{locale === "en"
           ? "Auto uses viewport-visible logical nodes with hysteresis. These three preferences are device-only and never enter local saves, cloud saves or deterministic simulation."
           : "自动档按视口内原始逻辑节点数并带迟滞切换。以上三项仅保存在本机，不进入本地存档、云存档或确定性模拟。"}</p>
+        {canvasDetailPreference === "full" && canvasOverlapPreference === "all" && canvasDetailStage !== "full" ? <p className="settings-warning" role="status">{locale === "en"
+          ? `Dense safety is active: ${canvasVisibleNodeCount.toLocaleString(locale)} visible cards use one uniform ${canvasDetailStage} base. Selection and hover expansion still use Full.`
+          : `密集保护已启用：当前 ${canvasVisibleNodeCount.toLocaleString(locale)} 个视口节点统一使用${canvasDetailStage === "medium" ? "中等" : "一行"}基础卡；选中和悬停展开仍使用完整卡片。`}</p> : null}
         {canvasDetailPreference === "full" ? <p className="settings-warning" role="alert">{locale === "en"
           ? "Warning: Full detail keeps ordinary cards and live progress eligible for heavier rendering. Dense factories can stutter."
           : "警告：完整档会让普通节点保留重卡片与实时进度资格，密集工厂可能卡顿。"}</p> : null}
