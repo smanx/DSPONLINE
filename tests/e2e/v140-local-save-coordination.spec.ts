@@ -60,7 +60,7 @@ async function seedEmergencyMirror(
     const saved = await storage.saveGameVerified(state);
     if (!saved.success) throw new Error(saved.message);
     const store = await import("/src/game/localSaveStore.ts");
-    const raw = store.getLocalSaveValue("dsp-idle-network.save.v1");
+    const raw = await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
     if (!raw) throw new Error("missing seeded primary save");
     const candidate = JSON.parse(raw);
     candidate.savedAt += 1_000;
@@ -377,7 +377,7 @@ test("a reload applies a verified emergency mirror only from its own durable wri
     state.elapsedSeconds = 700;
     const first = await storage.saveGameVerified(state);
     if (!first.success) throw new Error(first.message);
-    const persisted = store.getLocalSaveValue("dsp-idle-network.save.v1");
+    const persisted = await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
     if (!persisted) throw new Error("missing durable base save");
     state.elapsedSeconds = 701;
     const candidate = storage.serializeEnvelope(state, JSON.parse(persisted).savedAt + 1_000);
@@ -399,6 +399,7 @@ test("a reload applies a verified emergency mirror only from its own durable wri
   });
 
   await page.reload();
+  await expect(page.locator(".start-menu")).toBeVisible();
   await expect(page.locator(".local-save-writer-banner--conflict")).toHaveCount(0);
   expect(await readRecord(page, SAVE_KEY)).toBe(expected);
   expect(await page.evaluate(() => localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload"))).toBeNull();
@@ -513,7 +514,7 @@ test("a corrupted conflict candidate is preserved but cannot become the primary 
     state.elapsedSeconds = 10;
     const result = await storage.saveGameVerified(state);
     if (!result.success) throw new Error(result.message);
-    return (await import("/src/game/localSaveStore.ts")).getLocalSaveValue("dsp-idle-network.save.v1");
+    return (await (await import("/src/game/localSaveStore.ts")).readPersistedLocalSaveValue("dsp-idle-network.save.v1"));
   });
   const external = JSON.stringify({ formatVersion: 2, savedAt: 20, mode: "normal", state: { version: 46, mode: "normal", entities: [] }, checksum: "invalid" });
   await writeLegacyRecord(page, SAVE_KEY, external);
@@ -752,4 +753,3 @@ test("missing-primary conflict can intentionally keep the clearly labelled empty
   expect(await readRecord(page, seeded.candidateKey)).toBeNull();
   expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(0);
 });
-

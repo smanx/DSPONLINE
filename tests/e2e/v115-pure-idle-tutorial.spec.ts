@@ -25,7 +25,11 @@ test.beforeEach(async ({ page }) => {
       },
     }));
     const NativeWorker = window.Worker;
-    const tracker = { initializes: 0, finalizes: 0 };
+    const tracker: { initializes: number; finalizes: number; autosaveHandler: TimerHandler | null } = {
+      initializes: 0,
+      finalizes: 0,
+      autosaveHandler: null,
+    };
     Object.assign(window, { __pureIdleReuseTracker: tracker });
     class TrackedPureIdleWorker extends NativeWorker {
       private readonly pureIdleMacro: boolean;
@@ -70,6 +74,7 @@ test("settings opens the complete tutorial and keeps independent reading progres
 });
 
 test("time warp starts a blocking pure-idle page and can stop safely", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.addInitScript(() => {
     (window as typeof window & { __DSP_RUNTIME_TRANSITIONS__?: unknown }).__DSP_RUNTIME_TRANSITIONS__ = {
       enabled: true,
@@ -85,13 +90,28 @@ test("time warp starts a blocking pure-idle page and can stop safely", async ({ 
     envelope.state.construction = { time_warp_device: 0 };
     envelope.state.research.completedTechIds = ["universe_matrix", "time_warp_engineering"];
     envelope.state.timeWarp = { controllerEntityId: "warp", enabled: false, requestedMultiplier: 5, effectiveMultiplier: 1, pendingSimulationSeconds: 0, pendingWallSeconds: 0, requiredPowerKw: 0, allocatedPowerKw: 0 };
+    // Simulate legacy sparse telemetry that became JSON null during a later
+    // autosave. It must not poison pure-idle initialization or settlement.
+    envelope.state.productionHistory = [null];
     envelope.state.paused = true;
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify(envelope));
+    const tracker = (window as typeof window & {
+      __pureIdleReuseTracker?: { autosaveHandler: TimerHandler | null };
+    }).__pureIdleReuseTracker;
+    if (!tracker) throw new Error("pure-idle tracker missing");
+    const nativeSetInterval = window.setInterval.bind(window);
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 30_000 && tracker.autosaveHandler === null) tracker.autosaveHandler = handler;
+      return nativeSetInterval(handler, timeout, ...args);
+    }) as typeof window.setInterval;
   });
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/");
+  const shell = page.locator(".game-shell");
   const onboarding = page.getByRole("button", { name: /^(?:关闭|跳过)启动引导$/ });
   if (await onboarding.count()) await onboarding.first().click();
+  await page.getByLabel("继续模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
   const node = page.locator(".react-flow__node").filter({ hasText: "时间扭曲装置" });
   await expect(node).toBeVisible();
   await node.locator(".factory-node__header").click();
@@ -106,6 +126,31 @@ test("time warp starts a blocking pure-idle page and can stop safely", async ({ 
   )).toBe(1);
   await idle.screenshot({ path: "artifacts/qa/v115-pure-idle-desktop.png", animations: "disabled" });
   await expect(page.locator(".construction-dock")).toBeHidden();
+  // The 30-second autosave scheduler must defer to the pure-idle recovery
+  // journal instead of saving the dormant normal simulation authority.
+  await page.evaluate(() => {
+    const transitions = (window as typeof window & {
+      __DSP_RUNTIME_TRANSITIONS__?: { events: unknown[] };
+    }).__DSP_RUNTIME_TRANSITIONS__;
+    if (transitions) transitions.events = [];
+  });
+  await page.evaluate(() => {
+    const handler = (window as typeof window & {
+      __pureIdleReuseTracker?: { autosaveHandler: TimerHandler | null };
+    }).__pureIdleReuseTracker?.autosaveHandler;
+    if (typeof handler !== "function") throw new Error("autosave interval handler missing");
+    handler();
+    handler();
+    handler();
+  });
+  await page.waitForTimeout(100);
+  const autosavePhases = await page.evaluate(() => {
+    const events = (window as typeof window & {
+      __DSP_RUNTIME_TRANSITIONS__?: { events: Array<{ phase: string; detail?: { kind?: string } }> };
+    }).__DSP_RUNTIME_TRANSITIONS__?.events ?? [];
+    return events.filter((event) => event.phase === "persistence-phase" && event.detail?.kind === "autosave");
+  });
+  expect(autosavePhases).toEqual([]);
   await idle.getByRole("button", { name: "停止并结算纯挂机" }).click();
   await expect(idle).toBeHidden();
   await expect.poll(() => page.evaluate(() =>
@@ -114,6 +159,8 @@ test("time warp starts a blocking pure-idle page and can stop safely", async ({ 
   expect(await page.evaluate(() =>
     (window as typeof window & { __pureIdleReuseTracker?: { initializes: number } }).__pureIdleReuseTracker?.initializes ?? 0,
   )).toBe(1);
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active", { timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false", { timeout: 20_000 });
   const persistencePhases = await page.evaluate(() => {
     const events = (window as typeof window & {
       __DSP_RUNTIME_TRANSITIONS__?: { events: Array<{ phase: string; detail?: { kind?: string; phase?: string } }> };
@@ -206,5 +253,3 @@ test("tutorial remains readable in portrait and landscape mobile shells", async 
   await expect(tutorial).toBeVisible();
   await tutorial.screenshot({ path: "artifacts/qa/v115-tutorial-mobile-844x390.png", animations: "disabled" });
 });
-
-

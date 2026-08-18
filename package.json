@@ -25,6 +25,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 4318",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:durable": "cross-env VITE_DURABLE_RUNTIME_RECOVERY=true playwright test tests/e2e/v144-runtime-wal-integration.spec.ts",
     "test:e2e:nightly": "playwright test --config=playwright.nightly.config.ts",
     "test:server": "npm --prefix server test && npm --prefix server run test:station",
     "test:native": "node --test scripts/native-release-tools.test.mjs scripts/verify-startup-budget.test.mjs desktop/release-channels.test.cjs desktop/cloud-transport.test.cjs desktop/message-port-transfer-smoke.test.cjs android/security-boundary.test.mjs",

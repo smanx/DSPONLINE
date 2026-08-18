@@ -53,6 +53,7 @@ import type {
   AuthoritativeSavePersistenceCommitResult,
 } from "./authoritativeSavePersistenceClient";
 import type { AuthoritativeSavePersistenceProgress } from "./authoritativeSavePersistenceProtocol";
+import type { WorkerBinaryPayload } from "./workerBinaryPayload";
 
 const DATABASE_NAME = "dsp-idle-network.local-saves";
 const DATABASE_VERSION = 2;
@@ -661,8 +662,14 @@ function restoreCachedValueAfterFailedCommit(
   expectedRevision: number,
 ): void {
   revisionCache.set(key, expectedRevision);
+  // `putCacheValue()` installs the candidate before the IndexedDB transaction
+  // runs. Catalog-backed large payloads normally keep no raw text in this
+  // cache, so `baseKnown === true` can legitimately pair with
+  // `baseValue === null`. Remove the uncommitted candidate first; otherwise a
+  // quota retry treats it as the persisted base and creates a false
+  // cross-tab conflict against the unchanged durable primary.
+  cache.delete(key);
   if (!baseKnown) {
-    cache.delete(key);
     knownSaveKeys.delete(key);
     catalogCache.delete(key);
     removeStorageEntry(key);
@@ -1869,6 +1876,17 @@ export function getLocalSaveRawCacheSize(): number {
   return [...cache.entries()].filter(([key]) => isCatalogedSaveKey(key)).length;
 }
 
+/**
+ * Releases catalogued payload text after an exact IndexedDB verification.
+ * Catalogs, revisions, and synchronous non-payload metadata remain available.
+ */
+export function clearLocalSaveRawPayloadCache(): void {
+  if (backend !== "indexeddb") return;
+  for (const key of [...cache.keys()]) {
+    if (isCatalogedSaveKey(key)) cache.delete(key);
+  }
+}
+
 function enqueue(operation: () => Promise<void>, key?: string): void {
   // Capture the current proof queue at enqueue time. Reading a mutable queue
   // later inside the callback can deadlock when a proof commit is waiting for
@@ -1943,8 +1961,8 @@ export function setLocalSaveValue(key: string, value: string): void {
  * primary/catalog/revision read-back. It deliberately never decodes or hashes
  * the payload on the UI thread.
  */
-export async function setLocalSavePayloadWithProof(
-  input: AuthoritativeSavePayloadCommitInput,
+export async function setLocalSavePayloadWithProof<Payload extends WorkerBinaryPayload>(
+  input: AuthoritativeSavePayloadCommitInput<Payload>,
   onProgress?: (progress: AuthoritativeSavePersistenceProgress) => void,
   shouldCommit?: () => boolean,
 ): Promise<AuthoritativeSavePersistenceCommitResult> {

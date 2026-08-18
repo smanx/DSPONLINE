@@ -1,0 +1,363 @@
+import { expect, test, type Page } from "@playwright/test";
+import { selectSettingsCategory } from "./settings-helpers";
+
+// Opt-in local acceptance coverage. Player saves are never checked into the
+// repository and the source file is only read by the browser file picker.
+const fixturePath = process.env.DSP_REAL_SAVE_FIXTURE;
+const runMatrix = process.env.DSP_REAL_SAVE_CANVAS_MATRIX === "1";
+const fixtureLabel = (process.env.DSP_REAL_SAVE_LABEL ?? "fixture").replace(/[^a-zA-Z0-9_-]/g, "-");
+
+const DETAIL_KEY = "dsp-idle-network.ui.canvas-detail.v1";
+const OVERLAP_KEY = "dsp-idle-network.ui.canvas-overlap.v1";
+const INTERACTION_KEY = "dsp-idle-network.ui.canvas-interaction-detail.v1";
+
+type DetailPreference = "auto" | "full" | "medium" | "minimal";
+type OverlapPreference = "marker" | "representative" | "all";
+type InteractionPreference = "selected" | "hover" | "base";
+
+const detailLabels: Record<DetailPreference, string> = { auto: "自动", full: "完整", medium: "中等", minimal: "一行" };
+const overlapLabels: Record<OverlapPreference, string> = { marker: "数量标记", representative: "代表卡片", all: "全部卡片" };
+const interactionLabels: Record<InteractionPreference, string> = { selected: "仅选中", hover: "悬停也展开", base: "保持基础" };
+
+async function setCanvasSettings(page: Page, preferences: {
+  detail: DetailPreference;
+  overlap: OverlapPreference;
+  interaction: InteractionPreference;
+}): Promise<void> {
+  await page.getByLabel("打开设置").click();
+  const settings = page.locator(".operations-workspace");
+  await expect(settings).toBeVisible();
+  await selectSettingsCategory(settings, "终局性能", "performance");
+  // Collapse a potentially huge exact stack before increasing card detail.
+  // Applying Full while the previous mode is All can otherwise transiently
+  // mount thousands of heavy cards before the next preference click lands.
+  await settings.getByRole("radiogroup", { name: "重叠建筑显示方式" })
+    .getByRole("radio", { name: overlapLabels[preferences.overlap], exact: true }).click();
+  await settings.getByRole("radiogroup", { name: "画布基础卡片" })
+    .getByRole("radio", { name: detailLabels[preferences.detail], exact: true }).click();
+  await settings.getByRole("radiogroup", { name: "交互卡片展开方式" })
+    .getByRole("radio", { name: interactionLabels[preferences.interaction], exact: true }).click();
+  await settings.getByRole("button", { name: "关闭运营中心" }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-canvas-detail-preference", preferences.detail);
+  await expect(shell).toHaveAttribute("data-canvas-overlap-preference", preferences.overlap);
+  await expect(shell).toHaveAttribute("data-canvas-interaction-detail-preference", preferences.interaction);
+  await expect(settings).toBeHidden();
+}
+
+async function importFixture(page: Page): Promise<void> {
+  await page.addInitScript(({ detailKey, overlapKey, interactionKey }) => {
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
+    localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
+    localStorage.setItem(detailKey, "minimal");
+    localStorage.setItem(overlapKey, "marker");
+    localStorage.setItem(interactionKey, "hover");
+  }, { detailKey: DETAIL_KEY, overlapKey: OVERLAP_KEY, interactionKey: INTERACTION_KEY });
+  await page.goto("/?menu=1");
+  await page.getByLabel("选择存档文件").setInputFiles(fixturePath!);
+  await expect(page.getByRole("button", { name: "确认导入并进入" })).toBeEnabled({ timeout: 60_000 });
+  await page.getByRole("button", { name: "确认导入并进入" }).click();
+  await expect(page.locator(".game-shell")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(".factory-canvas")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-active-planet-node-count", /[1-9]\d*/, { timeout: 60_000 });
+}
+
+async function locateLargestCanvasStack(page: Page): Promise<{ x: number; y: number; worldX: number; worldY: number; count: number }> {
+  return page.evaluate(async () => {
+    const [{ readPersistedLocalSaveValue }, { inspectSave }, { projectCanvasMiniMap }, { groupCanvasNodeStacks }] = await Promise.all([
+      import("/src/game/localSaveStore.ts"),
+      import("/src/game/storage.ts"),
+      import("/src/components/CanvasMiniMap.tsx"),
+      import("/src/game/canvasDensityPresentation.ts"),
+    ]);
+    const raw = await readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    const state = raw ? inspectSave(raw).state : null;
+    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+    const viewport = document.querySelector<HTMLElement>(".react-flow__viewport");
+    if (!state || !flow || !viewport) throw new Error("real-save canvas state missing");
+    const active = state.entities.filter((entity) => entity.planetId === state.activePlanetId);
+    const transform = new DOMMatrixReadOnly(getComputedStyle(viewport).transform);
+    const grouped = groupCanvasNodeStacks(
+      active.map((entity) => ({ id: entity.id, x: entity.position.x, y: entity.position.y })),
+      transform.a,
+      new Set(),
+      new Map(),
+      new Set(),
+      new Set(),
+      "marker",
+    );
+    const targetEntity = active
+      .map((entity) => ({ entity, presentation: grouped.byNodeId.get(entity.id) }))
+      .filter((entry) => entry.presentation?.marker)
+      .sort((left, right) => (right.presentation?.count ?? 0) - (left.presentation?.count ?? 0))[0];
+    if (!targetEntity?.presentation || targetEntity.presentation.count < 2) throw new Error("real-save fixture has no canvas stack");
+    const target = { ...targetEntity.entity.position, count: targetEntity.presentation.count };
+    const flowRect = flow.getBoundingClientRect();
+    const projection = projectCanvasMiniMap(
+      active.map((entity) => ({ id: entity.id, kind: entity.kind, x: entity.position.x, y: entity.position.y })),
+      { x: transform.e, y: transform.f, zoom: transform.a },
+      flowRect.width,
+      flowRect.height,
+    );
+    return {
+      x: Math.max(1, Math.min(199, projection.offsetX + (target.x - projection.minX) * projection.scale)),
+      y: Math.max(1, Math.min(149, projection.offsetY + (target.y - projection.minY) * projection.scale)),
+      worldX: target.x,
+      worldY: target.y,
+      count: target.count,
+    };
+  });
+}
+
+async function centerLargestCanvasStack(page: Page): Promise<{ count: number }> {
+  const target = await locateLargestCanvasStack(page);
+  const canvasMiniMap = page.getByRole("img", { name: "低频画布小地图" });
+  if (await canvasMiniMap.count()) {
+    await canvasMiniMap.click({ position: { x: target.x, y: target.y } });
+    return { count: target.count };
+  }
+  const svgMiniMap = page.locator(".react-flow__minimap svg").first();
+  await expect(svgMiniMap).toBeVisible();
+  const point = await svgMiniMap.evaluate((svg, world) => {
+    const viewBox = (svg as SVGSVGElement).viewBox.baseVal;
+    const bounds = svg.getBoundingClientRect();
+    return {
+      x: Math.max(1, Math.min(bounds.width - 1, (world.x - viewBox.x) / Math.max(1, viewBox.width) * bounds.width)),
+      y: Math.max(1, Math.min(bounds.height - 1, (world.y - viewBox.y) / Math.max(1, viewBox.height) * bounds.height)),
+    };
+  }, { x: target.worldX, y: target.worldY });
+  await svgMiniMap.click({ position: point });
+  return { count: target.count };
+}
+
+test.describe("real save canvas density acceptance", () => {
+  test.skip(!fixturePath, "requires DSP_REAL_SAVE_FIXTURE");
+
+  test("minimal marker presentation retains visible, unclipped building affordances", async ({ page }) => {
+    test.setTimeout(runMatrix ? 900_000 : 180_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await importFixture(page);
+
+    const shell = page.locator(".game-shell");
+    await expect(shell).toHaveAttribute("data-canvas-detail-preference", "minimal");
+    await expect(shell).toHaveAttribute("data-canvas-overlap-preference", "marker");
+    await expect(shell).toHaveAttribute("data-canvas-interaction-detail-preference", "hover");
+    await expect(shell).toHaveAttribute("data-canvas-detail-stage", "compact");
+
+    const initialViewport = {
+      logicalVisible: Number(await shell.getAttribute("data-canvas-visible-node-count")),
+      wrapperCount: await page.locator(".react-flow__node").count(),
+      fullyDeferred: await page.locator(".factory-canvas").getAttribute("data-flow-fully-deferred"),
+    };
+    const fitView = page.locator(".react-flow__controls-fitview");
+    await expect(fitView).toBeVisible();
+    await fitView.click();
+    await expect.poll(async () => Number(await shell.getAttribute("data-canvas-visible-node-count")), { timeout: 60_000 }).toBeGreaterThan(0);
+    await expect(page.locator(".factory-canvas")).toHaveAttribute("data-flow-fully-deferred", "false", { timeout: 60_000 });
+    await expect.poll(() => page.locator(".react-flow__node").count(), { timeout: 60_000 }).toBeGreaterThan(0);
+    const afterFitView = {
+      logicalVisible: Number(await shell.getAttribute("data-canvas-visible-node-count")),
+      wrapperCount: await page.locator(".react-flow__node").count(),
+      fullyDeferred: await page.locator(".factory-canvas").getAttribute("data-flow-fully-deferred"),
+    };
+    const stackTarget = await centerLargestCanvasStack(page);
+    await expect.poll(() => page.locator(".factory-node-stack-marker").count(), { timeout: 60_000 }).toBeGreaterThan(0);
+
+    const metrics = await page.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>(".game-shell");
+      const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+      if (!shell || !flow) throw new Error("canvas shell missing");
+      const flowRect = flow.getBoundingClientRect();
+      const intersects = (rect: DOMRect) => rect.right > flowRect.left && rect.left < flowRect.right &&
+        rect.bottom > flowRect.top && rect.top < flowRect.bottom;
+      const visible = (element: Element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0 &&
+          rect.width > 0 && rect.height > 0 && intersects(rect);
+      };
+      const wrappers = [...document.querySelectorAll<HTMLElement>(".react-flow__node")];
+      const contents = [...document.querySelectorAll<HTMLElement>(
+        ".factory-node-compact, .factory-node-lod, .factory-node-stack-marker, .vein-node, .machine-node, .logistics-node, .power-node",
+      )];
+      const markers = [...document.querySelectorAll<HTMLElement>(".factory-node-stack-marker")];
+      const compacts = [...document.querySelectorAll<HTMLElement>(".factory-node-compact")];
+      const samples = contents.slice(0, 8).map((element) => {
+        const rect = element.getBoundingClientRect();
+        const parent = element.closest<HTMLElement>(".react-flow__node");
+        const parentRect = parent?.getBoundingClientRect();
+        const centerX = Math.max(flowRect.left, Math.min(flowRect.right - 1, rect.left + rect.width / 2));
+        const centerY = Math.max(flowRect.top, Math.min(flowRect.bottom - 1, rect.top + rect.height / 2));
+        const top = document.elementFromPoint(centerX, centerY);
+        const style = getComputedStyle(element);
+        const parentStyle = parent ? getComputedStyle(parent) : null;
+        return {
+          rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+          wrapper: parentRect ? { x: Math.round(parentRect.x), y: Math.round(parentRect.y), width: Math.round(parentRect.width), height: Math.round(parentRect.height) } : null,
+          display: style.display,
+          visibility: style.visibility,
+          opacity: style.opacity,
+          background: style.backgroundColor,
+          zIndex: style.zIndex,
+          wrapperOpacity: parentStyle?.opacity,
+          wrapperVisibility: parentStyle?.visibility,
+          topClass: top instanceof HTMLElement ? top.className : String(top?.nodeName ?? "none"),
+        };
+      });
+      const summarize = (elements: HTMLElement[]) => elements.reduce((summary, element) => {
+        const rect = element.getBoundingClientRect();
+        const parent = element.closest<HTMLElement>(".react-flow__node");
+        const parentRect = parent?.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        if (visible(element)) summary.intersecting += 1;
+        if (rect.width < 8 || rect.height < 6) summary.tiny += 1;
+        if (parentRect && (rect.width > parentRect.width + 1 || rect.height > parentRect.height + 1)) summary.outgrowsWrapper += 1;
+        summary.minWidth = Math.min(summary.minWidth, rect.width);
+        summary.maxWidth = Math.max(summary.maxWidth, rect.width);
+        summary.minHeight = Math.min(summary.minHeight, rect.height);
+        summary.maxHeight = Math.max(summary.maxHeight, rect.height);
+        summary.transforms.add(style.transform);
+        return summary;
+      }, {
+        intersecting: 0,
+        tiny: 0,
+        outgrowsWrapper: 0,
+        minWidth: Number.POSITIVE_INFINITY,
+        maxWidth: 0,
+        minHeight: Number.POSITIVE_INFINITY,
+        maxHeight: 0,
+        transforms: new Set<string>(),
+      });
+      const finish = (summary: ReturnType<typeof summarize>) => ({
+        ...summary,
+        minWidth: Number.isFinite(summary.minWidth) ? Math.round(summary.minWidth * 10) / 10 : 0,
+        maxWidth: Math.round(summary.maxWidth * 10) / 10,
+        minHeight: Number.isFinite(summary.minHeight) ? Math.round(summary.minHeight * 10) / 10 : 0,
+        maxHeight: Math.round(summary.maxHeight * 10) / 10,
+        transforms: [...summary.transforms].slice(0, 4),
+      });
+      return {
+        logicalVisible: Number(shell.dataset.canvasVisibleNodeCount ?? -1),
+        activeNodes: Number(shell.dataset.activePlanetNodeCount ?? -1),
+        stackGroups: Number(shell.dataset.canvasStackGroupCount ?? -1),
+        stackHidden: Number(shell.dataset.canvasStackHiddenCount ?? -1),
+        stackMarkers: Number(shell.dataset.canvasStackMarkerCount ?? -1),
+        wrapperCount: wrappers.length,
+        visibleWrappers: wrappers.filter(visible).length,
+        contentCount: contents.length,
+        visibleContents: contents.filter(visible).length,
+        markerDomCount: markers.length,
+        compactDomCount: compacts.length,
+        markerGeometry: finish(summarize(markers)),
+        compactGeometry: finish(summarize(compacts)),
+        samples,
+        viewportTransform: getComputedStyle(document.querySelector<HTMLElement>(".react-flow__viewport")!).transform,
+        nodesLayer: (() => {
+          const element = document.querySelector<HTMLElement>(".react-flow__nodes");
+          const style = element ? getComputedStyle(element) : null;
+          return { zIndex: style?.zIndex ?? "missing", opacity: style?.opacity ?? "missing", visibility: style?.visibility ?? "missing" };
+        })(),
+        beltLayer: (() => {
+          const element = document.querySelector<HTMLElement>(".canvas-belt-layer");
+          const style = element ? getComputedStyle(element) : null;
+          return { zIndex: style?.zIndex ?? "missing", opacity: style?.opacity ?? "missing", visibility: style?.visibility ?? "missing" };
+        })(),
+        flowSize: { width: Math.round(flowRect.width), height: Math.round(flowRect.height) },
+      };
+    });
+    console.log(`REAL_SAVE_CANVAS_METRICS ${JSON.stringify({ initialViewport, afterFitView, stackSize: stackTarget.count, centered: metrics })}`);
+    await page.screenshot({
+      path: `artifacts/qa/v146-real-save-${fixtureLabel}-minimal-marker-hover-core.png`,
+      fullPage: true,
+      animations: "disabled",
+    });
+
+    expect(metrics.logicalVisible).toBeGreaterThan(0);
+    expect(metrics.stackMarkers).toBeGreaterThan(0);
+    expect(metrics.markerDomCount).toBeGreaterThan(0);
+    expect(metrics.visibleContents).toBeGreaterThan(0);
+
+    if (runMatrix) {
+      const paintedAffordanceCount = () => page.evaluate(() => {
+        const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+        if (!flow) return 0;
+        const viewport = flow.getBoundingClientRect();
+        return [...document.querySelectorAll<HTMLElement>(".react-flow__node .factory-node:not(.factory-node-stack-proxy)")]
+          .filter((element) => {
+            const bounds = element.getBoundingClientRect();
+            const left = Math.max(viewport.left, bounds.left);
+            const right = Math.min(viewport.right, bounds.right);
+            const top = Math.max(viewport.top, bounds.top);
+            const bottom = Math.min(viewport.bottom, bounds.bottom);
+            if (right - left < 2 || bottom - top < 2) return false;
+            const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+            return Boolean(hit && (hit === element || element.contains(hit)));
+          }).length;
+      });
+      const centerStack = async () => {
+        await centerLargestCanvasStack(page);
+        await expect.poll(paintedAffordanceCount, { timeout: 90_000 }).toBeGreaterThan(0);
+      };
+      const detailOverlapMatrix: Array<{ detail: DetailPreference; overlap: OverlapPreference }> = [];
+      for (const detail of ["minimal", "medium", "auto", "full"] as const) {
+        for (const overlap of ["marker", "representative", "all"] as const) detailOverlapMatrix.push({ detail, overlap });
+      }
+      for (const entry of detailOverlapMatrix) {
+        await page.locator(".react-flow__pane").dispatchEvent("click");
+        await setCanvasSettings(page, { ...entry, interaction: "base" });
+        await centerStack();
+        const shell = page.locator(".game-shell");
+        if (entry.overlap === "marker") {
+          await expect.poll(() => page.locator(".factory-node-stack-marker").count(), { timeout: 90_000 }).toBeGreaterThan(0);
+        } else if (entry.overlap === "representative") {
+          await expect.poll(() => page.locator(".factory-node-stack-badge").count(), { timeout: 90_000 }).toBeGreaterThan(0);
+        } else {
+          await expect(shell).toHaveAttribute("data-canvas-stack-hidden-count", "0", { timeout: 90_000 });
+        }
+        await page.screenshot({
+          path: `artifacts/qa/v146-real-save-${fixtureLabel}-${entry.detail}-${entry.overlap}-base-1440x900.png`,
+          fullPage: true,
+          animations: "disabled",
+        });
+      }
+
+      for (const interaction of ["selected", "hover"] as const) {
+        await page.locator(".react-flow__pane").dispatchEvent("click");
+        await setCanvasSettings(page, { detail: "minimal", overlap: "representative", interaction });
+        await centerStack();
+        const node = page.locator(".react-flow__node").filter({ has: page.locator(".factory-node:not(.factory-node-stack-proxy)") }).first();
+        await expect(node).toBeVisible();
+        if (interaction === "selected") await node.click({ force: true });
+        else await node.hover({ force: true });
+        await expect(node).toHaveClass(/factory-flow-node--lod-full/, { timeout: 60_000 });
+        await page.screenshot({
+          path: `artifacts/qa/v146-real-save-${fixtureLabel}-minimal-representative-${interaction}-1440x900.png`,
+          fullPage: true,
+          animations: "disabled",
+        });
+      }
+
+      const mobileGates = [
+        { viewport: { width: 390, height: 844 }, detail: "minimal" as const, overlap: "marker" as const, interaction: "hover" as const, name: "390x844" },
+        { viewport: { width: 360, height: 640 }, detail: "auto" as const, overlap: "marker" as const, interaction: "base" as const, name: "360x640" },
+        { viewport: { width: 844, height: 390 }, detail: "medium" as const, overlap: "representative" as const, interaction: "selected" as const, name: "844x390" },
+      ];
+      for (const gate of mobileGates) {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await setCanvasSettings(page, gate);
+        await page.setViewportSize(gate.viewport);
+        await page.locator(".react-flow__controls-fitview").dispatchEvent("click");
+        await expect.poll(paintedAffordanceCount, { timeout: 90_000 }).toBeGreaterThan(0);
+        await page.screenshot({
+          path: `artifacts/qa/v146-real-save-${fixtureLabel}-${gate.detail}-${gate.overlap}-${gate.interaction}-${gate.name}.png`,
+          fullPage: true,
+          animations: "disabled",
+        });
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+    expect(pageErrors).toEqual([]);
+  });
+});

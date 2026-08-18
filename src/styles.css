@@ -2516,7 +2516,12 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 }
 
 .factory-canvas[data-detail-stage="compact"] .react-flow__viewport {
-  contain: layout style paint;
+  /* React Flow translates this element by the world viewport. Paint
+     containment clips children to that translated box instead of the visible
+     renderer, which can erase every compact card while Canvas belts remain.
+     Style containment keeps the cheap isolation without changing hit-testing
+     or clipping node paint. */
+  contain: style;
   will-change: transform;
 }
 
@@ -2539,14 +2544,14 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   z-index: 2;
 }
 
-.factory-node-lod {
+.factory-node.factory-node-lod {
   position: relative;
   width: 224px;
   min-height: 68px;
   padding: 10px 12px;
 }
 
-.factory-node-lod--medium {
+.factory-node.factory-node-lod--medium {
   width: 244px;
   min-height: 118px;
 }
@@ -2595,7 +2600,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   height: 14px;
 }
 
-.factory-node-compact {
+.factory-node.factory-node-compact {
   position: relative;
   display: flex;
   align-items: center;
@@ -2638,7 +2643,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   height: 10px;
 }
 
-.factory-node-stack-proxy {
+.factory-node.factory-node-stack-proxy {
   position: relative;
   width: 96px;
   min-height: 32px;
@@ -2661,6 +2666,111 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   pointer-events: none;
   opacity: 0;
 }
+
+.factory-node.factory-node-stack-marker {
+  position: relative;
+  width: 88px;
+  min-height: 44px;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  contain: layout style;
+  transform: scale(var(--canvas-stack-marker-inverse-zoom, 1));
+  transform-origin: center;
+}
+
+.factory-node-stack-marker__action {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  padding: 0 10px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 9px;
+  text-align: left;
+}
+
+.factory-node-stack-marker__action::before {
+  position: absolute;
+  z-index: -1;
+  inset: 7px 4px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 62%, var(--line));
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .28), 0 0 0 1px rgba(98, 181, 174, .06);
+  content: "";
+  pointer-events: none;
+}
+
+.factory-node-stack-marker__action:hover,
+.factory-node-stack-marker__action:focus-visible {
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+
+.factory-node-stack-marker__action:hover::before,
+.factory-node-stack-marker__action:focus-visible::before {
+  border-color: color-mix(in srgb, var(--cyan) 82%, var(--line));
+  background: color-mix(in srgb, var(--cyan) 13%, var(--surface-raised));
+}
+
+.factory-node-stack-marker__action:focus-visible::before {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--cyan) 72%, transparent), 0 2px 8px rgba(0, 0, 0, .28);
+}
+
+.factory-node-stack-marker__action > svg {
+  position: relative;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  color: var(--cyan);
+}
+.factory-node-stack-marker__action > strong {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factory-node-stack-marker__action > em {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  color: #ffd28a;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.factory-node-stack-marker--alert .factory-node-stack-marker__action::before {
+  border-color: rgba(255, 177, 72, .92);
+  box-shadow: 0 0 0 2px rgba(255, 177, 72, .16), 0 2px 8px rgba(0, 0, 0, .28);
+}
+
+.factory-node-stack-marker .factory-node-lod__handle {
+  width: 10px;
+  height: 10px;
+}
+
+.factory-flow-node--stack-halo { z-index: 6 !important; }
 
 .factory-node-stack-halo {
   position: absolute;
@@ -2688,6 +2798,12 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   font-size: 9px;
   font-weight: 800;
   cursor: pointer;
+}
+
+.factory-node-stack-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 .factory-node-stack-halo--alert {
@@ -2774,6 +2890,31 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin: 8px 0 0;
+}
+
+.canvas-detail-control {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.canvas-detail-control > strong {
+  color: var(--text-soft);
+  font-size: 9px;
+  letter-spacing: .03em;
+}
+
+.canvas-detail-control > small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.settings-canvas-detail .settings-segmented button {
+  flex: 1 1 88px;
+  min-width: 0;
 }
 
 .canvas-detail-diagnostics > div {
@@ -5204,12 +5345,19 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 .batch-connection-panel dd { margin: 0; color: var(--text-soft); font-size: 9px; }
 .batch-connection-panel > p { margin: 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
 .batch-connection-panel > ol { display: grid; max-height: 132px; overflow-y: auto; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.batch-connection-panel > ol li { display: grid; grid-template-columns: auto minmax(0, 1fr) 28px; align-items: center; gap: 7px; padding: 5px 6px; background: #16221e; font-size: 8px; }
-.batch-connection-panel > ol li span { color: var(--cyan); }
-.batch-connection-panel > ol li strong { overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
-.batch-connection-panel > ol li button { display: grid; width: 28px; height: 28px; place-items: center; color: var(--muted); }
+.batch-connection-panel > ol li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 6px; background: #16221e; font-size: 8px; }
+.batch-connection-panel > ol li.is-invalid { border-left: 2px solid var(--coral); background: #2a1b18; }
+.batch-connection-candidate__copy { display: grid; min-width: 0; gap: 2px; }
+.batch-connection-candidate__copy span { color: var(--cyan); }
+.batch-connection-candidate__copy strong { overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
+.batch-connection-candidate__copy small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.batch-connection-candidate__copy em { color: var(--coral); font-size: 8px; font-style: normal; }
+.batch-connection-candidate__actions { display: flex; gap: 4px; }
+.batch-connection-candidate__actions button { display: inline-flex; min-width: 32px; min-height: 32px; align-items: center; justify-content: center; gap: 3px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); font-size: 8px; }
+.batch-connection-candidate__actions button:hover { color: var(--text-soft); }
 .batch-connection-panel__error { color: var(--coral) !important; }
-.batch-connection-panel footer { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 6px; }
+.batch-connection-panel__feedback { color: var(--yellow) !important; }
+.batch-connection-panel footer { display: grid; grid-template-columns: 1.2fr repeat(3, 1fr); gap: 6px; }
 .batch-connection-panel footer button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface-raised); color: var(--text-soft); font-size: 8px; }
 .batch-connection-panel footer button.primary { border-color: #4d7d69; color: var(--green); }
 .batch-connection-panel footer button:disabled { opacity: .4; }

@@ -2,6 +2,105 @@ import { expect, test } from "@playwright/test";
 import { createInitialState } from "../../src/game/engine";
 import { serializeEnvelope } from "../../src/game/storage";
 
+test("default save protection rejects edits without pausing a running autosave", async ({ page }) => {
+  test.setTimeout(60_000);
+  const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
+  await page.addLocatorHandler(offlineReport, async () => {
+    await offlineReport.getByRole("button", { name: "确认结算" }).click({ force: true });
+  });
+  const state = createInitialState(46_146);
+  state.paused = false;
+  state.settings.autosaveIntervalSeconds = 30;
+  const raw = serializeEnvelope(state, Date.now());
+
+  await page.addInitScript(({ saveRaw }) => {
+    sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
+    localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
+    localStorage.setItem("dsp-idle-network.save.allow-edits-during-save.v1", "false");
+    localStorage.setItem("dsp-idle-network.save.v1", saveRaw);
+    (window as typeof window & { __DSP_RUNTIME_TRANSITIONS__?: unknown }).__DSP_RUNTIME_TRANSITIONS__ = {
+      enabled: true,
+      events: [],
+      active: {},
+      counters: {},
+    };
+
+    const autosaveHandlers: TimerHandler[] = [];
+    (window as typeof window & { __v146AutosaveHandlers?: TimerHandler[] }).__v146AutosaveHandlers = autosaveHandlers;
+    const nativeSetInterval = window.setInterval.bind(window);
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 30_000) {
+        autosaveHandlers.push(handler);
+        return 0 as unknown as ReturnType<typeof window.setInterval>;
+      }
+      return nativeSetInterval(handler, timeout, ...args);
+    }) as typeof window.setInterval;
+
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args) as Worker;
+        const url = String(args[0]);
+        const simulation = url.includes("simulation.worker") && (args[1] as WorkerOptions | undefined)?.name === "factory-simulation";
+        const save = url.includes("save.worker");
+        const nativePostMessage = worker.postMessage.bind(worker);
+        worker.postMessage = ((message: Record<string, unknown>, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
+          const delay = simulation && message.kind === "checkpoint" ? 350 : save ? 900 : 0;
+          const post = () => {
+            if (transferOrOptions === undefined) nativePostMessage(message);
+            else nativePostMessage(message, transferOrOptions);
+          };
+          if (delay > 0) window.setTimeout(post, delay);
+          else post();
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+  }, { saveRaw: raw });
+
+  await page.goto("/");
+  const shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable");
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active");
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+
+  await page.getByLabel("打开设置").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
+  await operations.getByRole("button", { name: "立即保存" }).click();
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "true", { timeout: 5_000 });
+  await operations.getByLabel("关闭运营中心").click();
+  await page.getByLabel("暂停模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+  await expect(shell).toHaveAttribute("data-primary-save-rejected-edits", "1");
+  await expect(page.locator(".game-notice")).toContainText("本次操作未应用");
+  await expect(shell).toHaveAttribute("data-persistence-kind", "manual");
+  await expect(shell).toHaveAttribute("data-persistence-phase", "complete", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
+
+  await page.getByLabel("暂停模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "true");
+  await page.getByLabel("继续模拟").click();
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+
+  await page.evaluate(() => {
+    const handlers = (window as typeof window & { __v146AutosaveHandlers?: TimerHandler[] }).__v146AutosaveHandlers ?? [];
+    if (handlers.length === 0) throw new Error("autosave interval handler missing");
+    for (const handler of handlers) {
+      if (typeof handler === "function") handler();
+    }
+  });
+  await expect(shell).toHaveAttribute("data-persistence-kind", "autosave", { timeout: 5_000 });
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+  await expect(shell).toHaveAttribute("data-persistence-phase", "complete", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active");
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+});
+
 test("manual, autosave, and return publish ordered non-blocking persistence phases", async ({ page }) => {
   test.setTimeout(60_000);
   const state = createInitialState(44_145);
@@ -16,6 +115,10 @@ test("manual, autosave, and return publish ordered non-blocking persistence phas
     sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
+    // This case intentionally resumes while the accelerated autosave may be
+    // in flight. Opt into the documented durable-edit mode; the preceding
+    // test covers the default protection mode and its rejected-edit contract.
+    localStorage.setItem("dsp-idle-network.save.allow-edits-during-save.v1", "true");
     localStorage.setItem("dsp-idle-network.save.v1", saveRaw);
     (window as typeof window & { __DSP_RUNTIME_TRANSITIONS__?: unknown }).__DSP_RUNTIME_TRANSITIONS__ = {
       enabled: true,

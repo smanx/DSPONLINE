@@ -180,6 +180,50 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
     });
   });
 
+  test("keeps a legacy recovery checkpoint usable when telemetry contains JSON null", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const engine = await import("/src/game/engine.ts");
+      const recovery = await import("/src/game/pureIdleRecovery.ts");
+      const state = engine.createInitialState(20_260_809, false);
+      const created = await recovery.createPureIdleRecovery(state, "stable", 1_000, "telemetry-owner", 1_000);
+      if (!created.ok) throw new Error(created.message);
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("dsp-idle-network.pure-idle-recovery", 1);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction("records", "readwrite");
+        const store = transaction.objectStore("records");
+        const request = store.get("checkpoint");
+        request.onsuccess = () => {
+          const checkpoint = request.result;
+          checkpoint.state.productionHistory = [null, {
+            elapsedSeconds: 20,
+            productionPerMinute: { iron_ingot: 30 },
+            consumptionPerMinute: {},
+            inventory: {},
+          }];
+          store.put(checkpoint);
+        };
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      db.close();
+
+      const read = await recovery.readPureIdleRecovery();
+      const inspection = await recovery.inspectPureIdleRecovery();
+      await recovery.clearPureIdleRecovery(created.record.sessionId, "telemetry-owner");
+      return {
+        historyLength: read?.state.productionHistory.length,
+        historyElapsedSeconds: read?.state.productionHistory[0]?.elapsedSeconds,
+        status: inspection.status,
+      };
+    });
+
+    expect(result).toEqual({ historyLength: 1, historyElapsedSeconds: 20, status: "valid" });
+  });
+
   test("commits a grace-limited macro candidate before settling the ordinary offline remainder", async ({ page }) => {
     const result = await page.evaluate(async () => {
       const contentPacks = await import("/src/game/contentPacks.ts");

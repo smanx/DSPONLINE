@@ -13,6 +13,12 @@ import type {
 } from "./pureIdleMacroProtocol";
 import { decodeVerifiedSaveTransfer, serializeSaveEnvelopeToTransfer } from "./saveTransfer";
 import type { GameState } from "./types";
+import type { WorkerBinaryPayload } from "./workerBinaryPayload";
+
+function arrayBufferPayload(payload: WorkerBinaryPayload): ArrayBuffer {
+  if (!(payload instanceof ArrayBuffer)) throw new Error("test fixture expected ArrayBuffer transport");
+  return payload;
+}
 
 class FakeWorker {
   onmessage: ((event: MessageEvent<PureIdleMacroWorkerResponse>) => void) | null = null;
@@ -142,7 +148,7 @@ describe("pure idle final envelope ownership", () => {
     installWorker(worker);
     const state = createInitialState(44, false);
     const response = finalizedResponse(state);
-    const originalPayloadBytes = response.finalEnvelope.payloadBytes;
+    const originalPayloadBytes = arrayBufferPayload(response.finalEnvelope.payloadBytes);
     const terminalState = {
       startedPaused: true,
       baselineIdleSettlement: structuredClone(state.idleSettlement),
@@ -173,7 +179,7 @@ describe("pure idle final envelope ownership", () => {
       beltCount: result.state.belts.length,
       elapsedSeconds: result.state.elapsedSeconds,
     });
-    expect(decodeVerifiedSaveTransfer(result.finalEnvelope.payloadBytes, result.finalEnvelope.verification))
+    expect(decodeVerifiedSaveTransfer(arrayBufferPayload(result.finalEnvelope.payloadBytes), result.finalEnvelope.verification))
       .toContain(`"checksum":"${result.finalEnvelope.verification.stateChecksum}"`);
     client.close();
   });
@@ -190,13 +196,48 @@ describe("pure idle final envelope ownership", () => {
     });
     const malformedState = { ...state, research: undefined } as unknown as GameState;
     const response = finalizedResponse(malformedState);
-    new Uint8Array(response.finalEnvelope.payloadBytes)[0] ^= 1;
+    new Uint8Array(arrayBufferPayload(response.finalEnvelope.payloadBytes))[0] ^= 1;
     const pending = client.finalizeEnvelope(60, { terminal: true });
     expect(worker.request).toMatchObject({ type: "finalize", targetWallSeconds: 60, terminal: true });
     worker.respond(response);
     const result = await pending;
     expect(result.finalEnvelope.payloadBytes).toBe(response.finalEnvelope.payloadBytes);
     expect(result.summary).toBe(response.summary);
+    client.close();
+  });
+
+  it("accepts an immutable Blob terminal carrier without adopting its backing bytes", async () => {
+    const worker = new FakeWorker();
+    installWorker(worker);
+    const state = createInitialState(144, false);
+    const client = new PureIdleMacroClient();
+    await initializeClient(client, worker, state, {
+      startedPaused: false,
+      baselineIdleSettlement: structuredClone(state.idleSettlement),
+      baselineTotalProduced: structuredClone(state.totalProduced),
+    });
+    const arrayResponse = finalizedResponse(state);
+    const sourceBytes = arrayBufferPayload(arrayResponse.finalEnvelope.payloadBytes);
+    const payloadBlob = new Blob([sourceBytes], { type: "application/json" });
+    const response: Extract<PureIdleMacroWorkerResponse, { type: "finalized" }> = {
+      ...arrayResponse,
+      finalEnvelope: { ...arrayResponse.finalEnvelope, payloadBytes: payloadBlob },
+    };
+    const pending = client.finalizeEnvelope(60, {
+      terminal: true,
+      binaryTransport: "blob",
+    });
+    expect(worker.request).toMatchObject({
+      type: "finalize",
+      targetWallSeconds: 60,
+      terminal: true,
+      binaryTransport: "blob",
+    });
+    worker.respond(response);
+    const result = await pending;
+    expect(result.finalEnvelope.payloadBytes).toBe(payloadBlob);
+    expect(payloadBlob.size).toBe(sourceBytes.byteLength);
+    expect(result.rawBytes).toBe(sourceBytes.byteLength);
     client.close();
   });
 
@@ -208,7 +249,7 @@ describe("pure idle final envelope ownership", () => {
       research: undefined,
     } as unknown as GameState;
     const malformedResponse = finalizedResponse(malformedState);
-    const malformedBytes = malformedResponse.finalEnvelope.payloadBytes;
+    const malformedBytes = arrayBufferPayload(malformedResponse.finalEnvelope.payloadBytes);
     const malformedClient = new PureIdleMacroClient();
     await initializeClient(malformedClient, malformedWorker, createInitialState(145, false));
     const malformedPending = malformedClient.finalize(60);
@@ -217,7 +258,7 @@ describe("pure idle final envelope ownership", () => {
     expect(parseError).toMatchObject({ code: "operation", recoverable: true });
     expect(parseError.finalEnvelope?.payloadBytes).toBe(malformedBytes);
     expect(decodeVerifiedSaveTransfer(
-      parseError.finalEnvelope!.payloadBytes,
+      arrayBufferPayload(parseError.finalEnvelope!.payloadBytes),
       parseError.finalEnvelope!.verification,
     )).toContain(`"checksum":"${parseError.finalEnvelope!.verification.stateChecksum}"`);
     malformedClient.close();
@@ -229,7 +270,7 @@ describe("pure idle final envelope ownership", () => {
     const identityResponse = finalizedResponse(state, {
       identity: { ...validEnvelope.identity, entityCount: validEnvelope.identity.entityCount + 1 },
     });
-    const identityBytes = identityResponse.finalEnvelope.payloadBytes;
+    const identityBytes = arrayBufferPayload(identityResponse.finalEnvelope.payloadBytes);
     const identityClient = new PureIdleMacroClient();
     await initializeClient(identityClient, identityWorker, state);
     const identityPending = identityClient.finalize(60);

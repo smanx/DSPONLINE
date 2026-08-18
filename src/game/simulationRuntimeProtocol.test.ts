@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createInitialState } from "./engine";
 import {
   applySimulationCommandPatch,
+  createSimulationStateIdentity,
   createSimulationCommandPatch,
   deserializeSimulationStateTransfer,
   serializeSimulationStateCheckpoint,
   serializeSimulationStateForTransfer,
   validateSimulationStateCheckpoint,
+  validateSimulationStateTransferIdentity,
 } from "./simulationRuntimeProtocol";
 
 describe("authoritative simulation runtime protocol", () => {
@@ -30,6 +32,17 @@ describe("authoritative simulation runtime protocol", () => {
     expect(() => validateSimulationStateCheckpoint(checkpoint, { entities: [], belts: null })).toThrow(/结构/);
   });
 
+  it("validates a bounded Worker identity without decoding the checkpoint body", () => {
+    const state = createInitialState(14_046);
+    state.elapsedSeconds = 123;
+    state.paused = false;
+    const transfer = serializeSimulationStateForTransfer(state);
+    const identity = createSimulationStateIdentity(state);
+    expect(validateSimulationStateTransferIdentity(transfer, identity)).toEqual(identity);
+    expect(() => validateSimulationStateTransferIdentity(transfer, { ...identity, entityCount: -1 })).toThrow(/身份/);
+    expect(() => validateSimulationStateTransferIdentity({ ...transfer, byteLength: transfer.byteLength + 1 }, identity)).toThrow(/长度/);
+  });
+
   it("round-trips player commands without carrying unchanged runtime fields", () => {
     const previous = createInitialState(14_044);
     const current = structuredClone(previous);
@@ -40,6 +53,42 @@ describe("authoritative simulation runtime protocol", () => {
     expect(patch).not.toBeNull();
     expect(patch?.baseRevision).toBe(7);
     expect(applySimulationCommandPatch(previous, patch!)).toEqual(current);
+  });
+
+  it("does not scan shared entity and belt arrays for a top-level-only command", () => {
+    const base = createInitialState(14_046);
+    let entityIdReads = 0;
+    const guardedEntity = { ...base.entities[0] };
+    const entityId = guardedEntity.id;
+    Object.defineProperty(guardedEntity, "id", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        entityIdReads += 1;
+        return entityId;
+      },
+    });
+    const entities = [guardedEntity];
+    const belts = base.belts;
+    const previous = { ...base, entities, belts };
+    const current = {
+      ...previous,
+      planetViewports: {
+        ...previous.planetViewports,
+        [previous.activePlanetId]: { x: 321, y: 123, zoom: 0.75 },
+      },
+    };
+
+    const patch = createSimulationCommandPatch(previous, current, 12);
+
+    expect(patch?.topLevelChanges).toEqual([
+      { path: ["planetViewports", previous.activePlanetId, "x"], operation: "set", value: 321 },
+      { path: ["planetViewports", previous.activePlanetId, "y"], operation: "set", value: 123 },
+      { path: ["planetViewports", previous.activePlanetId, "zoom"], operation: "set", value: 0.75 },
+    ]);
+    expect(patch?.changedEntities).toEqual([]);
+    expect(patch?.changedBelts).toEqual([]);
+    expect(entityIdReads).toBe(0);
   });
 
   it("preserves concurrent Worker leaves that a stale UI command did not touch", () => {

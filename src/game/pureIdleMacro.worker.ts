@@ -20,6 +20,10 @@ import type {
   PureIdleMacroWorkerResponse,
 } from "./pureIdleMacroProtocol";
 import { serializeSaveEnvelopeToTransfer } from "./saveTransfer";
+import {
+  createImmutableWorkerBinaryPayload,
+  workerBinaryPayloadTransferables,
+} from "./workerBinaryPayload";
 
 export type { PureIdleMacroWorkerRequest, PureIdleMacroWorkerResponse } from "./pureIdleMacroProtocol";
 
@@ -158,12 +162,16 @@ async function processRequest(request: PureIdleMacroWorkerRequest): Promise<void
       settledSimulationSeconds: result.summary.settledSimulationSeconds,
       registryFingerprint: sessionContext.registryFingerprint,
     };
+    const payloadBytes = createImmutableWorkerBinaryPayload(
+      serialized.bytes,
+      request.binaryTransport ?? "array-buffer",
+    );
     self.postMessage({
       id: request.id,
       type: "finalized",
       summary: result.summary,
       finalEnvelope: {
-        payloadBytes: serialized.bytes,
+        payloadBytes,
         verification: {
           integrity: serialized.integrity,
           stateChecksum: serialized.stateChecksum,
@@ -173,7 +181,7 @@ async function processRequest(request: PureIdleMacroWorkerRequest): Promise<void
         identity,
       },
       durationMs: Math.max(0, performance.now() - startedAt),
-    } satisfies PureIdleMacroWorkerResponse, [serialized.bytes]);
+    } satisfies PureIdleMacroWorkerResponse, workerBinaryPayloadTransferables(payloadBytes));
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       self.postMessage({

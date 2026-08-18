@@ -100,7 +100,10 @@ test("micro black hole operation intent survives Worker, IndexedDB, export, and 
     const syncRaw = storage.serializeEnvelope(normalizedState, savedAt);
     const worker = await storage.serializeEnvelopeInWorker(normalizedState, savedAt + 1);
     const indexedDb = await storage.saveGameVerified(normalizedState);
-    const indexedDbState = storage.loadGame("normal").state;
+    const localSaveStore = await import("/src/game/localSaveStore.ts");
+    const indexedDbRaw = await localSaveStore.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    const indexedDbState = indexedDbRaw ? storage.importGame(indexedDbRaw, "normal", "main") : null;
+    if (!indexedDbState) throw new Error("verified IndexedDB primary did not reload");
     const exported = storage.exportGame(normalizedState);
     const imported = storage.importGame(exported)!;
     const cloud = await offline.prepareCloudUploadInWorker(syncRaw, { now: savedAt + 2_000 });
@@ -166,7 +169,10 @@ test("paused normal save can add exactly one second unipolar vein after snapshot
 
   const persisted = await page.evaluate(async () => {
     const storage = await import("/src/game/storage.ts");
-    const loaded = storage.loadGame("normal").state;
+    const localSaveStore = await import("/src/game/localSaveStore.ts");
+    const raw = await localSaveStore.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    const loaded = raw ? storage.importGame(raw, "normal", "main") : null;
+    if (!loaded) throw new Error("verified IndexedDB primary did not reload");
     const veins = loaded.entities.filter((entity) => entity.kind === "vein" && entity.resourceId === "unipolar_magnet");
     const added = veins.find((entity) => entity.id === "ashen_unipolar_secondary");
     return {
@@ -324,4 +330,3 @@ test("bounded canvas matrix covers paused/running pan, zoom, selections, inspect
   expect(metrics.every((metric) => metric.domNodes > 0)).toBe(true);
   console.info("V138_CANVAS_MATRIX", JSON.stringify(metrics));
 });
-

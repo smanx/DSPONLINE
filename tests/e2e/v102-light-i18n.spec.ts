@@ -110,10 +110,11 @@ test("English light release notes are localized and persist dismissal", async ({
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?menu=1&lang=en");
-  const dialog = page.getByRole("dialog", { name: "Save Recovery and Simulation Worker Hotfix" });
+  const dialog = page.getByRole("dialog", { name: "Save Stability and Mobile Belt Batch Hotfix" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("1.0.46");
-  await expect(dialog).toContainText("Exact in-page recovery");
+  await expect(dialog).toContainText("Autosaves keep simulation running");
+  await expect(dialog).toContainText("Mobile continuous connections no longer block the map");
   expect(await visibleHanStrings(dialog)).toEqual([]);
   await dialog.getByRole("button", { name: "Got it" }).click();
   await expect(dialog).toHaveCount(0);
@@ -176,4 +177,3 @@ test("English light next-mobile shell keeps navigation and settings reachable", 
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/v102-english-light-mobile-390x844.png", fullPage: true });
 });
-

@@ -25,7 +25,7 @@ async function enterDurableFactory(page: Page, path = "/?menu=1") {
   await page.getByRole("button", { name: "继续游戏" }).click();
   const shell = page.locator(".game-shell");
   await expect(shell).toBeVisible({ timeout: 15_000 });
-  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
   return shell;
 }
@@ -502,4 +502,3 @@ test("Dyson layer copy and paste uses UI clipboard without copying construction 
   await expect(pastedProgress.nth(1)).toHaveAttribute("aria-label", "24");
   await page.screenshot({ path: "artifacts/qa/v090-dyson-layer-copy.png", fullPage: true });
 });
-

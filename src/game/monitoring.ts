@@ -5,6 +5,15 @@ let installed = false;
 let queuedLongTasks: Array<Omit<ClientErrorRecord, "id" | "occurredAt">> = [];
 let longTaskFlushTimer: number | null = null;
 
+const BENIGN_RESIZE_OBSERVER_ERRORS = new Set([
+  "ResizeObserver loop limit exceeded",
+  "ResizeObserver loop completed with undelivered notifications.",
+]);
+
+export function isBenignResizeObserverError(message: string): boolean {
+  return BENIGN_RESIZE_OBSERVER_ERRORS.has(message.trim());
+}
+
 function report(kind: "error" | "rejection" | "long-task", message: string, stack?: string, location?: string): void {
   const entry = recordClientError({ kind, message: message.slice(0, 4000), stack: stack?.slice(0, 8000), location });
   void reportCloudError(entry.message, {
@@ -54,7 +63,19 @@ export function installClientMonitoring(): void {
   if (installed || typeof window === "undefined") return;
   installed = true;
   window.addEventListener("pagehide", flushQueuedLongTasks);
-  window.addEventListener("error", (event) => report("error", event.message || "未知脚本错误", event.error instanceof Error ? event.error.stack : undefined, `${event.filename}:${event.lineno}:${event.colno}`));
+  window.addEventListener("error", (event) => {
+    // Chromium emits these two exact messages when a ResizeObserver needs a
+    // follow-up frame after viewport/orientation/font changes. They do not
+    // represent an application exception and must not pollute diagnostics or
+    // trigger Vite's development error overlay. Keep every other ErrorEvent
+    // reportable so real layout/runtime failures remain visible.
+    if (isBenignResizeObserverError(event.message)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    report("error", event.message || "未知脚本错误", event.error instanceof Error ? event.error.stack : undefined, `${event.filename}:${event.lineno}:${event.colno}`);
+  }, { capture: true });
   window.addEventListener("unhandledrejection", (event) => {
     const reason = event.reason;
     report("rejection", reason instanceof Error ? reason.message : String(reason), reason instanceof Error ? reason.stack : undefined);

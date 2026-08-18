@@ -196,7 +196,9 @@ test("automatic dense mode falls back to complete React Flow edges when Canvas i
   await expect(page.locator(".game-shell")).toHaveAttribute("data-canvas-auto-dense", "true");
   await expect(page.locator(".factory-canvas")).toHaveAttribute("data-batch-renderer", "false");
   await expect(page.locator("canvas.canvas-belt-layer")).toHaveCount(0);
-  expect(await page.locator(".react-flow__edge").count()).toBeGreaterThan(100);
-  expect(await page.locator(".factory-edge-visual-layer").count()).toBe(await page.locator(".react-flow__edge").count());
+  await expect.poll(async () => {
+    const edgeCount = await page.locator(".react-flow__edge").count();
+    const visualLayerCount = await page.locator(".factory-edge-visual-layer").count();
+    return edgeCount > 100 && visualLayerCount === edgeCount;
+  }).toBe(true);
 });
-

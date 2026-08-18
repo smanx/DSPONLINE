@@ -278,6 +278,16 @@ sudo systemctl restart dsp-idle-cloud.service
 
 如果启动审计发现 malformed alias 或 SQLite `typeof(payload) != 'text'`，自动 cleanup 会 fail-closed 并暂留 orphan；不得用手工 SQL 改成“完整”或直接删除 blob。Release 应在只读备份副本/临时 SQLite 上运行维护审计定位问题，再另行取得数据维护授权。`app_state` metadata checksum 与实际 alias 不一致时，以实际 alias 计入在线引用，metadata 不会被本热修改写。
 
+### 云正文缺失别名的离线恢复
+
+`server/cloud-payload-recovery.mjs` 是专门的事故恢复入口，不属于 `cloud-payload-maintenance.mjs` 的 backfill、materialize 或 GC 功能。默认 dry-run 使用只读 SQLite 和 `query_only`；它只统计普通模式主档历史元数据中缺失的 `(user_id, 'main', revision)` 别名。模式判定必须与服务端一致：显式 normal、没有速通身份标记的旧版无 `mode` 存档都属于 normal，显式或可证明的 legacy speedrun 仍拒绝。每条候选必须同时满足历史 revision/checksum/size、Blob 或源正文大小、SHA-256、envelope v2 完整性与 normal 模式。任何已有逻辑行都跳过，绝不覆盖 direct body 或 alias；缺 Blob、哈希/大小不符、损坏 envelope、非普通模式或没有匹配历史的当前主档一律只报告，不能凭元数据伪造正文。
+
+执行顺序固定为：先在只读副本 dry-run 记录候选数量和确认文字；停止 API 写入服务；创建并验证与停服库 `app_state` 精确一致、`quick_check=ok` 的 SQLite 备份；再以 dry-run 返回的 `RELINK_CLOUD_PAYLOAD_ALIASES:<previewId>` 和 `--service-stopped` 应用。若当前库缺 Blob 但事故前快照有精确正文，必须显式传入 `--body-source <snapshot> --body-source-sha256 <full-sha256> --current-only`；apply 前会重新完整哈希来源、核对停写生产备份和来源/目标 `quick_check`。该路径只对当前普通主档执行，事务内再次核对完整 `app_state` 指纹、候选主键和既有 Blob 内容；只会无冲突插入缺失 Blob 与 alias，绝不写源快照的 `app_state`、用户、排行榜、限制状态或已有正文。若预览后玩家上传了更高 revision，`app_state` 指纹或主键占用会使旧确认被拒绝；该情况下重新 dry-run，而不是覆盖新主档。恢复后重启服务并复核 `/api/ready`，重复执行应报告零候选。
+
+旧 `storageLayoutVersion` 的迁移现在只允许在 `cloud_save_payloads` 和 `cloud_save_payload_blobs` 都为空时执行删除；任一表非空会以 `CLOUD_PAYLOAD_LEGACY_MIGRATION_DELETE_BLOCKED` 中止启动。不要为了通过启动而清空表或手工修改 metadata，应保留原库并走上述专门恢复或经验证备份恢复路径。
+
+SQLite 启动审计及 `/api/ready.currentMainPayloads` 会返回无身份信息的当前普通主档聚合计数（检查数、可寻址正文数、缺失行/Blob、metadata 不匹配等）。这用于发现“元数据仍在但正文无法寻址”的事故；它不暴露账号、revision、checksum 或正文，也不自动解除排行榜限制。该 ready 计数检查 alias/Blob 地址和元数据，不代替离线恢复入口对 Blob SHA-256 与 envelope 的完整验证。
+
 香港 `PUT /api/cloud-save` 维护锁已在 2026-08-14 热修切换、观察和真实上传验证后由 Release 明确解除；当前 telemetry 202 熔断与云存档维护锁相互独立。若后续故障重新启用维护锁，必须保持到以下条件全部满足：不可变 Web/API 制品和 aggregate manifest 复算一致；未激活 API 使用临时 SQLite 通过 health/ready、共享 blob、21 次裁剪和故障回滚 smoke；正式切换后 readiness、backlog、WAL/磁盘、延迟和错误率完成约定观察；Release 再次明确解除。开发完成本身不是解锁授权。代码回滚只切回已验证 API/Web 制品，绝不恢复数据库。上海、下载页、Android 和 Windows 不在该香港热修发布范围；完整状态见 [1.0.41 发布记录](./releases/1.0.41.md)。
 
 账号处置先用 `GET /api/admin/account?accountId=...` 核对精确账号摘要，再向 `POST /api/admin/account/action` 提交 `CONFIRM:<action>:<accountId>`。彻底注销还要求最近 24 小时内的已验证本机备份时间戳；不得用显示名、邮箱模糊匹配或直接编辑 SQLite。速通历史恢复只能离线运行 `server/speedrun-recovery.mjs`：先 dry-run 核对最新主云 revision、元数据/正文哈希、v46 速通身份和百万白糖事实；apply 前停止服务，并提供匹配 `quick_check` 备份及 `RECOVER_SPEEDRUN:<account>:<revision>`。该工具只写内部提交和最小化审计，不改云存档正文；完成后重启并复核一次，重复执行必须无变化。

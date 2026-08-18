@@ -1813,10 +1813,13 @@ test("a second titanium alloy input line transfers after the first line", async 
   await page.setViewportSize({ width: 1440, height: 900 });
   await openTitaniumRoutingGame(page);
   await page.locator(".react-flow__controls-fitview").click();
+  await page.getByLabel("折叠小地图").click();
   const target = page.locator('.react-flow__node[data-id="alloy_target"] .machine-node');
   const connect = async (sourceId: string, itemText: string, expectedEdges: number) => {
     const source = page.locator(`.react-flow__node[data-id="${sourceId}"]`).locator(".node-port").filter({ hasText: itemText }).locator(".factory-handle--output");
     const input = target.locator(".node-port--input").filter({ hasText: itemText }).locator(".factory-handle--input");
+    await expect(source).toBeVisible();
+    await expect(input).toBeVisible();
     const sourceBox = await source.boundingBox();
     const inputBox = await input.boundingBox();
     expect(sourceBox).not.toBeNull();
@@ -1841,12 +1844,17 @@ test("rapid consecutive belt drags keep the second connection instead of using s
   await page.setViewportSize({ width: 1440, height: 900 });
   await openTitaniumRoutingGame(page);
   await page.locator(".react-flow__controls-fitview").click();
+  await page.getByLabel("折叠小地图").click();
   const target = page.locator('.react-flow__node[data-id="alloy_target"] .machine-node');
   const dragConnection = async (sourceId: string, itemText: string) => {
     const source = page.locator(`.react-flow__node[data-id="${sourceId}"]`).locator(".node-port").filter({ hasText: itemText }).locator(".factory-handle--output");
     const input = target.locator(".node-port--input").filter({ hasText: itemText }).locator(".factory-handle--input");
+    await expect(source).toBeVisible();
+    await expect(input).toBeVisible();
     const sourceBox = await source.boundingBox();
     const inputBox = await input.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(inputBox).not.toBeNull();
     await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
     await page.mouse.down();
     await page.mouse.move(inputBox!.x + inputBox!.width / 2, inputBox!.y + inputBox!.height / 2, { steps: 8 });

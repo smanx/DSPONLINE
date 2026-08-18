@@ -14,6 +14,10 @@ import {
 import { decodeVerifiedSaveTransfer, serializeSaveEnvelopeToTransfer, type SaveTransferVerification } from "./saveTransfer";
 import { applyPureIdleMacroFinalState } from "./pureIdleMacro";
 import type { PureIdleMacroFinalEnvelopeTransfer, PureIdleMacroFinalizedIdentity } from "./pureIdleMacroProtocol";
+import {
+  workerBinaryPayloadTransferables,
+  type WorkerBinaryPayload,
+} from "./workerBinaryPayload";
 
 /**
  * Terminal-settle baseline carried into the background finalize worker. It is
@@ -44,7 +48,7 @@ export type OfflineSimulationWorkerRequest =
     type: "finalize-background";
     id: number;
     /** Macro-ready envelope settled for `highWallSeconds` (not yet terminal). */
-    sourceEnvelope: ArrayBuffer;
+    sourceEnvelope: WorkerBinaryPayload;
     sourceVerification: SaveTransferVerification;
     baseline: BackgroundOfflineTerminalSettleBaseline;
     highWallSeconds: number;
@@ -91,9 +95,9 @@ export type OfflineSimulationWorkerResponse =
   }
   | { type: "decision-required"; id: number; totalSeconds: number; approximation: OfflineApproximationReport }
   | {
-    type: "finalized-background";
-    id: number;
-    finalEnvelope: PureIdleMacroFinalEnvelopeTransfer;
+      type: "finalized-background";
+      id: number;
+      finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
     durationMs: number;
   }
   | {
@@ -452,7 +456,7 @@ export function buildBackgroundFinalEnvelope(
 
 export interface OfflineBackgroundTerminalFinalizeOptions {
   /** The macro-ready envelope (settled for `highWallSeconds`, not yet terminal). */
-  sourceEnvelope: ArrayBuffer;
+  sourceEnvelope: WorkerBinaryPayload;
   sourceVerification: SaveTransferVerification;
   baseline: BackgroundOfflineTerminalSettleBaseline;
   highWallSeconds: number;
@@ -465,7 +469,7 @@ export interface OfflineBackgroundTerminalFinalizeOptions {
 }
 
 export interface OfflineBackgroundTerminalFinalizeResult {
-  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer;
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
   durationMs: number;
 }
 
@@ -544,7 +548,7 @@ export function runOfflineBackgroundTerminalFinalize(
         registry,
         savedAt: options.savedAt,
         approximate: options.approximate === true,
-      } satisfies OfflineSimulationWorkerRequest, [options.sourceEnvelope]);
+      } satisfies OfflineSimulationWorkerRequest, workerBinaryPayloadTransferables(options.sourceEnvelope));
     } catch {
       finish(() => reject(new Error("无法把后台结算交给 Worker 处理，原主存档与恢复日志保持不变")));
     }

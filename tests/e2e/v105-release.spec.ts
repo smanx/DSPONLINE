@@ -84,7 +84,7 @@ async function openDurableFactory(page: Page) {
   await page.getByRole("button", { name: "进入工厂", exact: true }).click();
   const shell = page.locator(".game-shell");
   await expect(shell).toBeVisible({ timeout: 15_000 });
-  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await expect(page.locator(".factory-canvas")).toBeVisible();
 }
@@ -152,7 +152,7 @@ test("dragged building coordinates survive an immediate page refresh without dri
   await page.getByRole("button", { name: "进入工厂", exact: true }).click();
   const reloadedShell = page.locator(".game-shell");
   await expect(reloadedShell).toBeVisible({ timeout: 15_000 });
-  await expect(reloadedShell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(reloadedShell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect(reloadedShell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await expect(page.locator(".factory-canvas")).toBeVisible();
   const restored = await page.locator('.react-flow__node[data-id="v105_smelter"]').boundingBox();
@@ -161,4 +161,3 @@ test("dragged building coordinates survive an immediate page refresh without dri
   expect(restored!.y).toBeCloseTo(moved!.y, 0);
   await page.screenshot({ path: "artifacts/qa/v105-position-refresh-desktop-1440x900.png", fullPage: true });
 });
-

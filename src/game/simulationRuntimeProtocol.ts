@@ -38,6 +38,30 @@ export interface SimulationStateTransfer {
   buffer: ArrayBuffer;
 }
 
+/**
+ * Immutable relay form for a large checkpoint. The page can pass the Blob
+ * handle between Workers without adopting the full backing ArrayBuffer; only
+ * the destination simulation Worker materializes and validates the bytes.
+ */
+export interface SimulationStateBlobTransfer {
+  protocolVersion: typeof SIMULATION_RUNTIME_PROTOCOL_VERSION;
+  byteLength: number;
+  blob: Blob;
+}
+
+/** Small proof returned beside a transferred checkpoint. The simulation
+ * Worker derives this from the same in-memory state it serializes, allowing
+ * the UI to validate the handoff without cloning the full decoded state. */
+export interface SimulationStateIdentity {
+  version: number;
+  mode: GameState["mode"];
+  activePlanetId: GameState["activePlanetId"];
+  entityCount: number;
+  beltCount: number;
+  elapsedSeconds: number;
+  paused: boolean;
+}
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
@@ -66,6 +90,47 @@ function validateSimulationStateTransferEnvelope(transfer: SimulationStateTransf
   if (!(transfer.buffer instanceof ArrayBuffer) || transfer.byteLength !== transfer.buffer.byteLength) {
     throw new Error("模拟运行时传输长度校验失败");
   }
+}
+
+export function createSimulationStateIdentity(state: GameState): SimulationStateIdentity {
+  return {
+    version: state.version,
+    mode: state.mode,
+    activePlanetId: state.activePlanetId,
+    entityCount: state.entities.length,
+    beltCount: state.belts.length,
+    elapsedSeconds: state.elapsedSeconds,
+    paused: state.paused,
+  };
+}
+
+/** Validate the bounded identity proof independently from checkpoint bytes.
+ * Authority-adoption responses deliberately keep the full checkpoint inside
+ * the simulation Worker, so the UI must be able to verify the streamed mirror
+ * without receiving another multi-megabyte ArrayBuffer. */
+export function validateSimulationStateIdentity(
+  identity: SimulationStateIdentity | undefined,
+): SimulationStateIdentity {
+  if (!identity || !Number.isSafeInteger(identity.version) || identity.version <= 0 ||
+    (identity.mode !== "normal" && identity.mode !== "speedrun") ||
+    typeof identity.activePlanetId !== "string" || identity.activePlanetId.length === 0 ||
+    !Number.isSafeInteger(identity.entityCount) || identity.entityCount < 0 ||
+    !Number.isSafeInteger(identity.beltCount) || identity.beltCount < 0 ||
+    !Number.isFinite(identity.elapsedSeconds) || identity.elapsedSeconds < 0 ||
+    typeof identity.paused !== "boolean") {
+    throw new Error("模拟运行时 checkpoint 身份无效");
+  }
+  return identity;
+}
+
+/** Validate the transferable envelope and its bounded Worker proof without
+ * decoding or structured-cloning the checkpoint body on the UI thread. */
+export function validateSimulationStateTransferIdentity(
+  transfer: SimulationStateTransfer,
+  identity: SimulationStateIdentity | undefined,
+): SimulationStateIdentity {
+  validateSimulationStateTransferEnvelope(transfer);
+  return validateSimulationStateIdentity(identity);
 }
 
 export function serializeSimulationStateForTransfer(state: GameState): SimulationStateTransfer {
@@ -132,6 +197,17 @@ function createValuePatches(previous: unknown, current: unknown, path: Simulatio
 }
 
 function createRecordPatches<T extends { id: string }>(previous: readonly T[], current: readonly T[]) {
+  // UI commands commonly change only a top-level leaf such as paused state or
+  // the persisted viewport. GameState updates preserve the immutable entity
+  // and belt array references in that case, so scanning tens of thousands of
+  // records cannot discover a change and only blocks the next Worker post.
+  if (previous === current) {
+    return {
+      changed: [] as SimulationRecordPatch[],
+      added: [] as Array<{ index: number; value: T }>,
+      removed: [] as string[],
+    };
+  }
   const previousById = new Map(previous.map((record) => [record.id, record]));
   const currentIds = new Set(current.map((record) => record.id));
   const changed: SimulationRecordPatch[] = [];

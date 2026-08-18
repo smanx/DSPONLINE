@@ -89,6 +89,7 @@ import {
 } from "./account-archive-import.mjs";
 import {
   auditCloudPayloadAliasReferences,
+  auditCurrentMainCloudPayloadResolution,
   deleteCloudPayload,
   deleteCloudPayloadsForUser,
   garbageCollectCloudPayloadBlobCandidates,
@@ -1509,6 +1510,24 @@ function publishCloudPayloadReferenceCommit(references, counts, prepared) {
   }
 }
 
+function unavailableCurrentMainPayloadAudit(checkedAt = null) {
+  return {
+    available: false,
+    checkedAt,
+    checked: 0,
+    resolvable: 0,
+    unresolvable: 0,
+    invalidMetadata: 0,
+    orphanedMetadata: 0,
+    missingPayloadRows: 0,
+    invalidPayloadRows: 0,
+    metadataMismatches: 0,
+    missingBlobs: 0,
+    blobMetadataMismatches: 0,
+    legacyDirectRows: 0,
+  };
+}
+
 class SqliteStore extends AtomicStoreBase {
   constructor(file, faultInjector = null) {
     super(faultInjector);
@@ -1529,6 +1548,7 @@ class SqliteStore extends AtomicStoreBase {
       invalidStorageTypeRows: 0,
       maximumProjectedCharacters: 161,
     };
+    this.currentMainPayloadAudit = unavailableCurrentMainPayloadAudit();
     this.runtimeStatePersistence = null;
   }
 
@@ -1537,6 +1557,25 @@ class SqliteStore extends AtomicStoreBase {
     this.cloudPayloadReferenceIndex = rebuilt.references;
     this.cloudPayloadReferenceCounts = rebuilt.counts;
     this.cloudPayloadReferenceAudit = rebuilt.audit;
+    this.refreshCurrentMainPayloadAudit();
+  }
+
+  refreshCurrentMainPayloadAudit() {
+    try {
+      this.currentMainPayloadAudit = {
+        available: true,
+        checkedAt: Date.now(),
+        ...auditCurrentMainCloudPayloadResolution(this.database, this._data),
+      };
+    } catch {
+      // Readiness must surface an unavailable audit without leaking database
+      // details or blocking the remainder of the service's status response.
+      this.currentMainPayloadAudit = unavailableCurrentMainPayloadAudit(Date.now());
+    }
+  }
+
+  currentMainPayloadStatus() {
+    return this.currentMainPayloadAudit ?? unavailableCurrentMainPayloadAudit();
   }
 
   async load() {
@@ -1629,6 +1668,10 @@ class SqliteStore extends AtomicStoreBase {
 
   afterMutationCommitted(mutation) {
     super.afterMutationCommitted(mutation);
+    if (mutation.writes.size > 0 || mutation.fileWrites?.size > 0 || mutation.deletes.size > 0 ||
+      mutation.userDeletes.size > 0 || mutation.replaceUserPayloads?.size > 0) {
+      this.refreshCurrentMainPayloadAudit();
+    }
     if (!mutation.legacyPending) return;
     for (const [key, write] of mutation.writes) {
       if (this.pendingCloudSaveWrites.get(key) === write) this.pendingCloudSaveWrites.delete(key);
@@ -1895,6 +1938,16 @@ class SqliteStore extends AtomicStoreBase {
     return collectSqliteGovernanceMetrics(this.database, this.data, fileStats);
   }
 
+  assertLegacyPayloadMigrationTablesEmpty() {
+    const payloadRows = Number(this.database.prepare("SELECT count(*) AS count FROM cloud_save_payloads").get()?.count ?? 0);
+    const blobRows = Number(this.database.prepare("SELECT count(*) AS count FROM cloud_save_payload_blobs").get()?.count ?? 0);
+    if (payloadRows === 0 && blobRows === 0) return;
+    const error = new Error("检测到现有云正文或 Blob，已拒绝旧布局迁移删除；请使用专门的恢复入口");
+    error.code = "CLOUD_PAYLOAD_LEGACY_MIGRATION_DELETE_BLOCKED";
+    error.persistenceFailure = false;
+    throw error;
+  }
+
   async migrateLegacyPayloadLayout(source) {
     source = source && typeof source === "object" ? source : cloneDefaultData();
     const writes = new Map();
@@ -1921,6 +1974,9 @@ class SqliteStore extends AtomicStoreBase {
       const writeCloudPayload = this.database.prepare("INSERT INTO cloud_save_payloads (user_id, slot, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, slot, revision) DO UPDATE SET payload = excluded.payload");
       this.database.transaction(() => {
         this.maybeInjectPersistenceFault("before-sqlite-transaction", { operation: "storage.migrate-layout" });
+        // A stale app_state version must never turn a restart into a payload
+        // table reset. Recovery needs an explicit offline path instead.
+        this.assertLegacyPayloadMigrationTablesEmpty();
         this.database.prepare("DELETE FROM cloud_save_payloads").run();
         this.maybeInjectPersistenceFault("after-payload-deletes", { operation: "storage.migrate-layout" });
         for (const [key, write] of writes) {
@@ -4356,6 +4412,9 @@ export async function createCloudServer({
           lastErrorCategory: persistence.lastErrorCategory,
           pendingWrites: persistence.pendingWrites,
           shuttingDown: runtime.shuttingDown,
+          currentMainPayloads: typeof store.currentMainPayloadStatus === "function"
+            ? store.currentMainPayloadStatus()
+            : null,
         });
       }
       if (request.method === "GET" && url.pathname === "/api/public-status") {

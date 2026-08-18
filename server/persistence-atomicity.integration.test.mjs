@@ -13,12 +13,28 @@ const DIRECT_SAVE_CONTENT_TYPE = "application/vnd.dspidle.save+json";
 const TEST_PASSWORD = "synthetic-pass-123";
 const TEST_ADMIN_TOKEN = "synthetic-admin-token-1234567890-abcdef";
 const READINESS_KEYS = [
+  "currentMainPayloads",
   "lastErrorAt",
   "lastErrorCategory",
   "lastSuccessAt",
   "pendingWrites",
   "shuttingDown",
   "writable",
+].sort();
+const CURRENT_MAIN_PAYLOAD_AUDIT_KEYS = [
+  "available",
+  "blobMetadataMismatches",
+  "checked",
+  "checkedAt",
+  "invalidMetadata",
+  "invalidPayloadRows",
+  "legacyDirectRows",
+  "metadataMismatches",
+  "missingBlobs",
+  "missingPayloadRows",
+  "orphanedMetadata",
+  "resolvable",
+  "unresolvable",
 ].sort();
 
 function createV46State(mode = "normal", sequence = 1) {
@@ -934,6 +950,14 @@ function assertReadinessShape(body) {
   assert.equal(body.lastErrorCategory === null || typeof body.lastErrorCategory === "string", true);
   assert.equal(Number.isInteger(body.pendingWrites) && body.pendingWrites >= 0, true);
   assert.equal(typeof body.shuttingDown, "boolean");
+  assert.equal(body.currentMainPayloads !== null && typeof body.currentMainPayloads === "object" && !Array.isArray(body.currentMainPayloads), true);
+  assert.deepEqual(Object.keys(body.currentMainPayloads).sort(), CURRENT_MAIN_PAYLOAD_AUDIT_KEYS);
+  assert.equal(typeof body.currentMainPayloads.available, "boolean");
+  assert.equal(Number.isFinite(body.currentMainPayloads.checkedAt), true);
+  for (const key of CURRENT_MAIN_PAYLOAD_AUDIT_KEYS) {
+    if (["available", "checkedAt"].includes(key)) continue;
+    assert.equal(Number.isInteger(body.currentMainPayloads[key]) && body.currentMainPayloads[key] >= 0, true);
+  }
 }
 
 test("/api/ready reports healthy, failed, and recovered persistence without internal details", async () => {

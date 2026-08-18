@@ -6,6 +6,7 @@ import type {
 } from "./pureIdleMacro";
 import type { SaveTransferVerification } from "./saveTransfer";
 import type { GameState, IdleSettlementState, ItemId, SaveMode } from "./types";
+import type { WorkerBinaryPayload } from "./workerBinaryPayload";
 
 export type PureIdleMacroWorkerRequest =
   | {
@@ -27,6 +28,8 @@ export type PureIdleMacroWorkerRequest =
     targetWallSeconds: number;
     deadlineMs?: number;
     terminal?: boolean;
+    /** Immutable Blob avoids adopting a multi-MiB ArrayBuffer on the UI loop. */
+    binaryTransport?: "array-buffer" | "blob";
   }
   | { id: number; type: "cancel"; targetId?: number };
 
@@ -55,8 +58,8 @@ export interface PureIdleMacroFinalizedIdentity {
  * proofs bound to those bytes. A caller may transfer the buffer onward, so the
  * property itself is intentionally mutable to accept returned ownership.
  */
-export interface PureIdleMacroFinalEnvelopeTransfer {
-  payloadBytes: ArrayBuffer;
+export interface PureIdleMacroFinalEnvelopeTransfer<Payload extends WorkerBinaryPayload = ArrayBuffer> {
+  payloadBytes: Payload;
   readonly verification: SaveTransferVerification;
   readonly identity: PureIdleMacroFinalizedIdentity;
 }
@@ -86,7 +89,7 @@ export type PureIdleMacroWorkerResponse =
     id: number;
     type: "finalized";
     summary: PureIdleMacroSummary;
-    finalEnvelope: PureIdleMacroFinalEnvelopeTransfer;
+    finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
     durationMs: number;
   }
   | {

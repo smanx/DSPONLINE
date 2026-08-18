@@ -112,6 +112,7 @@ import type { OfflineSimulationPhase, OfflineSimulationProgress } from "../game/
 import { assessSavePayloadSize } from "../game/saveSizePolicy";
 import { cloudSaveCapacityDetails, type CloudSaveCapacityDetails } from "../game/cloudSaveCapacity";
 import { cloudSyncStatusFromUpload, writeCloudSyncStatus } from "../game/cloudSyncStatus";
+import { isDurableSimulationRuntimeEnabled } from "../game/runtimePersistenceMode";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
@@ -551,7 +552,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     const state = mergedSettings === loaded.state.settings
       ? loaded.state
       : { ...loaded.state, settings: mergedSettings };
-    let runtimeRecovery = loaded.runtimeRecovery;
+    const durableRuntimeEnabled = isDurableSimulationRuntimeEnabled();
+    let runtimeRecovery = durableRuntimeEnabled ? loaded.runtimeRecovery : undefined;
     if (loaded.runtimeRecoveryCandidate) {
       const registry = startupModules.contentPacks.createContentPackRuntimeSnapshot(
         startupModules.contentPacks.loadContentPackRegistry(),
@@ -573,21 +575,24 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     } else {
       const saveResult = await activeStorage.saveGameVerified(state);
       if (!saveResult.success) throw new Error(saveResult.message);
-      const registry = startupModules.contentPacks.createContentPackRuntimeSnapshot(
-        startupModules.contentPacks.loadContentPackRegistry(),
-      );
-      const onRecoveryProgress = (progress: SimulationRuntimeStartupRecoveryProgress) => {
-        const count = progress.completedOperations !== undefined && progress.totalOperations !== undefined
-          ? `（${progress.completedOperations}/${progress.totalOperations}）`
-          : "";
-        setMessage({ tone: "busy", text: `${progress.message}${count}` });
-      };
-      runtimeRecovery = await startupModules.runtimeRecovery.initializeSimulationRuntimeAfterVerifiedPrimary({
-        mode: state.mode === "speedrun" ? "speedrun" : "normal",
-        registry,
-        onProgress: onRecoveryProgress,
-      });
+      if (durableRuntimeEnabled) {
+        const registry = startupModules.contentPacks.createContentPackRuntimeSnapshot(
+          startupModules.contentPacks.loadContentPackRegistry(),
+        );
+        const onRecoveryProgress = (progress: SimulationRuntimeStartupRecoveryProgress) => {
+          const count = progress.completedOperations !== undefined && progress.totalOperations !== undefined
+            ? `（${progress.completedOperations}/${progress.totalOperations}）`
+            : "";
+          setMessage({ tone: "busy", text: `${progress.message}${count}` });
+        };
+        runtimeRecovery = await startupModules.runtimeRecovery.initializeSimulationRuntimeAfterVerifiedPrimary({
+          mode: state.mode === "speedrun" ? "speedrun" : "normal",
+          registry,
+          onProgress: onRecoveryProgress,
+        });
+      }
     }
+    if (!durableRuntimeEnabled) runtimeRecovery = undefined;
     const { runtimeRecoveryCandidate: _runtimeRecoveryCandidate, ...loadedWithoutCandidate } = loaded;
     try { await reloadLocalSaveCache(); } catch { /* durable identity is already verified */ }
     trackAnalyticsEvent("game_enter");
@@ -881,7 +886,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       if (!loaded) throw new Error("本地存档不可用");
       if (resolved) retainLocalSavePayload(resolved.save.key, resolved.raw);
       if (resolved) mode === "normal" ? setContinueSave(resolved.save) : setSpeedrunContinueSave(resolved.save);
-      if (resolved?.save.source === "primary") {
+      if (resolved?.save.source === "primary" && isDurableSimulationRuntimeEnabled()) {
         const startupModules = await loadFactoryStartupModules();
         const registry = startupModules.contentPacks.createContentPackRuntimeSnapshot(
           startupModules.contentPacks.loadContentPackRegistry(),
@@ -933,16 +938,18 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       state.settings = mergeMenuRuntimeSettings(state.settings, settings);
       const saveResult = await storage.saveGameVerified(state);
       if (!saveResult.success) throw new Error(saveResult.message);
-      const runtimeRecovery = await startupModules.runtimeRecovery.initializeSimulationRuntimeAfterVerifiedPrimary({
-        mode: newFactoryMode,
-        registry: startupModules.contentPacks.createContentPackRuntimeSnapshot(
-          startupModules.contentPacks.loadContentPackRegistry(),
-        ),
-        onProgress: (progress) => setMessage({ tone: "busy", text: progress.message }),
-      });
+      const runtimeRecovery = isDurableSimulationRuntimeEnabled()
+        ? await startupModules.runtimeRecovery.initializeSimulationRuntimeAfterVerifiedPrimary({
+          mode: newFactoryMode,
+          registry: startupModules.contentPacks.createContentPackRuntimeSnapshot(
+            startupModules.contentPacks.loadContentPackRegistry(),
+          ),
+          onProgress: (progress) => setMessage({ tone: "busy", text: progress.message }),
+        })
+        : undefined;
       trackAnalyticsEvent("new_game");
       trackAnalyticsEvent("game_enter");
-      onEnterGame({ state, offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: [] }, runtimeRecovery });
+      onEnterGame({ state, offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: [] }, ...(runtimeRecovery ? { runtimeRecovery } : {}) });
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "新工厂初始化失败" });
     } finally {

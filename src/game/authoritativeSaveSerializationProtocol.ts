@@ -2,6 +2,7 @@ import type { ContentPackRegistry } from "./contentPacks";
 import type { CanvasViewport, GameState, PlanetId, SaveMode } from "./types";
 import type { SimulationStateTransfer } from "./simulationRuntimeProtocol";
 import type { SaveTransferVerification } from "./saveTransfer";
+import type { WorkerBinaryPayload } from "./workerBinaryPayload";
 import type {
   AuthoritativeSaveCatalogSeed,
   AuthoritativeSavePayloadProof,
@@ -37,7 +38,7 @@ export interface AuthoritativeSaveCheckpointOverlay {
  * The save Worker revalidates and parses it before deriving the persistent
  * projection; callers transfer exclusive ownership of `buffer`. */
 export interface AuthoritativeSaveEnvelopeTransfer extends SaveTransferVerification {
-  buffer: ArrayBuffer;
+  buffer: WorkerBinaryPayload;
 }
 
 interface AuthoritativeSaveSerializationRequestCommon {
@@ -81,9 +82,9 @@ export interface AuthoritativeSaveSerializationSummary {
 
 export interface AuthoritativeSaveSerializationResponse {
   id: number;
-  bytes?: ArrayBuffer;
-  sourceStateTransfer?: ArrayBuffer;
-  sourceEnvelopeTransfer?: ArrayBuffer;
+  bytes?: WorkerBinaryPayload;
+  sourceStateTransfer?: WorkerBinaryPayload;
+  sourceEnvelopeTransfer?: WorkerBinaryPayload;
   payloadChecksum?: string;
   payloadSha256?: string;
   byteLength?: number;

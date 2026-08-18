@@ -22,6 +22,12 @@ import type {
 } from "./authoritativeSaveSerializationProtocol";
 import type { SaveWorkerRequest, SaveWorkerResponse } from "./saveWorkerProtocol";
 import type { GameState } from "./types";
+import {
+  createImmutableWorkerBinaryPayload,
+  workerBinaryPayloadToArrayBuffer,
+  workerBinaryPayloadTransferables,
+  type WorkerBinaryPayload,
+} from "./workerBinaryPayload";
 
 const SETTINGS_MAX_BYTES = 2 * 1024;
 const MIN_CANVAS_ZOOM = 0.25;
@@ -52,14 +58,16 @@ function catalogSettings(value: unknown): AuthoritativeSaveCatalogSeed["settings
 
 function sourceTransferables(request: SaveSerializationRequest): Transferable[] {
   if (request.stateTransfer) return [request.stateTransfer.buffer];
-  if ("envelopeTransfer" in request && request.envelopeTransfer) return [request.envelopeTransfer.buffer];
+  if ("envelopeTransfer" in request && request.envelopeTransfer) {
+    return workerBinaryPayloadTransferables(request.envelopeTransfer.buffer);
+  }
   return [];
 }
 
-function deserializeAuthoritativeEnvelopeTransfer(
+async function deserializeAuthoritativeEnvelopeTransfer(
   source: Extract<AuthoritativeSaveSerializationRequest, { envelopeTransfer: unknown }>["envelopeTransfer"],
-): GameState {
-  const raw = decodeVerifiedSaveTransfer(source.buffer, source);
+): Promise<GameState> {
+  const raw = decodeVerifiedSaveTransfer(await workerBinaryPayloadToArrayBuffer(source.buffer), source);
   const inspection = inspectSaveEnvelopeChecksum(raw);
   if (inspection.status !== "valid" || inspection.formatVersion !== 2 ||
     !inspection.parsed || !inspection.state ||
@@ -146,7 +154,7 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
     const sourceState = sourceTransfer
       ? deserializeSimulationStateTransfer(sourceTransfer)
       : envelopeTransfer
-        ? deserializeAuthoritativeEnvelopeTransfer(envelopeTransfer)
+        ? await deserializeAuthoritativeEnvelopeTransfer(envelopeTransfer)
         : request.state as GameState;
     const state = authoritativeProof
       ? applyCheckpointOverlay(sourceState, request.checkpointOverlay)
@@ -158,6 +166,7 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
     const returnedStateTransfer = envelopeTransfer
       ? serializeSimulationStateForTransfer(state)
       : sourceTransfer;
+    const binaryTransport = envelopeTransfer?.buffer instanceof Blob ? "blob" : "array-buffer";
     const persistent = projectPersistentSaveState(state, request.contentPackRegistry);
     const mode = persistent.mode === "speedrun" ? "speedrun" : "normal";
     if (authoritativeProof) {
@@ -245,10 +254,14 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
       ...proofWithoutBinding,
       bindingSha256: await computeAuthoritativeSaveProofBindingSha256(proofWithoutBinding, catalogSeed),
     };
+    const responseBytes = createImmutableWorkerBinaryPayload(serialized.bytes, binaryTransport);
+    const responseStateTransfer: WorkerBinaryPayload | undefined = returnedStateTransfer
+      ? createImmutableWorkerBinaryPayload(returnedStateTransfer.buffer, binaryTransport)
+      : undefined;
     const response: AuthoritativeSaveSerializationResponse = {
       id: request.id,
-      bytes: serialized.bytes,
-      ...(returnedStateTransfer ? { sourceStateTransfer: returnedStateTransfer.buffer } : {}),
+      bytes: responseBytes,
+      ...(responseStateTransfer ? { sourceStateTransfer: responseStateTransfer } : {}),
       ...(envelopeTransfer ? { sourceEnvelopeTransfer: envelopeTransfer.buffer } : {}),
       payloadChecksum: serialized.payloadChecksum,
       ...(payloadSha256 ? { payloadSha256 } : {}),
@@ -258,9 +271,13 @@ self.onmessage = async (event: MessageEvent<SaveSerializationRequest>) => {
       catalogSeed,
       proof,
     };
-    const responseTransfers: Transferable[] = [serialized.bytes];
-    if (returnedStateTransfer && returnedStateTransfer !== sourceTransfer) responseTransfers.push(returnedStateTransfer.buffer);
-    responseTransfers.push(...sourceTransferables(request));
+    const responseTransfers: Transferable[] = [
+      ...workerBinaryPayloadTransferables(responseBytes),
+      ...(responseStateTransfer && returnedStateTransfer !== sourceTransfer
+        ? workerBinaryPayloadTransferables(responseStateTransfer)
+        : []),
+      ...sourceTransferables(request),
+    ];
     self.postMessage(response, responseTransfers);
   } catch (error) {
     const message = error instanceof Error ? error.message : "后台生成存档失败";

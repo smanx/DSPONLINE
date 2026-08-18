@@ -109,7 +109,7 @@ async function enterDurableGame(page: Page): Promise<void> {
   await page.getByRole("button", { name: "进入工厂", exact: true }).click();
   const shell = page.locator(".game-shell");
   await expect(shell).toBeVisible({ timeout: 15_000 });
-  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await dismissOnboarding(page);
   await expect(page.locator(".factory-canvas")).toBeVisible();
@@ -174,7 +174,7 @@ test("building lock persists, protects commands and turns a body drag into canva
   await page.goto("/?menu=1");
   await enterDurableGame(page);
   const shell = page.locator(".game-shell");
-  const recoverySequence = Number(await shell.getAttribute("data-runtime-recovery-sequence"));
+  await expect(shell).toHaveAttribute("data-runtime-recovery-sequence", "-1");
   let smelter = page.locator('.react-flow__node[data-id="smelter"]');
   await smelter.locator(".factory-node__header").click();
   await page.getByLabel("锁定所选建筑").click();
@@ -190,7 +190,7 @@ test("building lock persists, protects commands and turns a body drag into canva
   await page.mouse.move(box!.x + box!.width / 2 + 90, box!.y + Math.min(box!.height - 20, 82) + 35, { steps: 8 });
   await page.mouse.up();
   await expect.poll(() => page.locator(".react-flow__viewport").getAttribute("style")).not.toBe(beforeViewport);
-  await expect.poll(async () => Number(await shell.getAttribute("data-runtime-recovery-sequence")), { timeout: 15_000 }).toBeGreaterThan(recoverySequence);
+  await expect(shell).toHaveAttribute("data-runtime-recovery-sequence", "-1");
   await page.reload();
   await enterDurableGame(page);
   smelter = page.locator('.react-flow__node[data-id="smelter"]');

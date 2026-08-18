@@ -57,7 +57,7 @@ async function freshDurableGame(page: Page) {
   await page.getByRole("button", { name: /开始游戏/ }).click();
   const shell = page.locator(".game-shell");
   await expect(shell).toBeVisible({ timeout: 15_000 });
-  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await expect(page.locator(".vein-node").filter({ hasText: "铁矿石" })).toBeVisible({ timeout: 15_000 });
 }
@@ -1548,7 +1548,7 @@ test("five-step basic onboarding advances only after successful factory commands
   await page.getByRole("button", { name: /继续游戏/ }).click();
   const reloadedShell = page.locator(".game-shell");
   await expect(reloadedShell).toBeVisible({ timeout: 15_000 });
-  await expect(reloadedShell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(reloadedShell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect(reloadedShell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await expect(page.locator(".onboarding-coach")).toContainText("8/18");
 });

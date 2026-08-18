@@ -58,15 +58,15 @@ const release1043Copy = {
 
 const release1046Copy = {
   date: { "zh-CN": "2026年8月17日", en: "August 17, 2026" },
-  title: { "zh-CN": "存档恢复与模拟 Worker 热修", en: "Save Recovery and Simulation Worker Hotfix" },
+  title: { "zh-CN": "存档稳定性与手机连续拉线热修", en: "Save Stability and Mobile Belt Batch Hotfix" },
   summary: {
-    "zh-CN": "1.0.46 修复 durable 存档 finalize 失败后只能刷新恢复、暂停后模拟 Worker 被永久判定不可用，以及默认保存保护模式下 revision 与 recovery head 竞态阻断的问题。失败时先保留 T0 与 pending intent，再在当前页面按原始边界回放、验证 T1、原子重建 recovery head 和模拟 Worker；纯挂机恢复日志、宏观进度和导出保护保持不变。GameState v47、存档 envelope v2、cloud schema v8 与 SQLite layout v3 不变。",
-    en: "Version 1.0.46 fixes durable-save finalize failures that previously required a refresh, simulation Workers remaining permanently marked unavailable after a pause, and revision/recovery-head races in the default protected save mode. T0 and pending intents stay intact while the current page replays exact boundaries, verifies T1, atomically rebuilds the recovery head, and reinstalls the simulation Worker. Pure-idle recovery logs, macro progress, and export protection remain intact. GameState v47, save envelope v2, cloud schema v8, and SQLite layout v3 remain unchanged.",
+    "zh-CN": "1.0.46 将普通游戏恢复为 1.0.43-compatible 的验证主存档协调器，修复自动保存后模拟被暂停、暂停后 Worker 无法恢复，以及保存失败污染纯挂机状态的问题；durable WAL 仅保留为显式开发验证路径。手机连续拉线改为不遮挡地图的可折叠底栏，重复或无效点击不会破坏已有候选，6～100 条候选可完整查看和原子提交。画布卡片、重叠处理和交互展开现可分别设置，重叠位置保留紧凑数量入口。GameState v47、存档 envelope v2、cloud schema v8 与 SQLite layout v3 不变。",
+    en: "Version 1.0.46 restores the 1.0.43-compatible verified-primary coordinator for normal play, fixing autosaves that paused simulation, Workers that could not resume after a pause, and save failures that polluted pure-idle status. The durable WAL remains an explicit development-only validation path. Mobile continuous connections now use a collapsible non-blocking bottom bar; duplicate or invalid taps preserve valid candidates, and 6-100 candidates remain inspectable and atomically committable. Canvas card detail, overlap handling, and interaction expansion are now separate settings, with a compact count marker preserving every overlap location. GameState v47, save envelope v2, cloud schema v8, and SQLite layout v3 remain unchanged.",
   },
-  recoveryTitle: { "zh-CN": "同页精确恢复", en: "Exact in-page recovery" },
+  recoveryTitle: { "zh-CN": "自动保存保持模拟运行", en: "Autosaves keep simulation running" },
   recoveryDescription: {
-    "zh-CN": "durable Worker 或 finalize 失败后，当前页读取 T0 recovery、回放 finalized/pending intent 并写入新的 T1；恢复完成后“继续模拟”可直接使用，不再强制刷新。",
-    en: "After a durable Worker or finalize failure, the current page reads T0 recovery, replays finalized and pending intents, and writes a new T1. Continue Simulation works after recovery without forcing a refresh.",
+    "zh-CN": "默认路径从模拟 Worker 取得权威检查点，再由保存 Worker 写入并逐字读回验证；自动保存前正在运行的模拟在保存期间和完成后都保持运行，玩家主动暂停仍原样保留。",
+    en: "The default path obtains an authoritative simulation-Worker checkpoint, then has the save Worker write and read it back exactly. A simulation running before autosave stays running throughout and afterward, while an intentional player pause remains intact.",
   },
   workerTitle: { "zh-CN": "Worker 状态自动解锁", en: "Worker state self-heals" },
   workerDescription: {
@@ -75,8 +75,18 @@ const release1046Copy = {
   },
   saveTitle: { "zh-CN": "默认保护与实验性编辑都安全", en: "Protected and experimental save modes stay safe" },
   saveDescription: {
-    "zh-CN": "默认关闭时保存期间操作继续受保护并被明确拒绝；revision 竞态会安全重查而不再显示阻断错误。开启“保存期间允许继续操作”时，已接受编辑会留在 durable 队列并在 T1 重建前一并落盘。",
-    en: "With the default setting off, edits remain protected and are explicitly rejected while saving; revision races are rechecked safely instead of blocking the session. When Allow editing while saving is enabled, accepted edits remain in the durable queue and are persisted before T1 recovery is rebuilt.",
+    "zh-CN": "默认关闭时，保存进行中的编辑会被明确拒绝但模拟不会暂停；开启“保存期间允许继续操作”后，已接受操作会保留，保存失败也不回滚当前进度，并可立即导出。",
+    en: "With the default setting off, edits attempted during persistence are explicitly rejected without pausing simulation. When Allow editing while saving is enabled, accepted actions remain intact; a failed save does not roll back progress and can be exported immediately.",
+  },
+  batchTitle: { "zh-CN": "手机连续拉线不再遮挡地图", en: "Mobile continuous connections no longer block the map" },
+  batchDescription: {
+    "zh-CN": "手机只挂载一个可折叠底部操作面，展开后可滚动查看全部候选并定位或移除任意一条。重复、已有线路、不兼容或缺料点击只给临时提示，不会禁用此前有效候选；最终确认仍做严格原子复核。",
+    en: "Mobile mounts one collapsible bottom action surface. Its expanded list scrolls through every candidate and can locate or remove any entry. Duplicate, existing-line, incompatible, or under-stock taps give temporary feedback without disabling earlier valid candidates; final confirmation still performs strict atomic revalidation.",
+  },
+  canvasTitle: { "zh-CN": "画布显示可独立控制", en: "Canvas presentation controls are independent" },
+  canvasDescription: {
+    "zh-CN": "基础卡片、重叠建筑和选择/悬停展开不再混在一个自动档中。重叠组默认留下紧凑的层叠图标与数量；一行卡不会再被裁成半截，空白视角可用适应全部或小地图恢复。",
+    en: "Base card detail, overlapping buildings, and selection or hover expansion are no longer mixed into one automatic mode. Overlap groups keep a compact layers-and-count marker by default; one-line cards are no longer clipped, and a blank saved view can recover through Fit View or the minimap.",
   },
   idleTitle: { "zh-CN": "纯挂机日志与宏观进度保留", en: "Pure-idle logs and macro progress are preserved" },
   idleDescription: {
@@ -349,6 +359,8 @@ export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteR
       { id: "in-page-durable-recovery", title: currentMessage(locale, "recoveryTitle"), description: currentMessage(locale, "recoveryDescription") },
       { id: "worker-rebuild", title: currentMessage(locale, "workerTitle"), description: currentMessage(locale, "workerDescription") },
       { id: "save-modes", title: currentMessage(locale, "saveTitle"), description: currentMessage(locale, "saveDescription") },
+      { id: "mobile-batch-connections", title: currentMessage(locale, "batchTitle"), description: currentMessage(locale, "batchDescription") },
+      { id: "canvas-presentation", title: currentMessage(locale, "canvasTitle"), description: currentMessage(locale, "canvasDescription") },
       { id: "pure-idle-preservation", title: currentMessage(locale, "idleTitle"), description: currentMessage(locale, "idleDescription") },
       { id: "version-upgrade", title: currentMessage(locale, "compatibilityTitle"), description: currentMessage(locale, "compatibilityDescription") },
     ],

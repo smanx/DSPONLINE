@@ -20,6 +20,11 @@ import { decodeVerifiedSaveTransfer, serializeSaveEnvelopeToTransfer, type SaveT
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 import { sha256Bytes } from "./payloadDigest";
 import type { GameSettings, GameState } from "./types";
+import {
+  createImmutableWorkerBinaryPayload,
+  workerBinaryPayloadToArrayBuffer,
+  workerBinaryPayloadTransferables,
+} from "./workerBinaryPayload";
 
 let activeId: number | null = null;
 let cancelled = false;
@@ -225,11 +230,15 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
     if (request.type === "finalize-background") {
       const finalizeStartedAt = nowMs();
       const registry = request.registry.registry;
+      const responseTransport = request.sourceEnvelope instanceof Blob ? "blob" : "array-buffer";
       applyContentPackRuntimeSnapshot(request.registry);
       let sourceRaw: string;
       let sourceState: GameState;
       try {
-        sourceRaw = decodeVerifiedSaveTransfer(request.sourceEnvelope, request.sourceVerification);
+        sourceRaw = decodeVerifiedSaveTransfer(
+          await workerBinaryPayloadToArrayBuffer(request.sourceEnvelope),
+          request.sourceVerification,
+        );
         sourceState = parseTrustedWorkerEnvelope(sourceRaw, request.sourceVerification, registry, { persistentProjection: false });
       } catch (error) {
         throw new Error(error instanceof Error ? error.message : "后台宏 envelope 解码失败，原档与恢复日志保持不变");
@@ -315,12 +324,18 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         registryFingerprint: request.registry.fingerprint,
         savedAt: request.savedAt,
       });
+      const responseEnvelope = {
+        ...finalEnvelope,
+        payloadBytes: finalEnvelope.payloadBytes instanceof ArrayBuffer
+          ? createImmutableWorkerBinaryPayload(finalEnvelope.payloadBytes, responseTransport)
+          : finalEnvelope.payloadBytes,
+      };
       post({
         type: "finalized-background",
         id: request.id,
-        finalEnvelope,
+        finalEnvelope: responseEnvelope,
         durationMs: Math.max(0, nowMs() - finalizeStartedAt),
-      } satisfies OfflineSimulationWorkerResponse, [finalEnvelope.payloadBytes]);
+      } satisfies OfflineSimulationWorkerResponse, workerBinaryPayloadTransferables(responseEnvelope.payloadBytes));
       activeId = null;
       return;
     }

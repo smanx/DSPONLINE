@@ -373,6 +373,112 @@ export function auditCloudPayloadAliasReferences(database) {
   return { references, audit };
 }
 
+function validCurrentMainMetadata(value) {
+  return Number.isSafeInteger(value?.revision) && value.revision > 0 &&
+    typeof value?.checksum === "string" && SHA256_PATTERN.test(value.checksum) &&
+    Number.isSafeInteger(value?.size) && value.size >= 0;
+}
+
+/**
+ * Audits whether each normal-mode current-main metadata record still has an
+ * addressable payload row. This deliberately returns aggregate counters only:
+ * it never returns an account ID, revision, checksum, alias, or body.
+ *
+ * Alias rows are checked without materializing blob bodies so server startup
+ * remains bounded for large saves. The offline recovery and maintenance tools
+ * perform the full size/SHA-256/body validation before making any mutation.
+ */
+export function auditCurrentMainCloudPayloadResolution(database, data) {
+  assertDatabase(database);
+  const result = {
+    checked: 0,
+    resolvable: 0,
+    unresolvable: 0,
+    invalidMetadata: 0,
+    orphanedMetadata: 0,
+    missingPayloadRows: 0,
+    invalidPayloadRows: 0,
+    metadataMismatches: 0,
+    missingBlobs: 0,
+    blobMetadataMismatches: 0,
+    legacyDirectRows: 0,
+  };
+  const users = data?.users && typeof data.users === "object" ? data.users : {};
+  const current = data?.cloudSaves && typeof data.cloudSaves === "object" ? data.cloudSaves : {};
+  const readPayload = database.prepare(`
+    SELECT
+      typeof(payload) AS storageType,
+      CASE
+        WHEN typeof(payload) <> 'text' THEN NULL
+        WHEN substr(payload, 1, 1) = ? THEN substr(payload, 1, ?)
+        ELSE NULL
+      END AS prefix,
+      CASE
+        WHEN typeof(payload) = 'text' THEN length(CAST(payload AS BLOB))
+        ELSE NULL
+      END AS storedBytes
+    FROM ${CLOUD_PAYLOAD_TABLE}
+    WHERE user_id = ? AND slot = 'main' AND revision = ?
+  `);
+  const readBlob = database.prepare(`
+    SELECT checksum, size_bytes AS sizeBytes
+    FROM ${CLOUD_PAYLOAD_BLOB_TABLE}
+    WHERE checksum = ?
+  `);
+
+  for (const [userId, metadata] of Object.entries(current)) {
+    result.checked += 1;
+    if (!users[userId]) {
+      result.orphanedMetadata += 1;
+      continue;
+    }
+    if (!validCurrentMainMetadata(metadata)) {
+      result.invalidMetadata += 1;
+      continue;
+    }
+    const row = readPayload.get(CLOUD_PAYLOAD_ALIAS_PREFIX[0], CLOUD_PAYLOAD_ALIAS_PROJECTION_CHARACTERS, userId, metadata.revision);
+    if (!row) {
+      result.missingPayloadRows += 1;
+      continue;
+    }
+    if (row.storageType !== "text") {
+      result.invalidPayloadRows += 1;
+      continue;
+    }
+    try {
+      const alias = projectedAlias(row);
+      if (!alias) {
+        if (sqliteSafeNumber(row.storedBytes) !== metadata.size) {
+          result.metadataMismatches += 1;
+          continue;
+        }
+        result.legacyDirectRows += 1;
+        result.resolvable += 1;
+        continue;
+      }
+      if (alias.checksum !== metadata.checksum || alias.sizeBytes !== metadata.size) {
+        result.metadataMismatches += 1;
+        continue;
+      }
+      const blob = readBlob.get(alias.checksum);
+      if (!blob) {
+        result.missingBlobs += 1;
+        continue;
+      }
+      if (blob.checksum !== alias.checksum || sqliteSafeNumber(blob.sizeBytes) !== alias.sizeBytes) {
+        result.blobMetadataMismatches += 1;
+        continue;
+      }
+      result.resolvable += 1;
+    } catch (error) {
+      if (!(error instanceof CloudPayloadStoreError)) throw error;
+      result.invalidPayloadRows += 1;
+    }
+  }
+  result.unresolvable = result.checked - result.resolvable;
+  return result;
+}
+
 function ensureBlob(database, descriptor) {
   const existing = readBlobRow(database, descriptor.checksum);
   if (existing) {

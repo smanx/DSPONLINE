@@ -10,6 +10,7 @@ import {
   Gauge,
   GitFork,
   Hand,
+  Layers,
   Lock,
   Orbit,
   Pickaxe,
@@ -109,6 +110,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   presentationVisible: boolean;
   alertActive: boolean;
   stackHidden: boolean;
+  stackMarker: boolean;
   stackHalo: boolean;
   stackCount: number;
   stackGroupId: string | null;
@@ -429,8 +431,40 @@ function FactoryNodeStackProxy({ data }: NodeProps<FactoryFlowNode>) {
   </article>;
 }
 
+function FactoryNodeStackMarker({ data }: NodeProps<FactoryFlowNode>) {
+  const alertLabel = data.stackAlertCount > 0
+    ? `，其中 ${data.stackAlertCount} 个有告警${data.stackCriticalAlertCount > 0 ? `，${data.stackCriticalAlertCount} 个严重` : ""}`
+    : "";
+  const label = `此处叠放 ${data.stackCount.toLocaleString("zh-CN")} 个独立建筑${alertLabel}，点击展开代表建筑`;
+  return <article
+    className={`factory-node factory-node-stack-marker factory-node--status-${data.status.tone}${data.stackAlertCount > 0 ? " factory-node-stack-marker--alert" : ""}`}
+    data-node-stack-marker="true"
+    data-stack-count={data.stackCount}
+    data-stack-alert-count={data.stackAlertCount}
+    data-heavy-card="false"
+  >
+    <LightweightNodeHandles data={data} />
+    <button
+      className="factory-node-stack-marker__action nodrag nopan"
+      type="button"
+      title={label}
+      aria-label={label}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        data.onStackActivate(data.entity.id, data.stackMemberIds, "select");
+      }}
+    >
+      <Layers size={14} aria-hidden="true" />
+      <strong>{data.stackCount.toLocaleString("zh-CN")}</strong>
+      {data.stackAlertCount > 0 ? <em aria-hidden="true">⚠{data.stackAlertCount}</em> : null}
+    </button>
+  </article>;
+}
+
 function FactoryNodeStackOverlay({ data }: { data: FactoryNodeData }) {
-  if (data.stackCount < 2 || data.stackHidden) return null;
+  if (data.stackCount < 2 || data.stackHidden || data.stackMarker || !data.stackHalo) return null;
   const alertLabel = data.stackAlertCount > 0
     ? `；其中 ${data.stackAlertCount} 个有告警${data.stackCriticalAlertCount > 0 ? `，${data.stackCriticalAlertCount} 个严重` : ""}`
     : "";
@@ -448,7 +482,7 @@ function FactoryNodeStackOverlay({ data }: { data: FactoryNodeData }) {
         event.stopPropagation();
         data.onStackActivate(data.entity.id, data.stackMemberIds, "cycle");
       }}
-    >×{data.stackCount}{data.stackAlertCount > 0 ? <span aria-hidden="true"> · ⚠{data.stackAlertCount}</span> : null}</button>
+    ><Layers size={11} aria-hidden="true" />叠 {data.stackCount.toLocaleString("zh-CN")}{data.stackAlertCount > 0 ? <span aria-hidden="true"> · ⚠{data.stackAlertCount}</span> : null}</button>
   </>;
 }
 
@@ -1083,21 +1117,25 @@ function PowerFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
 export function VeinNode(props: NodeProps<FactoryFlowNode>) {
   if (props.data.stackHidden) return <FactoryNodeStackProxy {...props} />;
+  if (props.data.stackMarker) return <FactoryNodeStackMarker {...props} />;
   return <>{props.data.lod === "full" ? <VeinFullNode {...props} /> : props.data.lod === "compact" ? <FactoryNodeCompactView {...props} /> : <FactoryNodeLodView {...props} />}<FactoryNodeStackOverlay data={props.data} /></>;
 }
 
 export function MachineNode(props: NodeProps<FactoryFlowNode>) {
   if (props.data.stackHidden) return <FactoryNodeStackProxy {...props} />;
+  if (props.data.stackMarker) return <FactoryNodeStackMarker {...props} />;
   return <>{props.data.lod === "full" ? <MachineFullNode {...props} /> : props.data.lod === "compact" ? <FactoryNodeCompactView {...props} /> : <FactoryNodeLodView {...props} />}<FactoryNodeStackOverlay data={props.data} /></>;
 }
 
 export function LogisticsNode(props: NodeProps<FactoryFlowNode>) {
   if (props.data.stackHidden) return <FactoryNodeStackProxy {...props} />;
+  if (props.data.stackMarker) return <FactoryNodeStackMarker {...props} />;
   return <>{props.data.lod === "full" ? <LogisticsFullNode {...props} /> : props.data.lod === "compact" ? <FactoryNodeCompactView {...props} /> : <FactoryNodeLodView {...props} />}<FactoryNodeStackOverlay data={props.data} /></>;
 }
 
 export function PowerNode(props: NodeProps<FactoryFlowNode>) {
   if (props.data.stackHidden) return <FactoryNodeStackProxy {...props} />;
+  if (props.data.stackMarker) return <FactoryNodeStackMarker {...props} />;
   return <>{props.data.lod === "full" ? <PowerFullNode {...props} /> : props.data.lod === "compact" ? <FactoryNodeCompactView {...props} /> : <FactoryNodeLodView {...props} />}<FactoryNodeStackOverlay data={props.data} /></>;
 }
 

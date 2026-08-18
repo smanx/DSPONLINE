@@ -108,6 +108,77 @@ export function createFullCurrentPlanetSimulationProjection(current: GameState):
   };
 }
 
+export interface SimulationProjectionChunk {
+  index: number;
+  total: number;
+  projection: SimulationProjection;
+}
+
+/** Split a full-record projection into bounded messages. This is used when a
+ * large terminal state is adopted after pure idle: one multi-megabyte
+ * structured clone can block the UI even though the authoritative checkpoint
+ * itself is transferred zero-copy. */
+export function chunkFullRecordSimulationProjection(
+  projection: SimulationProjection,
+  options: { entityChunkSize?: number; beltChunkSize?: number } = {},
+): SimulationProjectionChunk[] {
+  if (Object.keys(projection.entityColumns).length > 0 || Object.keys(projection.beltColumns).length > 0 ||
+    Object.keys(projection.entityRemovedFields).length > 0 || Object.keys(projection.beltRemovedFields).length > 0 ||
+    projection.changedEntityIds.length !== projection.changedEntities.length ||
+    projection.changedBeltIds.length !== projection.changedBelts.length) {
+    throw new Error("只有完整记录投影可以分块");
+  }
+  const entityChunkSize = Math.max(1, Math.floor(options.entityChunkSize ?? 64));
+  const beltChunkSize = Math.max(1, Math.floor(options.beltChunkSize ?? 128));
+  const empty = (overrides: Partial<SimulationProjection> = {}): SimulationProjection => ({
+    ...projection,
+    changedEntityIds: [],
+    changedBeltIds: [],
+    changedEntities: [],
+    changedBelts: [],
+    entityColumns: {},
+    beltColumns: {},
+    entityRemovedFields: {},
+    beltRemovedFields: {},
+    topLevel: {},
+    removedEntityIds: [],
+    removedBeltIds: [],
+    topologyChangedEntityIds: [],
+    topologyChangedBeltIds: [],
+    alerts: undefined,
+    ...overrides,
+  });
+  const chunks: SimulationProjection[] = [empty({
+    topLevel: projection.topLevel,
+    removedEntityIds: projection.removedEntityIds,
+    removedBeltIds: projection.removedBeltIds,
+    topologyChangedEntityIds: projection.topologyChangedEntityIds.filter((id) => projection.removedEntityIds.includes(id)),
+    topologyChangedBeltIds: projection.topologyChangedBeltIds.filter((id) => projection.removedBeltIds.includes(id)),
+  })];
+  const topologyEntityIds = new Set(projection.topologyChangedEntityIds);
+  const topologyBeltIds = new Set(projection.topologyChangedBeltIds);
+  for (let offset = 0; offset < projection.changedEntities.length; offset += entityChunkSize) {
+    const changedEntities = projection.changedEntities.slice(offset, offset + entityChunkSize);
+    const changedEntityIds = changedEntities.map((entity) => entity.id);
+    chunks.push(empty({
+      changedEntities,
+      changedEntityIds,
+      topologyChangedEntityIds: changedEntityIds.filter((id) => topologyEntityIds.has(id)),
+    }));
+  }
+  for (let offset = 0; offset < projection.changedBelts.length; offset += beltChunkSize) {
+    const changedBelts = projection.changedBelts.slice(offset, offset + beltChunkSize);
+    const changedBeltIds = changedBelts.map((belt) => belt.id);
+    chunks.push(empty({
+      changedBelts,
+      changedBeltIds,
+      topologyChangedBeltIds: changedBeltIds.filter((id) => topologyBeltIds.has(id)),
+    }));
+  }
+  if (projection.alerts) chunks[chunks.length - 1] = { ...chunks[chunks.length - 1], alerts: projection.alerts };
+  return chunks.map((chunk, index) => ({ index, total: chunks.length, projection: chunk }));
+}
+
 function isSimulationProjectionBaseline(value: GameState | SimulationProjectionBaseline): value is SimulationProjectionBaseline {
   return "kind" in value && value.kind === "simulation-projection-baseline";
 }
@@ -352,11 +423,22 @@ export interface SimulationProjectionStateIndex {
 }
 
 export function createSimulationProjectionStateIndex(state: GameState): SimulationProjectionStateIndex {
+  const entityIndexById = new Map<string, number>();
+  const beltIndexById = new Map<string, number>();
+  // Fill the maps directly. `new Map(records.map(...))` temporarily allocated
+  // another 75k pair arrays on a real large save and amplified the GC pause at
+  // pure-idle authority adoption.
+  for (let index = 0; index < state.entities.length; index += 1) {
+    entityIndexById.set(state.entities[index].id, index);
+  }
+  for (let index = 0; index < state.belts.length; index += 1) {
+    beltIndexById.set(state.belts[index].id, index);
+  }
   return {
     entities: state.entities,
     belts: state.belts,
-    entityIndexById: new Map(state.entities.map((entity, index) => [entity.id, index])),
-    beltIndexById: new Map(state.belts.map((belt, index) => [belt.id, index])),
+    entityIndexById,
+    beltIndexById,
   };
 }
 
@@ -369,7 +451,9 @@ function applyProjectedRecords<T extends { id: string }>(
   indexById: ReadonlyMap<string, number>,
 ): { records: T[]; indexById: Map<string, number> } {
   const hasColumns = Object.keys(columns).length > 0 || Object.keys(removedFields).length > 0;
-  if (changed.length === 0 && !hasColumns && removedIds.length === 0) return { records: previous as T[], indexById: new Map(indexById) };
+  if (changed.length === 0 && !hasColumns && removedIds.length === 0) {
+    return { records: previous as T[], indexById: indexById as Map<string, number> };
+  }
   if (removedIds.length > 0) {
     const removed = new Set(removedIds);
     const changedById = new Map(changed.map((record) => [record.id, record]));

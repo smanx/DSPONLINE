@@ -7,12 +7,16 @@ import type {
   AuthoritativeSavePayloadProof,
   AuthoritativeSaveWriterFence,
 } from "./authoritativeSavePersistenceProtocol";
+import {
+  workerBinaryPayloadTransferables,
+  type WorkerBinaryPayload,
+} from "./workerBinaryPayload";
 
 const AUTHORITATIVE_SAVE_TIMEOUT_MS = 120_000;
 
-export interface AuthoritativeSavePayloadCommitInput {
+export interface AuthoritativeSavePayloadCommitInput<Payload extends WorkerBinaryPayload = ArrayBuffer> {
   key: string;
-  bytes: ArrayBuffer;
+  bytes: Payload;
   proof: AuthoritativeSavePayloadProof;
   seed: AuthoritativeSaveCatalogSeed;
   expectedRevision: number;
@@ -45,7 +49,7 @@ export class AuthoritativeSavePersistenceClientError extends Error {
   }
 }
 
-type RequestBody = Omit<AuthoritativeSavePersistenceRequest, "id">;
+type RequestBody = Omit<AuthoritativeSavePersistenceRequest<WorkerBinaryPayload>, "id">;
 
 interface PendingRequest {
   body: RequestBody;
@@ -176,7 +180,10 @@ export class AuthoritativeSavePersistenceClient {
       this.failAll("timeout", `authoritative save persistence 超过 ${this.timeoutMs}ms 上限`, id);
     }, this.timeoutMs);
     try {
-      active.postMessage({ ...request.body, id } satisfies AuthoritativeSavePersistenceRequest, [request.body.payload]);
+      active.postMessage(
+        { ...request.body, id } satisfies AuthoritativeSavePersistenceRequest<WorkerBinaryPayload>,
+        workerBinaryPayloadTransferables(request.body.payload),
+      );
     } catch (error) {
       this.clearPending(id, request);
       request.reject(new AuthoritativeSavePersistenceClientError(
@@ -188,8 +195,8 @@ export class AuthoritativeSavePersistenceClient {
     }
   }
 
-  commit(
-    input: AuthoritativeSavePayloadCommitInput,
+  commit<Payload extends WorkerBinaryPayload>(
+    input: AuthoritativeSavePayloadCommitInput<Payload>,
     onProgress?: (progress: AuthoritativeSavePersistenceProgress) => void,
   ): Promise<AuthoritativeSavePersistenceCommitResult> {
     if (this.closed) {
@@ -211,11 +218,16 @@ export class AuthoritativeSavePersistenceClient {
     };
     const id = ++this.nextId;
     return new Promise<AuthoritativeSavePersistenceResponse>((resolve, reject) => {
+      const restorePayload = input.bytes instanceof ArrayBuffer
+        ? (buffer: ArrayBuffer) => {
+          (input as AuthoritativeSavePayloadCommitInput<ArrayBuffer>).bytes = buffer;
+        }
+        : undefined;
       this.pending.set(id, {
         body,
         dispatched: false,
-        transferredPayload: true,
-        restorePayload: (buffer) => { input.bytes = buffer; },
+        transferredPayload: input.bytes instanceof ArrayBuffer,
+        ...(restorePayload ? { restorePayload } : {}),
         ...(onProgress ? { onProgress } : {}),
         resolve,
         reject,
@@ -227,13 +239,17 @@ export class AuthoritativeSavePersistenceClient {
         throw new AuthoritativeSavePersistenceClientError(
           "worker-operation",
           response.message,
-          input.bytes.byteLength === 0,
+          input.bytes instanceof ArrayBuffer && input.bytes.byteLength === 0,
         );
       }
       if (response.type !== "result") {
-        throw new AuthoritativeSavePersistenceClientError("protocol", "authoritative save Worker 响应类型不匹配", input.bytes.byteLength === 0);
+        throw new AuthoritativeSavePersistenceClientError(
+          "protocol",
+          "authoritative save Worker 响应类型不匹配",
+          input.bytes instanceof ArrayBuffer && input.bytes.byteLength === 0,
+        );
       }
-      if (!response.sourcePayloadTransfer) {
+      if (input.bytes instanceof ArrayBuffer && !response.sourcePayloadTransfer) {
         throw new AuthoritativeSavePersistenceClientError(
           "protocol",
           "authoritative save Worker 未返还 payload buffer ownership",
@@ -264,7 +280,7 @@ export class AuthoritativeSavePersistenceClient {
 const defaultClient = new AuthoritativeSavePersistenceClient();
 
 export function commitAuthoritativeSavePayloadInPersistenceWorker(
-  input: AuthoritativeSavePayloadCommitInput,
+  input: AuthoritativeSavePayloadCommitInput<WorkerBinaryPayload>,
   onProgress?: (progress: AuthoritativeSavePersistenceProgress) => void,
 ): Promise<AuthoritativeSavePersistenceCommitResult> {
   return defaultClient.commit(input, onProgress);

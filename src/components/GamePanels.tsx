@@ -67,7 +67,7 @@ import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { StableTextInput } from "./CompositionSafeInput";
 import { QuantityStepper } from "./QuantityStepper";
-import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
+import { CAMPAIGN_TASKS, getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getNextBeltTier, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
  import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_BELT_LANES, MAX_BUILDING_STACK_COUNT, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltLaneAdjustmentCheck, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEjectorOrbitTargetStatus, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaterialDeliverySlots, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getOrbitalCollectorQuantumStatus, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getQuantumAttachmentStatus, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetDisplayName, getPlanetIndustrialProfile, getPlanetOrbitalYields, specializationApplies } from "../game/galaxy";
@@ -155,7 +155,11 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
   const trayItems = useMemo(() => (Object.entries(game.tray) as Array<[ItemId, number]>)
     .filter(([, amount]) => amount > 0.001)
     .sort((a, b) => b[1] - a[1]), [game.tray]);
-  const campaign = useMemo(() => getCampaignSnapshot(game), [
+  const campaign = useMemo(() => game.campaign.activeTaskId === null ? {
+    activeTask: null,
+    completedCount: Math.min(CAMPAIGN_TASKS.length, game.campaign.completedTaskIds.length),
+    totalCount: CAMPAIGN_TASKS.length,
+  } : getCampaignSnapshot(game), [
     game.blueprints,
     game.belts,
     game.campaign,
@@ -193,6 +197,27 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
   ]);
   const swarmLoad = dysonEngineering.dysonPowerUtilization * 100;
   const cargoIsPortableFleet = Boolean(game.cargo && isPortableFleetItem(game.cargo.itemId));
+  const onPickTrayRef = useRef(onPickTray);
+  onPickTrayRef.current = onPickTray;
+  const trayRows = useMemo(() => trayItems.map(([itemId, amount]) => (
+    <button
+      className="tray-row"
+      type="button"
+      key={itemId}
+      draggable={!game.cargo || game.cargo.itemId === itemId}
+      onClick={() => onPickTrayRef.current(itemId)}
+      onDragStart={(event) => {
+        event.dataTransfer.setData("application/factory-item", itemId);
+        event.dataTransfer.setData("application/factory-source-kind", "tray");
+        event.dataTransfer.effectAllowed = "move";
+      }}
+      title={`拿取${ITEMS[itemId].name}`}
+    >
+      <ItemMark itemId={itemId} />
+      <ItemHoverCard itemId={itemId} className="item-reference--tray"><span>{ITEMS[itemId].name}</span></ItemHoverCard>
+      <ItemHoverCard itemId={itemId} className="item-reference--tray"><strong><QuantityValue value={amount} interactive={false} /></strong></ItemHoverCard>
+    </button>
+  )), [game.cargo?.itemId, trayItems]);
 
   return (
     <aside
@@ -324,25 +349,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
         <div className="tray-list">
           {trayItems.length === 0 ? (
             <div className="tray-empty"><Box size={18} /><span>暂无库存</span></div>
-          ) : trayItems.map(([itemId, amount]) => (
-            <button
-              className="tray-row"
-              type="button"
-              key={itemId}
-              draggable={!game.cargo || game.cargo.itemId === itemId}
-              onClick={() => onPickTray(itemId)}
-              onDragStart={(event) => {
-                event.dataTransfer.setData("application/factory-item", itemId);
-                event.dataTransfer.setData("application/factory-source-kind", "tray");
-                event.dataTransfer.effectAllowed = "move";
-              }}
-              title={`拿取${ITEMS[itemId].name}`}
-            >
-              <ItemMark itemId={itemId} />
-              <ItemHoverCard itemId={itemId} className="item-reference--tray"><span>{ITEMS[itemId].name}</span></ItemHoverCard>
-              <ItemHoverCard itemId={itemId} className="item-reference--tray"><strong><QuantityValue value={amount} interactive={false} /></strong></ItemHoverCard>
-            </button>
-          ))}
+          ) : trayRows}
         </div>
       </section>
       {trayManagementOpen ? <TrayManagementDialog game={game} onDiscard={onDiscardTrayItems} onSetItemLimit={onSetTrayItemLimit} onClose={() => setTrayManagementOpen(false)} /> : null}
@@ -2221,12 +2228,13 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
   const horizontalPan = useHorizontalPan<HTMLDivElement>();
   const unlockedBuildOrder = useMemo(() => CONSTRUCTION_BUILD_ORDER.filter((id) => {
     if (id === "orbital_cargo_terminal" && (game.mode !== "normal" || game.orbitalStation.status === "locked")) return false;
+    const requiredTechId = getConstructionDefinition(id)?.requiredTechId;
+    if (!requiredTechId || isTechnologyCompleted(game, requiredTechId)) return true;
     if ((game.construction[id] ?? 0) > 0) return true;
     if (isConveyorBeltId(id) && game.belts.some((belt) => belt.tier === getBeltTier(id))) return true;
     if (id === "mining_machine" && game.entities.some((entity) => entity.minerCount > 0)) return true;
     if (!isConveyorBeltId(id) && game.entities.some((entity) => entity.buildingId === id)) return true;
-    const requiredTechId = getConstructionDefinition(id)?.requiredTechId;
-    return !requiredTechId || isTechnologyCompleted(game, requiredTechId);
+    return false;
   }), [game.construction, game.belts, game.entities, game.mode, game.orbitalStation.status, game.research.completedTechIds]);
   const visibleBuildOrder = useMemo(() => category === "all"
     ? unlockedBuildOrder

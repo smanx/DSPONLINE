@@ -4,6 +4,8 @@ import {
   CANVAS_DETAIL_COMPACT_EXIT_VISIBLE,
   CANVAS_DETAIL_MEDIUM_ENTER_VISIBLE,
   CANVAS_DETAIL_MEDIUM_EXIT_VISIBLE,
+  CANVAS_STACK_MARKER_HEIGHT,
+  CANVAS_STACK_MARKER_WIDTH,
   CANVAS_STACK_ENTER_PX,
   CANVAS_STACK_EXIT_PX,
   countVisibleCanvasNodes,
@@ -12,6 +14,11 @@ import {
 } from "./canvasDensityPresentation";
 
 describe("visible-density canvas presentation", () => {
+  it("keeps stack count markers compact without shrinking their touch target", () => {
+    expect(CANVAS_STACK_MARKER_WIDTH).toBe(88);
+    expect(CANVAS_STACK_MARKER_HEIGHT).toBe(44);
+  });
+
   it("uses raw viewport-visible counts rather than active-planet totals", () => {
     const nodes = Array.from({ length: 2_000 }, (_, index) => ({ id: `node-${index}`, x: index * 40, y: 20 }));
     expect(countVisibleCanvasNodes(nodes, { left: 0, top: 0, right: 3_999, bottom: 500 })).toBe(100);
@@ -30,7 +37,37 @@ describe("visible-density canvas presentation", () => {
     expect(resolveCanvasDetailStage("auto", CANVAS_DETAIL_COMPACT_EXIT_VISIBLE, "compact")).toBe("compact");
     expect(resolveCanvasDetailStage("auto", CANVAS_DETAIL_COMPACT_EXIT_VISIBLE - 1, "compact")).toBe("medium");
     expect(resolveCanvasDetailStage("full", 2_000, "compact")).toBe("full");
+    expect(resolveCanvasDetailStage("medium", 2_000, "compact")).toBe("medium");
     expect(resolveCanvasDetailStage("minimal", 1, "full")).toBe("compact");
+  });
+
+  it("keeps every collapsed overlap location visible through one count marker", () => {
+    const nodes = Array.from({ length: 172 }, (_, index) => ({ id: `stack-${index}`, x: 100, y: 200 }));
+    const grouped = groupCanvasNodeStacks(
+      nodes,
+      1,
+      new Set(),
+      new Map(),
+      new Set(["stack-12"]),
+      new Set(),
+      "marker",
+    );
+    expect(grouped).toMatchObject({ groupCount: 1, hiddenCount: 171, markerCount: 1 });
+    expect(grouped.byNodeId.get("stack-0")).toMatchObject({ hidden: false, marker: true, halo: true, count: 172 });
+    expect(grouped.byNodeId.get("stack-0")?.memberIds).toHaveLength(172);
+    expect(grouped.byNodeId.get("stack-1")).toMatchObject({ hidden: true, marker: false, memberIds: [] });
+  });
+
+  it("supports a representative card or every card without losing stack identity", () => {
+    const nodes = Array.from({ length: 8 }, (_, index) => ({ id: `stack-${index}`, x: 100, y: 200 }));
+    const representative = groupCanvasNodeStacks(nodes, 1, new Set(), new Map(), new Set(), new Set(), "representative");
+    expect(representative).toMatchObject({ groupCount: 1, hiddenCount: 7, markerCount: 0 });
+    expect(representative.byNodeId.get("stack-0")).toMatchObject({ hidden: false, marker: false, halo: true });
+
+    const all = groupCanvasNodeStacks(nodes, 1, new Set(), new Map(), new Set(), new Set(), "all");
+    expect(all).toMatchObject({ groupCount: 1, hiddenCount: 0, markerCount: 0 });
+    expect([...all.byNodeId.values()].every((presentation) => !presentation.hidden && !presentation.marker)).toBe(true);
+    expect([...all.byNodeId.values()].filter((presentation) => presentation.memberIds.length > 0)).toHaveLength(1);
   });
 
   it("groups exact stacks in one spatial pass and preserves protected interaction leaders", () => {

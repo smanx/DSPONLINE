@@ -81,7 +81,7 @@ async function openDurableFactory(page: Page, path = "/?menu=1") {
   await page.getByRole("button", { name: "进入工厂", exact: true }).click();
   const shell = page.locator(".game-shell");
   await expect(shell).toBeVisible({ timeout: 15_000 });
-  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect(page.locator(".factory-canvas")).toBeVisible();
 }
 
@@ -189,4 +189,3 @@ test("construction center accepts 100,000,000 targets, presets and mobile 200 pe
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/v104-construction-center-font-200-390x844.png", fullPage: true });
 });
-

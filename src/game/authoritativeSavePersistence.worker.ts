@@ -31,6 +31,11 @@ import type {
   AuthoritativeSavePayloadProof,
   AuthoritativeSaveWriterFence,
 } from "./authoritativeSavePersistenceProtocol";
+import {
+  workerBinaryPayloadByteLength,
+  workerBinaryPayloadToArrayBuffer,
+  type WorkerBinaryPayload,
+} from "./workerBinaryPayload";
 
 const DATABASE_NAME = "dsp-idle-network.local-saves";
 const DATABASE_VERSION = 2;
@@ -190,7 +195,10 @@ function validSeed(seed: AuthoritativeSaveCatalogSeed, key: string, proof: Autho
 /** Re-parse and bind the new envelope in the persistence Worker.  The save
  * Worker proof is necessary but not trusted by itself: a tampered payload and
  * an independently supplied catalog seed must never be committed together. */
-function newEnvelopeMismatch(raw: string, request: AuthoritativeSavePersistenceRequest): string | null {
+function newEnvelopeMismatch(
+  raw: string,
+  request: AuthoritativeSavePersistenceRequest<WorkerBinaryPayload>,
+): string | null {
   const inspection = inspectSaveEnvelopeChecksum(raw);
   if (inspection.status !== "valid" || !inspection.parsed || !inspection.state) return "integrity";
   if (inspection.recordedChecksum !== request.seed.stateChecksum) return "recordedChecksum";
@@ -458,27 +466,28 @@ async function writeBackupBestEffort(
 }
 
 async function commitPayload(
-  request: AuthoritativeSavePersistenceRequest,
+  request: AuthoritativeSavePersistenceRequest<WorkerBinaryPayload>,
+  payload: ArrayBuffer,
   report: (progress: AuthoritativeSavePersistenceProgress) => void,
 ): Promise<AuthoritativeSavePersistenceResult> {
   const decodeStarted = performance.now();
   if (!validNonNegativeInteger(request.expectedRevision) || request.expectedRevision > 0x7fffffff ||
     !validWriterFence(request.fence) ||
-    !validSeed(request.seed, request.key, request.proof) || request.payload.byteLength !== request.proof.byteLength) {
+    !validSeed(request.seed, request.key, request.proof) || payload.byteLength !== request.proof.byteLength) {
     return failure("invalid", "authoritative payload proof 或 key/seed 不合法");
   }
   const { bindingSha256, ...proofWithoutBinding } = request.proof;
   if (await computeAuthoritativeSaveProofBindingSha256(proofWithoutBinding, request.seed) !== bindingSha256) {
     return failure("invalid", "authoritative payload proof 与 catalog seed binding 不匹配");
   }
-  report({ stage: "decoding-payload", key: request.key, bytes: request.payload.byteLength });
-  if (computeSavePayloadChecksum(request.payload) !== request.proof.payloadChecksum ||
-    await sha256Bytes(request.payload) !== request.proof.payloadSha256) {
+  report({ stage: "decoding-payload", key: request.key, bytes: payload.byteLength });
+  if (computeSavePayloadChecksum(payload) !== request.proof.payloadChecksum ||
+    await sha256Bytes(payload) !== request.proof.payloadSha256) {
     return failure("invalid", "authoritative payload checksum 与 Worker proof 不匹配");
   }
   let raw: string;
   try {
-    raw = new TextDecoder("utf-8", { fatal: true }).decode(request.payload);
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(payload);
   } catch {
     return failure("invalid", "authoritative payload 不是合法 UTF-8");
   }
@@ -493,7 +502,7 @@ async function commitPayload(
   const decodeMs = Math.max(0, performance.now() - decodeStarted);
   const db = await openDatabase();
   try {
-    report({ stage: "writing-idb", key: request.key, bytes: request.payload.byteLength });
+    report({ stage: "writing-idb", key: request.key, bytes: payload.byteLength });
     const primaryWriteStarted = performance.now();
     const transaction = db.transaction(RECORD_STORE, "readwrite");
     const done = transactionDone(transaction);
@@ -572,7 +581,7 @@ async function commitPayload(
       stateChecksum: request.seed.stateChecksum,
       fence: request.fence,
     };
-    report({ stage: "readback", key: request.key, bytes: request.payload.byteLength, revision: nextRevision });
+    report({ stage: "readback", key: request.key, bytes: payload.byteLength, revision: nextRevision });
     if (!await verifyPrimaryAfterCommit(db, expectation)) {
       return failure("readback-failed", "authoritative save 提交后独立事务回读失败");
     }
@@ -615,27 +624,34 @@ function postResponse(response: AuthoritativeSavePersistenceResponse): void {
   self.postMessage(response, { transfer: responseTransferables(response) });
 }
 
-async function handle(request: AuthoritativeSavePersistenceRequest): Promise<void> {
-  const payload = request.payload;
+async function handle(request: AuthoritativeSavePersistenceRequest<WorkerBinaryPayload>): Promise<void> {
+  const sourcePayload = request.payload;
+  const sourceBytes = workerBinaryPayloadByteLength(sourcePayload);
   const report = (progress: AuthoritativeSavePersistenceProgress) => {
     self.postMessage({ id: request.id, type: "progress", progress } satisfies AuthoritativeSavePersistenceResponse);
   };
-  report({ stage: "queued", key: request.key, bytes: payload.byteLength });
-  report({ stage: "validating-proof", key: request.key, bytes: payload.byteLength });
+  report({ stage: "queued", key: request.key, bytes: sourceBytes });
+  report({ stage: "validating-proof", key: request.key, bytes: sourceBytes });
   let result: AuthoritativeSavePersistenceResult;
   try {
-    result = await commitPayload(request, report);
+    const payload = await workerBinaryPayloadToArrayBuffer(sourcePayload);
+    result = await commitPayload(request, payload, report);
   } catch (error) {
     const reason = failureReasonForError(error);
     result = failure(reason, error instanceof Error ? error.message : "authoritative save persistence Worker 失败");
   }
-  if (result.ok) report({ stage: "verified", key: request.key, bytes: payload.byteLength, revision: result.proof.revision });
-  else report({ stage: "failed", key: request.key, bytes: payload.byteLength, reason: result.reason });
-  postResponse({ id: request.id, type: "result", result, sourcePayloadTransfer: payload });
+  if (result.ok) report({ stage: "verified", key: request.key, bytes: sourceBytes, revision: result.proof.revision });
+  else report({ stage: "failed", key: request.key, bytes: sourceBytes, reason: result.reason });
+  postResponse({
+    id: request.id,
+    type: "result",
+    result,
+    ...(sourcePayload instanceof ArrayBuffer ? { sourcePayloadTransfer: sourcePayload } : {}),
+  });
 }
 
 let queue = Promise.resolve();
-self.onmessage = (event: MessageEvent<AuthoritativeSavePersistenceRequest>) => {
+self.onmessage = (event: MessageEvent<AuthoritativeSavePersistenceRequest<WorkerBinaryPayload>>) => {
   queue = queue.then(() => handle(event.data), () => handle(event.data));
 };
 

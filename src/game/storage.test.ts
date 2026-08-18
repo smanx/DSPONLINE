@@ -49,6 +49,23 @@ describe("game storage", () => {
     expect(loaded.research.progressByTech.thermal_power).toEqual({ energy_matrix: 7 });
   });
 
+  it("drops null runtime history samples instead of rejecting an otherwise valid save", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState()));
+    legacy.productionHistory = [null, {
+      elapsedSeconds: 20,
+      productionPerMinute: { iron_ingot: 30 },
+      consumptionPerMinute: {},
+      inventory: {},
+    }];
+
+    const migrated = migrateGame(legacy)!;
+
+    expect(migrated.productionHistory).toEqual([expect.objectContaining({
+      elapsedSeconds: 20,
+      productionPerMinute: { iron_ingot: 30 },
+    })]);
+  });
+
   it("self-heals a v46 save whose selected research reached the cost boundary", () => {
     const legacy = JSON.parse(JSON.stringify(createInitialState()));
     legacy.version = 46;

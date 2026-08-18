@@ -4,15 +4,19 @@ import { applyContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from
 import { advancePersistentSimulationRuntime, advancePersistentSimulationRuntimeMulticore, createPersistentSimulationRuntime, createSimulationPlanetPhaseLookup, ensureSimulationDynamicRouteLookup, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
 import { BrowserMulticoreExecutor, planMulticoreSimulation, type MulticoreSimulationOptions } from "./multicoreSimulation";
 import type { GameState } from "./types";
-import { captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createFullCurrentPlanetSimulationProjection, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
+import { captureSimulationProjectionBaseline, chunkFullRecordSimulationProjection, createDeferredTopLevelSimulationProjection, createFullCurrentPlanetSimulationProjection, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
 import { runTimeWarpApproximateSettlement, type TimeWarpApproximationReport } from "./offlineApproximation";
 import { createFactoryAlertProjection } from "./alerts";
 import {
   applySimulationCommandPatch,
+  createSimulationStateIdentity,
   deserializeSimulationStateTransfer,
   serializeSimulationStateCheckpoint,
+  serializeSimulationStateForTransfer,
   type SimulationCommandPatch,
+  type SimulationStateIdentity,
+  type SimulationStateBlobTransfer,
   type SimulationStateTransfer,
 } from "./simulationRuntimeProtocol";
 import {
@@ -29,6 +33,8 @@ export interface SimulationWorkerRequest {
   state?: GameState;
   /** One-time/bootstrap state; callers transfer the backing buffer. */
   stateTransfer?: SimulationStateTransfer;
+  /** Large immutable checkpoint relayed without UI-thread buffer adoption. */
+  stateBlobTransfer?: SimulationStateBlobTransfer;
   /** Ordered UI command against the last acknowledged Worker revision. */
   command?: SimulationCommandPatch;
   simulationSeconds: number;
@@ -53,6 +59,12 @@ export interface SimulationWorkerRequest {
   /** Authority replacement requests may ask for the exact post-replay state
    * mirror using the same bounded checkpoint chunk protocol as normal saves. */
   includeCheckpointStateMirror?: boolean;
+  /** Pure-idle authority replacement keeps the full state in the Worker and
+   * streams only bounded current-planet UI projection chunks. */
+  streamAuthorityProjection?: boolean;
+  /** Dedicated flow-control channel. The Worker sends the next projection
+   * chunk only after the UI has committed and painted the previous one. */
+  authorityProjectionAckPort?: MessagePort;
 }
 
 export type SimulationCheckpointStateChunk =
@@ -90,6 +102,9 @@ export interface SimulationWorkerResponse {
   checkpointState?: GameState;
   /** Large checkpoint mirrors are streamed in ordered small clones before the final buffer response. */
   checkpointStateChunk?: SimulationCheckpointStateChunk;
+  checkpointIdentity?: SimulationStateIdentity;
+  authorityProjectionChunk?: { index: number; total: number };
+  authorityProjectionChunkCount?: number;
   commandApplied?: boolean;
   durableReplayProgress?: SimulationRuntimeDurableReplayProgress;
   durableReplayResult?: SimulationRuntimeDurableReplayResult;
@@ -246,23 +261,34 @@ async function processDurableReplayRequest(
   event: MessageEvent<SimulationWorkerRequest>,
   receivedAt: number,
 ): Promise<void> {
-  const { id, stateTransfer, stateRevision, registry, registryFingerprint, durableReplay, durableReplayCancelPort } = event.data;
+  const { id, stateRevision, registry, registryFingerprint, durableReplay, durableReplayCancelPort, authorityProjectionAckPort } = event.data;
+  const sourceStateTransfer = event.data.stateTransfer;
+  const sourceStateBlobTransfer = event.data.stateBlobTransfer;
   let cancelled = false;
   let returned = false;
   durableReplayCancelPort?.addEventListener("message", () => { cancelled = true; });
   durableReplayCancelPort?.start();
+  authorityProjectionAckPort?.start();
   const returnSourceCheckpoint = (response: Omit<SimulationWorkerResponse, "id" | "durationMs">) => {
     if (returned) return;
     durableReplayCancelPort?.close();
+    authorityProjectionAckPort?.close();
+    // A successful streamed authority adoption has already decoded the source
+    // into the live Worker runtime and verified the persisted primary. Sending
+    // that 30+ MiB source buffer back to the UI creates a browser message-
+    // adoption long task without adding any recovery value. Failure and the
+    // ordinary durable-replay protocol still return ownership for exact retry.
+    const returnSource = Boolean(sourceStateTransfer) &&
+      (!event.data.streamAuthorityProjection || !response.durableReplayResult);
     const envelope: SimulationWorkerResponse = {
       id,
       durationMs: Math.max(0, performance.now() - receivedAt),
       ...response,
-      ...(stateTransfer ? { sourceCheckpointTransfer: stateTransfer } : {}),
+      ...(returnSource && sourceStateTransfer ? { sourceCheckpointTransfer: sourceStateTransfer } : {}),
     };
     const transfers: Transferable[] = [];
-    if (stateTransfer?.buffer instanceof ArrayBuffer && stateTransfer.buffer.byteLength === stateTransfer.byteLength) {
-      transfers.push(stateTransfer.buffer);
+    if (returnSource && sourceStateTransfer?.buffer instanceof ArrayBuffer && sourceStateTransfer.buffer.byteLength === sourceStateTransfer.byteLength) {
+      transfers.push(sourceStateTransfer.buffer);
     }
     if (response.checkpoint?.buffer instanceof ArrayBuffer && response.checkpoint.buffer.byteLength === response.checkpoint.byteLength) {
       transfers.push(response.checkpoint.buffer);
@@ -271,10 +297,16 @@ async function processDurableReplayRequest(
     returned = true;
   };
   try {
-    if (!stateTransfer || !durableReplay || !registry || registry.fingerprint !== registryFingerprint ||
+    if ((!sourceStateTransfer && !sourceStateBlobTransfer) || (sourceStateTransfer && sourceStateBlobTransfer) ||
+      !durableReplay || !registry || registry.fingerprint !== registryFingerprint ||
       stateRevision !== durableReplay.checkpointStateRevision) {
       throw new SimulationRuntimeDurableReplayError("invalid-plan", "durable replay 缺少精确 checkpoint/registry/revision");
     }
+    const stateTransfer = sourceStateTransfer ?? {
+      protocolVersion: sourceStateBlobTransfer!.protocolVersion,
+      byteLength: sourceStateBlobTransfer!.byteLength,
+      buffer: await sourceStateBlobTransfer!.blob.arrayBuffer(),
+    };
     const state = deserializeSimulationStateTransfer(stateTransfer);
     activateRuntimeRegistry(registry);
     if (runtime) replacePersistentSimulationRuntimeState(runtime, state);
@@ -344,6 +376,7 @@ async function processDurableReplayRequest(
     runtimeInvalidated = false;
     let checkpoint: SimulationStateTransfer | undefined;
     let checkpointState: GameState | undefined;
+    let checkpointIdentity: SimulationStateIdentity | undefined;
     if (event.data.includeCheckpointStateMirror) {
       const serialized = serializeSimulationStateCheckpoint(runtime.state);
       checkpoint = serialized.checkpoint;
@@ -352,17 +385,61 @@ async function processDurableReplayRequest(
         postCheckpointStateChunks(id, checkpointState);
         checkpointState = undefined;
       }
+    } else if (event.data.streamAuthorityProjection) {
+      // The exact full state remains authoritative in this Worker. The UI only
+      // needs the bounded identity proof for its ordered current-planet mirror;
+      // a later save can request a fresh transferable checkpoint on demand.
+      checkpointIdentity = createSimulationStateIdentity(runtime.state);
+    }
+    const fullProjection = attachFactoryAlertProjection(
+      createFullCurrentPlanetSimulationProjection(runtime.state),
+      event.data.includeFactoryAlerts === true,
+    );
+    const projectionChunks = event.data.streamAuthorityProjection
+      ? chunkFullRecordSimulationProjection(fullProjection)
+      : [];
+    for (const chunk of projectionChunks) {
+      self.postMessage({
+        id,
+        changed: true,
+        durationMs: Math.max(0, performance.now() - receivedAt),
+        protocol: "projection",
+        stateRevision: runtimeRevision,
+        registryFingerprint: activeRegistryFingerprint ?? undefined,
+        projection: chunk.projection,
+        factoryAlertsGeneration: event.data.factoryAlertsGeneration,
+        authorityProjectionChunk: { index: chunk.index, total: chunk.total },
+      } satisfies SimulationWorkerResponse);
+      if (authorityProjectionAckPort) {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            authorityProjectionAckPort.removeEventListener("message", onMessage);
+            reject(new Error("挂机终态 UI 投影分块确认超时"));
+          }, 10_000);
+          const onMessage = (ack: MessageEvent<{ index?: unknown }>) => {
+            if (ack.data?.index !== chunk.index) return;
+            clearTimeout(timeout);
+            authorityProjectionAckPort.removeEventListener("message", onMessage);
+            resolve();
+          };
+          authorityProjectionAckPort.addEventListener("message", onMessage);
+        });
+      } else if ((chunk.index + 1) % 8 === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
     }
     returnSourceCheckpoint({
       changed: true,
       protocol: "projection",
       stateRevision: runtimeRevision,
       registryFingerprint: activeRegistryFingerprint ?? undefined,
-      projection: attachFactoryAlertProjection(createFullCurrentPlanetSimulationProjection(runtime.state), event.data.includeFactoryAlerts === true),
+      ...(!event.data.streamAuthorityProjection ? { projection: fullProjection } : {}),
       factoryAlertsGeneration: event.data.factoryAlertsGeneration,
       durableReplayResult: replayResult,
       ...(checkpoint ? { checkpoint } : {}),
       ...(checkpointState ? { checkpointState } : {}),
+      ...(checkpointIdentity ? { checkpointIdentity } : {}),
+      ...(event.data.streamAuthorityProjection ? { authorityProjectionChunkCount: projectionChunks.length } : {}),
     });
   } catch (error) {
     const replayError = error instanceof SimulationRuntimeDurableReplayError

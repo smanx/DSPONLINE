@@ -91,12 +91,14 @@ test("a new device discovers and explicitly restores speedrun/main without creat
   await expect(panel.getByRole("status")).toContainText("未创建或改写普通模式存档");
 
   const persisted = await page.evaluate(async () => {
+    const localSaveStore = await import("/src/game/localSaveStore.ts");
     const storage = await import("/src/game/storage.ts");
     const preview = await import("/src/game/savePreview.ts");
+    const speedrunRaw = await localSaveStore.readPersistedLocalSaveValue("dsp-idle-network.save.v1.speedrun");
     return {
       normal: preview.getMenuContinueSave("normal"),
       speedrunMode: preview.getMenuContinueSave("speedrun")?.summary.mode,
-      speedrunFactoryId: storage.loadGame("speedrun").state.speedrun?.factoryId,
+      speedrunFactoryId: speedrunRaw ? storage.inspectSave(speedrunRaw).state?.speedrun?.factoryId : undefined,
     };
   });
   expect(persisted.normal).toBeNull();
@@ -254,7 +256,7 @@ test("an existing local speedrun save gets an explicit same-mode overwrite warni
       normal: preview.getMenuContinueSave("normal"),
       primaryFactoryId: primaryRaw ? storage.inspectSave(primaryRaw).state?.speedrun?.factoryId : null,
       emergencyFactoryId: emergencyRaw ? storage.inspectSave(emergencyRaw).state?.speedrun?.factoryId : null,
-      speedrunFactoryId: storage.loadGame("speedrun").state.speedrun?.factoryId,
+      speedrunFactoryId: primaryRaw ? storage.inspectSave(primaryRaw).state?.speedrun?.factoryId : undefined,
       speedrunSnapshots: storage.getSaveSnapshotSummaries("speedrun").map((snapshot) => snapshot.reason),
     };
   });
@@ -304,4 +306,3 @@ test("speedrun history and delete confirmations name their exact mode and slot",
     { method: "DELETE", path: "/api/cloud-save", mode: "speedrun", slot: "1" },
   ]);
 });
-

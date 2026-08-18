@@ -1,5 +1,6 @@
 import type { GameSettings, SaveMode } from "./types";
 import type { LocalSaveCatalogKind } from "./localSaveCatalog";
+import type { WorkerBinaryPayload } from "./workerBinaryPayload";
 
 export interface AuthoritativeSaveCatalogSeed {
   mode: SaveMode;
@@ -89,11 +90,11 @@ export interface AuthoritativeSavePersistenceProgress {
   reason?: string;
 }
 
-export type AuthoritativeSavePersistenceRequest = {
+export type AuthoritativeSavePersistenceRequest<Payload extends WorkerBinaryPayload = ArrayBuffer> = {
   id: number;
   type: "commit";
   key: string;
-  payload: ArrayBuffer;
+  payload: Payload;
   proof: AuthoritativeSavePayloadProof;
   seed: AuthoritativeSaveCatalogSeed;
   expectedRevision: number;

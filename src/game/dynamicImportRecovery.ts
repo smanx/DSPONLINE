@@ -31,14 +31,28 @@ function errorMessage(error: unknown): string {
 
 export function isDynamicImportFailure(error: unknown): boolean {
   const message = errorMessage(error).toLowerCase();
-  return error instanceof TypeError || [
+  const name = error instanceof Error ? error.name.toLowerCase() : "";
+  return name === "chunkloaderror" || [
     "failed to fetch dynamically imported module",
     "error loading dynamically imported module",
     "importing a module script failed",
     "loading chunk",
     "chunkloaderror",
-    "module script",
+    "module script failed",
+    "css chunk load failed",
   ].some((fragment) => message.includes(fragment));
+}
+
+/**
+ * The boundary intentionally exposes only a stable error category. Runtime
+ * messages can contain application data, so neither the message nor a stack
+ * trace belongs in the player-facing recovery surface.
+ */
+export function runtimeErrorDiagnosticCode(error: unknown): string {
+  const name = error instanceof Error && /^[A-Za-z][A-Za-z0-9]*Error$/.test(error.name)
+    ? error.name
+    : "Error";
+  return `runtime-${name.replace(/Error$/, "").toLowerCase() || "error"}`;
 }
 
 async function readLatestBuildId(): Promise<string | null> {

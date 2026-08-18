@@ -70,6 +70,24 @@ class FakeWorker {
   }
 }
 
+class BlobFakeWorker {
+  onmessage: ((event: MessageEvent<AuthoritativeSavePersistenceResponse>) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  onmessageerror: ((event: MessageEvent) => void) | null = null;
+  request: AuthoritativeSavePersistenceRequest<Blob> | null = null;
+
+  postMessage(message: AuthoritativeSavePersistenceRequest<Blob>, transfer: Transferable[] = []): void {
+    expect(transfer).toEqual([]);
+    this.request = structuredClone(message) as AuthoritativeSavePersistenceRequest<Blob>;
+  }
+
+  respond(response: AuthoritativeSavePersistenceResponse): void {
+    this.onmessage?.({ data: structuredClone(response) } as MessageEvent<AuthoritativeSavePersistenceResponse>);
+  }
+
+  terminate(): void { /* no-op */ }
+}
+
 afterEach(() => vi.useRealTimers());
 
 describe("AuthoritativeSavePersistenceClient", () => {
@@ -102,6 +120,48 @@ describe("AuthoritativeSavePersistenceClient", () => {
     }, sourcePayloadTransfer: retryBuffer }, [retryBuffer]);
     expect((await retry).result).toMatchObject({ ok: false, reason: "quota" });
     expect([...new Uint8Array(commit.bytes)]).toEqual([4, 5, 6]);
+  });
+
+  it("commits an immutable Blob carrier without detaching it or requiring an ownership return", async () => {
+    const worker = new BlobFakeWorker();
+    const client = new AuthoritativeSavePersistenceClient({ workerFactory: () => worker as unknown as Worker });
+    const arrayInput = await input([11, 12, 13]);
+    const blobInput: AuthoritativeSavePayloadCommitInput<Blob> = {
+      ...arrayInput,
+      bytes: new Blob([arrayInput.bytes], { type: "application/json" }),
+    };
+    const pending = client.commit(blobInput);
+    expect(blobInput.bytes.size).toBe(3);
+    const request = worker.request!;
+    expect(request.payload).toBeInstanceOf(Blob);
+    expect(request.payload.size).toBe(3);
+    worker.respond({
+      id: request.id,
+      type: "result",
+      result: {
+        ok: true,
+        proof: {
+          key: blobInput.key,
+          revision: 1,
+          savedAt: 1,
+          byteLength: 3,
+          payloadChecksum: blobInput.proof.payloadChecksum,
+          payloadSha256: blobInput.proof.payloadSha256,
+          stateChecksum: seed.stateChecksum,
+          backupKey: null,
+          backupRevision: null,
+          backupSaved: false,
+          workerDecodeMs: 1,
+          idbWriteMs: 2,
+          backupVerifyMs: 0,
+          totalBytesWritten: 3,
+        },
+      },
+    });
+    const result = await pending;
+    expect(result.result.ok).toBe(true);
+    expect(result.sourcePayloadTransfer).toBeUndefined();
+    expect(blobInput.bytes.size).toBe(3);
   });
 
   it("pagehide termination rejects inflight ownership-lost and queued payloads remain attached", async () => {

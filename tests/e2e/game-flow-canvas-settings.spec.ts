@@ -57,7 +57,7 @@ async function freshDurableGame(page: Page) {
   await page.getByRole("button", { name: /开始游戏/ }).click();
   const shell = page.locator(".game-shell");
   await expect(shell).toBeVisible({ timeout: 15_000 });
-  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
   await expect(page.locator(".vein-node").filter({ hasText: "铁矿石" })).toBeVisible({ timeout: 15_000 });
 }
@@ -2096,43 +2096,23 @@ test("failed primary saves stay visible and never report false success", async (
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.addInitScript(() => {
     const runtime = window as typeof window & {
-      __dspAuthoritativeSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+      __dspPrimarySaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+      __dspPrimarySaveNativePut?: IDBObjectStore["put"];
     };
-    runtime.__dspAuthoritativeSaveFault = { enabled: false, remainingFailures: 0, interceptedFailures: 0 };
-    const NativeWorker = window.Worker;
-    const WrappedWorker = new Proxy(NativeWorker, {
-      construct(target, args) {
-        const worker = Reflect.construct(target, args) as Worker;
-        if (!String(args[0]).includes("authoritativeSavePersistence.worker")) return worker;
-        const nativePostMessage = worker.postMessage.bind(worker);
-        worker.postMessage = ((message: Record<string, unknown>, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
-          const fault = runtime.__dspAuthoritativeSaveFault;
-          if (fault?.enabled && fault.remainingFailures > 0 && message.type === "commit" &&
-            message.key === "dsp-idle-network.save.v1" && message.payload instanceof ArrayBuffer) {
-            fault.remainingFailures -= 1;
-            fault.interceptedFailures += 1;
-            const response = {
-              id: message.id,
-              type: "result",
-              result: {
-                ok: false,
-                reason: "quota",
-                message: "synthetic quota",
-                retryable: true,
-                degraded: true,
-              },
-              sourcePayloadTransfer: message.payload,
-            };
-            queueMicrotask(() => worker.dispatchEvent(new MessageEvent("message", { data: response })));
-            return;
-          }
-          if (transferOrOptions === undefined) nativePostMessage(message);
-          else nativePostMessage(message, transferOrOptions);
-        }) as typeof worker.postMessage;
-        return worker;
-      },
-    });
-    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+    runtime.__dspPrimarySaveFault = { enabled: false, remainingFailures: 0, interceptedFailures: 0 };
+    runtime.__dspPrimarySaveNativePut = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+      const fault = runtime.__dspPrimarySaveFault;
+      if (fault?.enabled && fault.remainingFailures > 0 && value && typeof value === "object" &&
+        (value as { key?: unknown }).key === "dsp-idle-network.save.v1") {
+        fault.remainingFailures -= 1;
+        fault.interceptedFailures += 1;
+        throw new DOMException("synthetic quota", "QuotaExceededError");
+      }
+      return key === undefined
+        ? runtime.__dspPrimarySaveNativePut!.call(this, value)
+        : runtime.__dspPrimarySaveNativePut!.call(this, value, key);
+    } as IDBObjectStore["put"];
   });
   await freshDurableGame(page);
   const shell = page.locator(".game-shell");
@@ -2158,9 +2138,9 @@ test("failed primary saves stay visible and never report false success", async (
   expect(before.raw).not.toBeNull();
   await page.evaluate(() => {
     const fault = (window as typeof window & {
-      __dspAuthoritativeSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
-    }).__dspAuthoritativeSaveFault;
-    if (!fault) throw new Error("authoritative save fault control is missing");
+      __dspPrimarySaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+    }).__dspPrimarySaveFault;
+    if (!fault) throw new Error("primary save fault control is missing");
     fault.enabled = true;
     fault.remainingFailures = 2;
   });
@@ -2174,8 +2154,8 @@ test("failed primary saves stay visible and never report false success", async (
   await expect(page.locator(".game-notice")).not.toContainText("主存档已保存");
   expect(await page.evaluate(() => {
     const fault = (window as typeof window & {
-      __dspAuthoritativeSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
-    }).__dspAuthoritativeSaveFault;
+      __dspPrimarySaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+    }).__dspPrimarySaveFault;
     return fault ? { remainingFailures: fault.remainingFailures, interceptedFailures: fault.interceptedFailures } : null;
   })).toEqual({ remainingFailures: 0, interceptedFailures: 2 });
   const afterFailure = await readDurablePrimary();
@@ -2187,9 +2167,9 @@ test("failed primary saves stay visible and never report false success", async (
 
   await page.evaluate(() => {
     const fault = (window as typeof window & {
-      __dspAuthoritativeSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
-    }).__dspAuthoritativeSaveFault;
-    if (!fault) throw new Error("authoritative save fault control is missing");
+      __dspPrimarySaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+    }).__dspPrimarySaveFault;
+    if (!fault) throw new Error("primary save fault control is missing");
     fault.enabled = false;
   });
   await operations.getByRole("button", { name: "立即保存" }).click();

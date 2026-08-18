@@ -1,8 +1,10 @@
 import type { CanvasLod } from "./canvasPerformance";
 import type { CanvasWorldRectangle } from "./canvasConnectionPresentation";
 
-export type CanvasDetailPreference = "auto" | "full" | "minimal";
+export type CanvasDetailPreference = "auto" | "full" | "medium" | "minimal";
 export type CanvasDetailStage = "full" | "medium" | "compact";
+export type CanvasOverlapPreference = "marker" | "representative" | "all";
+export type CanvasInteractionDetailPreference = "selected" | "hover" | "base";
 
 export const CANVAS_DETAIL_MEDIUM_ENTER_VISIBLE = 140;
 export const CANVAS_DETAIL_MEDIUM_EXIT_VISIBLE = 100;
@@ -12,6 +14,8 @@ export const CANVAS_STACK_ENTER_PX = 12;
 export const CANVAS_STACK_EXIT_PX = 18;
 export const CANVAS_STACK_PROXY_WIDTH = 96;
 export const CANVAS_STACK_PROXY_HEIGHT = 32;
+export const CANVAS_STACK_MARKER_WIDTH = 88;
+export const CANVAS_STACK_MARKER_HEIGHT = 44;
 
 export interface CanvasDensityNode {
   id: string;
@@ -28,6 +32,8 @@ export interface CanvasStackPresentation {
   memberIds: readonly string[];
   count: number;
   hidden: boolean;
+  /** The sole lightweight, visible group marker used instead of a representative card. */
+  marker: boolean;
   halo: boolean;
   alertCount: number;
   criticalAlertCount: number;
@@ -38,6 +44,7 @@ export interface CanvasStackGrouping {
   membership: ReadonlyMap<string, string>;
   groupCount: number;
   hiddenCount: number;
+  markerCount: number;
 }
 
 function finiteOr(value: number | undefined, fallback: number): number {
@@ -65,6 +72,7 @@ export function resolveCanvasDetailStage(
   previous: CanvasDetailStage = "full",
 ): CanvasDetailStage {
   if (preference === "full") return "full";
+  if (preference === "medium") return "medium";
   if (preference === "minimal") return "compact";
   const count = Math.max(0, Math.floor(Number.isFinite(visibleCount) ? visibleCount : 0));
   if (previous === "compact") {
@@ -139,6 +147,7 @@ export function groupCanvasNodeStacks(
   previousMembership: ReadonlyMap<string, string> = new Map(),
   alertIds: ReadonlySet<string> = new Set(),
   criticalAlertIds: ReadonlySet<string> = new Set(),
+  overlapPreference: CanvasOverlapPreference = "representative",
 ): CanvasStackGrouping {
   const normalizedZoom = Math.max(0.05, Number.isFinite(zoom) ? zoom : 1);
   const enterDistance = CANVAS_STACK_ENTER_PX / normalizedZoom;
@@ -182,6 +191,7 @@ export function groupCanvasNodeStacks(
   const membership = new Map<string, string>();
   let groupCount = 0;
   let hiddenCount = 0;
+  let markerCount = 0;
   for (const group of groups) {
     const membershipToken = stackMembershipToken(group.memberIds);
     for (const id of group.memberIds) membership.set(id, group.id);
@@ -193,6 +203,7 @@ export function groupCanvasNodeStacks(
         memberIds: group.memberIds,
         count: 1,
         hidden: false,
+        marker: false,
         halo: false,
         alertCount: 0,
         criticalAlertCount: 0,
@@ -201,8 +212,12 @@ export function groupCanvasNodeStacks(
     }
     groupCount += 1;
     const activeIds = group.memberIds.filter((id) => protectedIds.has(id));
-    const leaders = new Set(activeIds.length > 0 ? activeIds : [group.memberIds[0]]);
+    const leaders = new Set(overlapPreference === "all"
+      ? group.memberIds
+      : activeIds.length > 0 ? activeIds : [group.memberIds[0]]);
     const haloId = activeIds[0] ?? group.memberIds[0];
+    const markerId = overlapPreference === "marker" && activeIds.length === 0 ? haloId : null;
+    if (markerId) markerCount += 1;
     const alertCount = group.memberIds.reduce((count, id) => count + (alertIds.has(id) ? 1 : 0), 0);
     const criticalAlertCount = group.memberIds.reduce((count, id) => count + (criticalAlertIds.has(id) ? 1 : 0), 0);
     for (const id of group.memberIds) {
@@ -211,16 +226,17 @@ export function groupCanvasNodeStacks(
       byNodeId.set(id, {
         groupId: group.id,
         membershipToken,
-        // Only visible/protected leaders expose the member list to the badge.
-        // Hidden geometry proxies never scan or retain the full group array.
-        memberIds: hidden ? EMPTY_STACK_MEMBER_IDS : group.memberIds,
+        // Only the single halo/marker owns the member list. Expanded and
+        // protected siblings never retain a copy, keeping the derivation O(N).
+        memberIds: id === haloId ? group.memberIds : EMPTY_STACK_MEMBER_IDS,
         count: group.memberIds.length,
         hidden,
+        marker: id === markerId,
         halo: id === haloId,
         alertCount: id === haloId ? alertCount : 0,
         criticalAlertCount: id === haloId ? criticalAlertCount : 0,
       });
     }
   }
-  return { byNodeId, membership, groupCount, hiddenCount };
+  return { byNodeId, membership, groupCount, hiddenCount, markerCount };
 }

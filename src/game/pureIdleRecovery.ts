@@ -211,6 +211,29 @@ function checkpointFingerprint(state: GameState): string {
   return `checkpoint-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+function isRecoveryHistorySample(value: unknown): value is GameState["productionHistory"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const sample = value as Record<string, unknown>;
+  return typeof sample.elapsedSeconds === "number" && Number.isFinite(sample.elapsedSeconds) &&
+    sample.elapsedSeconds >= 0 &&
+    Boolean(sample.productionPerMinute && typeof sample.productionPerMinute === "object" && !Array.isArray(sample.productionPerMinute)) &&
+    Boolean(sample.consumptionPerMinute && typeof sample.consumptionPerMinute === "object" && !Array.isArray(sample.consumptionPerMinute)) &&
+    Boolean(sample.inventory && typeof sample.inventory === "object" && !Array.isArray(sample.inventory));
+}
+
+/**
+ * Production history is display telemetry and never participates in macro
+ * settlement. Older runtime journals can contain JSON nulls from sparse array
+ * slots, so keep their gameplay checkpoint usable by dropping only invalid
+ * telemetry before the macro Worker receives it.
+ */
+function sanitizePureIdleRecoveryState(state: GameState): GameState {
+  const originalHistory = state.productionHistory;
+  if (!Array.isArray(originalHistory)) return { ...state, productionHistory: [] };
+  const productionHistory = originalHistory.filter(isRecoveryHistorySample);
+  return productionHistory.length === originalHistory.length ? state : { ...state, productionHistory };
+}
+
 export function matchesPureIdleRecoveryCheckpoint(
   record: Pick<PureIdleRecoveryRecord, "checkpointHash">,
   state: GameState,
@@ -316,13 +339,14 @@ function validHeartbeat(value: unknown): value is PureIdleHeartbeatRecord {
 
 function combine(checkpoint: PureIdleCheckpointRecord, heartbeat: PureIdleHeartbeatRecord): PureIdleRecoveryRecord | null {
   if (checkpoint.sessionId !== heartbeat.sessionId) return null;
+  const state = sanitizePureIdleRecoveryState(checkpoint.state);
   return {
     sessionId: checkpoint.sessionId,
     createdAtMs: checkpoint.createdAtMs,
     startedAtMs: checkpoint.startedAtMs,
     startedPaused: checkpoint.startedPaused === true,
     mode: checkpoint.mode,
-    state: checkpoint.state,
+    state,
     ownerToken: heartbeat.ownerToken,
     heartbeatAtMs: heartbeat.heartbeatAtMs,
     leaseExpiresAtMs: heartbeat.leaseExpiresAtMs,
@@ -333,7 +357,7 @@ function combine(checkpoint: PureIdleCheckpointRecord, heartbeat: PureIdleHeartb
     ...(heartbeat.lastError ? { lastError: heartbeat.lastError } : {}),
     workerRestartCount: Math.max(0, Math.floor(heartbeat.workerRestartCount ?? 0)),
     settlementId: heartbeat.settlementId ?? checkpoint.sessionId,
-    checkpointHash: heartbeat.checkpointHash ?? checkpointFingerprint(checkpoint.state),
+    checkpointHash: heartbeat.checkpointHash ?? checkpointFingerprint(state),
     ...(heartbeat.stopReason ? { stopReason: heartbeat.stopReason } : {}),
     ...(heartbeat.stopRequestedAtMs !== undefined ? { stopRequestedAtMs: heartbeat.stopRequestedAtMs } : {}),
     ...(heartbeat.targetWallSeconds !== undefined ? { targetWallSeconds: heartbeat.targetWallSeconds } : {}),
@@ -451,6 +475,7 @@ export async function createPureIdleRecovery(
     releaseBrowserLease(ownerToken);
     return { ok: false, reason: "owned", message: "另一个标签页正在运行纯挂机，请先在原标签页停止" };
   }
+  const checkpointState = sanitizePureIdleRecoveryState(state);
   const checkpoint: PureIdleCheckpointRecord = {
     key: CHECKPOINT_KEY,
     schemaVersion: RECOVERY_SCHEMA_VERSION,
@@ -459,7 +484,7 @@ export async function createPureIdleRecovery(
     startedAtMs,
     startedPaused,
     mode,
-    state,
+    state: checkpointState,
   };
   const heartbeat: PureIdleHeartbeatRecord = {
     key: HEARTBEAT_KEY,
@@ -472,7 +497,7 @@ export async function createPureIdleRecovery(
     phase: "calibrating",
     workerRestartCount: 0,
     settlementId: randomToken("settlement"),
-    checkpointHash: checkpointFingerprint(state),
+    checkpointHash: checkpointFingerprint(checkpointState),
     committed: false,
     lastTransitionAtMs: nowMs,
   };

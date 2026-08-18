@@ -1,4 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+
+const durableRuntimeEnabled = ["true", "1", "on"].includes(
+  (process.env.VITE_DURABLE_RUNTIME_RECOVERY ?? "").trim().toLowerCase(),
+);
+test.skip(!durableRuntimeEnabled, "requires VITE_DURABLE_RUNTIME_RECOVERY=true");
 
 async function readRecoveryProof(page: Page) {
   return page.evaluate(async () => {
@@ -347,6 +353,125 @@ test("a running autosave resumes after a verified T1 recovery-head repair", asyn
   await expect(shell).toHaveAttribute("data-simulation-worker", "active", { timeout: 40_000 });
   await expect(shell).toHaveAttribute("data-simulation-paused", "false", { timeout: 20_000 });
   await expect(page.locator(".save-emergency-warning")).toHaveCount(0);
+});
+
+test("experimental save edits stay durable when the primary write fails", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    localStorage.setItem("dsp-idle-network.save.allow-edits-during-save.v1", "true");
+    const runtime = window as typeof window & {
+      __v146ExperimentalSaveFault?: { enabled: boolean; remainingFailures: number; interceptedFailures: number };
+    };
+    runtime.__v146ExperimentalSaveFault = { enabled: false, remainingFailures: 0, interceptedFailures: 0 };
+
+    const NativeWorker = window.Worker;
+    const WrappedWorker = new Proxy(NativeWorker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args) as Worker;
+        const workerOptions = args[1] as WorkerOptions | undefined;
+        const isAuthoritativePersistenceWorker = workerOptions?.name === "authoritative-save-persistence" ||
+          String(args[0]).includes("authoritativeSavePersistence.worker");
+        if (!isAuthoritativePersistenceWorker) return worker;
+        const nativePostMessage = worker.postMessage.bind(worker);
+        worker.postMessage = ((message: unknown, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => {
+          const request = message as { id?: unknown; type?: unknown; payload?: unknown };
+          const fault = runtime.__v146ExperimentalSaveFault;
+          if (request.type === "commit" && typeof request.id === "number" &&
+            request.payload instanceof ArrayBuffer && fault?.enabled && fault.remainingFailures > 0) {
+            fault.remainingFailures -= 1;
+            fault.interceptedFailures += 1;
+            // The request never reaches the native Worker, so ownership remains
+            // on this page. Return that exact buffer as the protocol requires.
+            window.setTimeout(() => {
+              worker.onmessage?.(new MessageEvent("message", {
+                data: {
+                  id: request.id,
+                  type: "result",
+                  result: {
+                    ok: false,
+                    reason: "quota",
+                    message: "synthetic quota",
+                    retryable: true,
+                    degraded: false,
+                  },
+                  sourcePayloadTransfer: request.payload,
+                },
+              }));
+            }, 2_500);
+            return;
+          }
+          window.setTimeout(() => {
+            if (transferOrOptions === undefined) nativePostMessage(message);
+            else nativePostMessage(message, transferOrOptions);
+          }, 0);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: WrappedWorker });
+  });
+
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "active", { timeout: 20_000 });
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active");
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+  const beforeSave = await readRecoveryProof(page);
+
+  await page.getByLabel("打开设置").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
+  await page.evaluate(() => {
+    const fault = (window as typeof window & {
+      __v146ExperimentalSaveFault?: { enabled: boolean; remainingFailures: number };
+    }).__v146ExperimentalSaveFault;
+    if (!fault) throw new Error("experimental save fault control missing");
+    fault.enabled = true;
+    fault.remainingFailures = 2;
+  });
+  await operations.getByRole("button", { name: "立即保存" }).click();
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "true", { timeout: 5_000 });
+
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.getByRole("button", { name: "教程、版本与其他", exact: true }).first().click();
+  await operations.getByRole("button", { name: "舒缓", exact: true }).click();
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
+  const warning = page.locator(".save-emergency-warning");
+  await expect(warning).toBeVisible({ timeout: 30_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false", { timeout: 30_000 });
+  await expect(shell).toHaveAttribute("data-difficulty", "relaxed");
+  await expect(shell).toHaveAttribute("data-simulation-worker", "active");
+  await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+  expect(await page.evaluate(() => {
+    const fault = (window as typeof window & {
+      __v146ExperimentalSaveFault?: { remainingFailures: number; interceptedFailures: number };
+    }).__v146ExperimentalSaveFault;
+    return fault ? { remainingFailures: fault.remainingFailures, interceptedFailures: fault.interceptedFailures } : null;
+  })).toEqual({ remainingFailures: 0, interceptedFailures: 2 });
+
+  const downloadPromise = page.waitForEvent("download");
+  await warning.getByRole("button", { name: "立即导出当前进度" }).click();
+  const download = await downloadPromise;
+  const downloadPath = await download.path();
+  if (!downloadPath) throw new Error("experimental failed-save export path missing");
+  const exported = JSON.parse(await readFile(downloadPath, "utf8")) as { state?: { settings?: { difficulty?: string }; paused?: boolean } };
+  expect(exported.state?.settings?.difficulty).toBe("relaxed");
+  expect(exported.state?.paused).toBe(false);
+
+  await expect.poll(async () => {
+    const proof = await readRecoveryProof(page);
+    return proof.pending ? -1 : proof.commandCount;
+  }, { timeout: 30_000 }).toBeGreaterThan(beforeSave.commandCount);
+
+  await operations.getByLabel("关闭运营中心").click();
+  const reloadedShell = await sealPagehideAndContinue(page);
+  await expect(reloadedShell).toHaveAttribute("data-difficulty", "relaxed");
+  await expect(reloadedShell).toHaveAttribute("data-simulation-worker", "active");
+  await expect(reloadedShell).toHaveAttribute("data-simulation-paused", "false");
 });
 
 test("running and paused UI commands drain through WAL before pagehide without promoting an emergency primary", async ({ page }) => {

@@ -14,10 +14,16 @@ import type {
 import type { GameState, IdleSettlementState, ItemId } from "./types";
 import { decodeVerifiedSaveTransfer } from "./saveTransfer";
 import { parseTrustedWorkerEnvelope } from "./storage";
+import {
+  isWorkerBinaryPayload,
+  workerBinaryPayloadByteLength,
+  workerBinaryPayloadToArrayBuffer,
+} from "./workerBinaryPayload";
+import type { WorkerBinaryPayload } from "./workerBinaryPayload";
 
 export interface PureIdleMacroFinalResult {
   state: GameState;
-  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer;
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
   summary: PureIdleMacroSummary;
   rawBytes: number;
   durationMs: number;
@@ -25,7 +31,7 @@ export interface PureIdleMacroFinalResult {
 
 export interface PureIdleMacroFinalEnvelopeResult {
   summary: PureIdleMacroSummary;
-  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer;
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
   rawBytes: number;
   durationMs: number;
 }
@@ -37,12 +43,12 @@ export type PureIdleMacroClientFailureCode = "deadline" | "worker-crash" | "oper
 
 export class PureIdleMacroClientError extends Error {
   public readonly recoverable: boolean;
-  public readonly finalEnvelope?: PureIdleMacroFinalEnvelopeTransfer;
+  public readonly finalEnvelope?: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
 
   constructor(
     public readonly code: PureIdleMacroClientFailureCode,
     message: string,
-    options: { recoverable?: boolean; finalEnvelope?: PureIdleMacroFinalEnvelopeTransfer } = {},
+    options: { recoverable?: boolean; finalEnvelope?: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload> } = {},
   ) {
     super(message);
     this.name = "PureIdleMacroClientError";
@@ -73,6 +79,7 @@ export interface PureIdleMacroFinalizeOptions {
   signal?: AbortSignal;
   deadlineMs?: number;
   terminal?: boolean;
+  binaryTransport?: "array-buffer" | "blob";
 }
 
 export interface PureIdleMacroInitializeOptions {
@@ -236,6 +243,7 @@ export class PureIdleMacroClient {
       type: "finalize",
       targetWallSeconds,
       ...(options.terminal ? { terminal: true } : {}),
+      ...(options.binaryTransport ? { binaryTransport: options.binaryTransport } : {}),
     }, options);
     if (response.type !== "finalized") throw new PureIdleMacroClientError("operation", "纯挂机 Worker 没有返回最终存档");
     const finalEnvelope = validatedFinalEnvelopeProtocol(
@@ -259,7 +267,10 @@ export class PureIdleMacroClient {
     const { finalEnvelope } = result;
     let raw: string;
     try {
-      raw = decodeVerifiedSaveTransfer(finalEnvelope.payloadBytes, finalEnvelope.verification);
+      raw = decodeVerifiedSaveTransfer(
+        await workerBinaryPayloadToArrayBuffer(finalEnvelope.payloadBytes),
+        finalEnvelope.verification,
+      );
     } catch (error) {
       throw new PureIdleMacroClientError(
         "operation",
@@ -318,18 +329,18 @@ function normalizeTerminalStateOptions(
 }
 
 function validatedFinalEnvelopeProtocol(
-  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer,
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>,
   summary: PureIdleMacroSummary,
   initializedRegistryFingerprint: string | null,
-): PureIdleMacroFinalEnvelopeTransfer {
+): PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload> {
   const verification = finalEnvelope?.verification;
   const identity = finalEnvelope?.identity;
   if (!summary || typeof summary.algorithmVersion !== "string" || summary.algorithmVersion.length === 0 ||
     !Number.isFinite(summary.settledWallSeconds) || summary.settledWallSeconds < 0 ||
     !Number.isFinite(summary.settledSimulationSeconds) || summary.settledSimulationSeconds < 0 ||
-    !(finalEnvelope?.payloadBytes instanceof ArrayBuffer) || verification?.integrity !== "valid" ||
+    !isWorkerBinaryPayload(finalEnvelope?.payloadBytes) || verification?.integrity !== "valid" ||
     !Number.isSafeInteger(verification.byteLength) || verification.byteLength < 0 ||
-    verification.byteLength !== finalEnvelope.payloadBytes.byteLength ||
+    verification.byteLength !== workerBinaryPayloadByteLength(finalEnvelope.payloadBytes) ||
     !validChecksum(verification.payloadChecksum) || !validChecksum(verification.stateChecksum) ||
     !identity || identity.stateChecksum !== verification.stateChecksum ||
     !Number.isSafeInteger(identity.stateVersion) || identity.stateVersion <= 0 ||

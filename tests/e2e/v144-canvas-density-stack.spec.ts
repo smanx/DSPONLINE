@@ -5,9 +5,12 @@ import { serializeEnvelope } from "../../src/game/storage";
 import { selectSettingsCategory } from "./settings-helpers";
 
 const CANVAS_DETAIL_KEY = "dsp-idle-network.ui.canvas-detail.v1";
+const CANVAS_OVERLAP_KEY = "dsp-idle-network.ui.canvas-overlap.v1";
+const CANVAS_INTERACTION_DETAIL_KEY = "dsp-idle-network.ui.canvas-interaction-detail.v1";
 const BLUEPRINT_OVERLAP_KEY = "dsp-idle-network.ui.blueprint-allow-overlap.v1";
+const MOBILE_UI_KEY = "dsp-idle-network.mobile-ui.v1";
 
-function anonymousCanvasFixture(options: { count: number; exactStack?: number; blueprint?: boolean; hiddenStackAlert?: boolean; spacingX?: number; zoom?: number }) {
+function anonymousCanvasFixture(options: { count: number; exactStack?: number; blueprint?: boolean; hiddenStackAlert?: boolean; spacingX?: number; zoom?: number; savedViewport?: { x: number; y: number; zoom: number } }) {
   let state = createInitialState(144_441, false);
   state.paused = true;
   state.settings.reducedMotion = true;
@@ -50,14 +53,14 @@ function anonymousCanvasFixture(options: { count: number; exactStack?: number; b
       }))
     : [];
   state.nextId = 900_000;
-  state.planetViewports.home = { x: 120, y: 100, zoom: options.zoom ?? zoom };
+  state.planetViewports.home = options.savedViewport ?? { x: 120, y: 100, zoom: options.zoom ?? zoom };
   state.construction.storage_mk1 = options.blueprint ? 1 : 0;
   if (options.blueprint) state = createBlueprint(state, ["anonymous-node-0"], "匿名重叠蓝图");
   if (options.hiddenStackAlert) state.paused = false;
   return serializeEnvelope(state, Date.now());
 }
 
-async function seedCanvas(page: Page, options: { count: number; exactStack?: number; blueprint?: boolean; detail?: string; hiddenStackAlert?: boolean; spacingX?: number; zoom?: number }) {
+async function seedCanvas(page: Page, options: { count: number; exactStack?: number; blueprint?: boolean; detail?: string; overlap?: string; interactionDetail?: string; hiddenStackAlert?: boolean; spacingX?: number; zoom?: number; savedViewport?: { x: number; y: number; zoom: number }; viewport?: { width: number; height: number } }) {
   const raw = anonymousCanvasFixture(options);
   await page.route("**/api/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -67,7 +70,7 @@ async function seedCanvas(page: Page, options: { count: number; exactStack?: num
     if (pathname === "/api/analytics" || pathname === "/api/presence" || pathname === "/api/errors") return fulfill({ accepted: true }, 202);
     return fulfill({ error: `unmocked ${pathname}` }, 404);
   });
-  await page.addInitScript(({ save, detail, detailKey, overlapKey }) => {
+  await page.addInitScript(({ save, detail, canvasOverlap, interactionDetail, detailKey, canvasOverlapKey, interactionDetailKey, blueprintOverlapKey }) => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
@@ -75,7 +78,7 @@ async function seedCanvas(page: Page, options: { count: number; exactStack?: num
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.save.v1", save);
     if (window.sessionStorage.getItem("dsp-idle-network.v144-overlap-preference-seeded") !== "1") {
-      window.localStorage.removeItem(overlapKey);
+      window.localStorage.removeItem(blueprintOverlapKey);
       window.sessionStorage.setItem("dsp-idle-network.v144-overlap-preference-seeded", "1");
     }
     if (window.sessionStorage.getItem("dsp-idle-network.v144-density-preference-seeded") !== "1") {
@@ -83,8 +86,25 @@ async function seedCanvas(page: Page, options: { count: number; exactStack?: num
       else window.localStorage.setItem(detailKey, detail);
       window.sessionStorage.setItem("dsp-idle-network.v144-density-preference-seeded", "1");
     }
-  }, { save: raw, detail: options.detail, detailKey: CANVAS_DETAIL_KEY, overlapKey: BLUEPRINT_OVERLAP_KEY });
-  await page.setViewportSize({ width: 1440, height: 900 });
+    if (window.sessionStorage.getItem("dsp-idle-network.v144-canvas-overlap-seeded") !== "1") {
+      window.localStorage.setItem(canvasOverlapKey, canvasOverlap);
+      window.sessionStorage.setItem("dsp-idle-network.v144-canvas-overlap-seeded", "1");
+    }
+    if (window.sessionStorage.getItem("dsp-idle-network.v144-canvas-interaction-seeded") !== "1") {
+      window.localStorage.setItem(interactionDetailKey, interactionDetail);
+      window.sessionStorage.setItem("dsp-idle-network.v144-canvas-interaction-seeded", "1");
+    }
+  }, {
+    save: raw,
+    detail: options.detail,
+    canvasOverlap: options.overlap ?? "representative",
+    interactionDetail: options.interactionDetail ?? "hover",
+    detailKey: CANVAS_DETAIL_KEY,
+    canvasOverlapKey: CANVAS_OVERLAP_KEY,
+    interactionDetailKey: CANVAS_INTERACTION_DETAIL_KEY,
+    blueprintOverlapKey: BLUEPRINT_OVERLAP_KEY,
+  });
+  await page.setViewportSize(options.viewport ?? { width: 1440, height: 900 });
   await page.goto("/");
   await expect(page.locator(".game-shell")).toBeVisible();
   await expect(page.locator(".game-shell")).toHaveAttribute("data-active-planet-node-count", String(options.count + 6));
@@ -165,6 +185,298 @@ async function samePanZoomGesture(page: Page) {
   });
 }
 
+test("minimal detail keeps one-line card and React Flow wrapper geometry at 96x32", async ({ page }) => {
+  await seedCanvas(page, { count: 3, detail: "minimal", overlap: "all", interactionDetail: "base", spacingX: 340, zoom: 1 });
+  const compact = page.locator('.react-flow__node[data-id="anonymous-node-0"] .factory-node-compact');
+  await expect(compact).toBeVisible();
+  await expect.poll(() => compact.evaluate((element) => {
+    const wrapper = element.closest<HTMLElement>(".react-flow__node");
+    if (!wrapper) return null;
+    const style = getComputedStyle(element);
+    const viewport = document.querySelector<HTMLElement>(".react-flow__viewport");
+    const zoom = viewport ? new DOMMatrixReadOnly(getComputedStyle(viewport).transform).a : 1;
+    const card = element.getBoundingClientRect();
+    const node = wrapper.getBoundingClientRect();
+    const round = (value: number) => Math.round(value * 10) / 10;
+    return {
+      cssWidth: style.width,
+      cssMinHeight: style.minHeight,
+      cardWidth: round(card.width / zoom),
+      cardHeight: round(card.height / zoom),
+      wrapperWidth: round(node.width / zoom),
+      wrapperHeight: round(node.height / zoom),
+    };
+  })).toEqual({
+    cssWidth: "96px",
+    cssMinHeight: "32px",
+    cardWidth: 96,
+    cardHeight: 32,
+    wrapperWidth: 96,
+    wrapperHeight: 32,
+  });
+});
+
+test("a large translated compact viewport still paints and hit-tests its one-line card", async ({ page }) => {
+  await seedCanvas(page, {
+    count: 50,
+    detail: "minimal",
+    overlap: "all",
+    interactionDetail: "base",
+    spacingX: 500,
+    savedViewport: { x: -9_700, y: 180, zoom: 0.84 },
+  });
+  const target = page.locator('.react-flow__node[data-id="anonymous-node-24"] .factory-node-compact');
+  await expect(target).toBeVisible();
+  await expect.poll(() => target.evaluate((element) => {
+    const viewport = document.querySelector<HTMLElement>(".react-flow__viewport");
+    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+    if (!viewport || !flow) return { translated: false, inCanvas: false, hit: false };
+    const transform = new DOMMatrixReadOnly(getComputedStyle(viewport).transform);
+    const bounds = element.getBoundingClientRect();
+    const flowBounds = flow.getBoundingClientRect();
+    const centerX = bounds.left + bounds.width / 2;
+    const centerY = bounds.top + bounds.height / 2;
+    const hit = document.elementFromPoint(centerX, centerY);
+    return {
+      translated: Math.abs(transform.e) > 5_000,
+      inCanvas: centerX > flowBounds.left && centerX < flowBounds.right && centerY > flowBounds.top && centerY < flowBounds.bottom,
+      hit: hit === element || Boolean(hit && element.contains(hit)),
+    };
+  })).toEqual({ translated: true, inCanvas: true, hit: true });
+});
+
+test("Fit View recovers a fully deferred blank saved viewport", async ({ page }) => {
+  await seedCanvas(page, {
+    count: 500,
+    detail: "minimal",
+    overlap: "marker",
+    interactionDetail: "base",
+    savedViewport: { x: -1_000_000, y: -1_000_000, zoom: 0.32 },
+  });
+  const shell = page.locator(".game-shell");
+  const canvas = page.locator(".factory-canvas");
+  await expect(shell).toHaveAttribute("data-canvas-visible-node-count", "0");
+  await expect(canvas).toHaveAttribute("data-flow-fully-deferred", "true");
+
+  await page.locator(".react-flow__controls-fitview").click();
+  await expect.poll(async () => Number(await shell.getAttribute("data-canvas-visible-node-count"))).toBeGreaterThan(0);
+  await expect(canvas).toHaveAttribute("data-flow-fully-deferred", "false");
+  await expect.poll(() => page.locator(".factory-node-compact, .factory-node-stack-marker").count()).toBeGreaterThan(0);
+});
+
+test("count-marker overlap mode never leaves an exact stack visually empty", async ({ page }) => {
+  await seedCanvas(page, { count: 50, exactStack: 50, overlap: "marker", interactionDetail: "selected" });
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-canvas-overlap-preference", "marker");
+  await expect(shell).toHaveAttribute("data-canvas-interaction-detail-preference", "selected");
+  await expect.poll(async () => Number(await shell.getAttribute("data-canvas-stack-hidden-count"))).toBe(49);
+  await expect(shell).toHaveAttribute("data-canvas-stack-marker-count", "1");
+
+  const marker = page.locator(".factory-node-stack-marker");
+  await expect(marker).toHaveCount(1);
+  await expect(marker).toContainText("50");
+  const markerBox = await marker.boundingBox();
+  expect(markerBox?.width).toBeCloseTo(88, 0);
+  expect(markerBox?.height).toBeCloseTo(44, 0);
+  expect(await marker.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const action = element.querySelector<HTMLElement>(".factory-node-stack-marker__action");
+    const visual = action ? getComputedStyle(action, "::before") : null;
+    return {
+      interactive: Number(style.opacity) > 0 && style.visibility !== "hidden" && style.pointerEvents !== "none" &&
+        Number.parseFloat(style.minHeight) >= 44,
+      visualWidth: visual ? Number.parseFloat(visual.width) + Number.parseFloat(visual.borderLeftWidth) + Number.parseFloat(visual.borderRightWidth) : 0,
+      visualHeight: visual ? Number.parseFloat(visual.height) + Number.parseFloat(visual.borderTopWidth) + Number.parseFloat(visual.borderBottomWidth) : 0,
+    };
+  })).toEqual({ interactive: true, visualWidth: 80, visualHeight: 30 });
+
+  const action = marker.getByRole("button", { name: /此处叠放 50 个独立建筑/ });
+  await action.focus();
+  await expect(action).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(shell).toHaveAttribute("data-canvas-stack-marker-count", "0");
+  await expect(page.locator('.react-flow__node[data-id="anonymous-node-0"]')).toHaveClass(/selected/);
+  await expect(page.locator('.react-flow__node[data-id="anonymous-node-0"]')).toHaveClass(/factory-flow-node--lod-full/);
+  await expect(page.locator(".factory-node-stack-badge")).toContainText("叠 50");
+  await expect(page.locator(".game-notice")).toContainText("已展开重叠建筑 1/50");
+
+  const axe = await new AxeBuilder({ page })
+    .include(".factory-canvas")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(axe.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
+});
+
+test("count marker and canvas controls stay usable across target phone sizes and font scales", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript((key) => window.localStorage.setItem(key, "next"), MOBILE_UI_KEY);
+  await seedCanvas(page, {
+    count: 50,
+    exactStack: 50,
+    overlap: "marker",
+    interactionDetail: "selected",
+    viewport: { width: 390, height: 844 },
+  });
+  const shell = page.locator(".game-shell");
+  const markerAction = page.getByRole("button", { name: /此处叠放 50 个独立建筑/ });
+  const viewports = [
+    { width: 390, height: 844, layout: "compact-portrait" },
+    { width: 360, height: 640, layout: "compact-portrait" },
+    { width: 844, height: 390, layout: "compact-landscape" },
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await expect(shell).toHaveAttribute("data-compact-layout", viewport.layout);
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.locator(".react-flow__controls-fitview").dispatchEvent("click");
+    await expect(markerAction).toBeVisible();
+    await expect.poll(() => page.evaluate(() => {
+      const action = document.querySelector<HTMLElement>(".factory-node-stack-marker__action");
+      if (!action) return { visible: false, touchTarget: false, overflowFree: false };
+      const bounds = action.getBoundingClientRect();
+      const visibleWidth = Math.max(0, Math.min(window.innerWidth, bounds.right) - Math.max(0, bounds.left));
+      const visibleHeight = Math.max(0, Math.min(window.innerHeight, bounds.bottom) - Math.max(0, bounds.top));
+      return {
+        visible: visibleWidth >= 64 && visibleHeight >= 22,
+        touchTarget: bounds.width >= 44 && bounds.height >= 43.5,
+        overflowFree: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+      };
+    })).toEqual({ visible: true, touchTarget: true, overflowFree: true });
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await page.locator(".react-flow__controls-fitview").dispatchEvent("click");
+  const markerBounds = await markerAction.boundingBox();
+  const paneBounds = await page.locator(".react-flow__pane").boundingBox();
+  if (!markerBounds || !paneBounds) throw new Error("mobile canvas marker geometry is unavailable");
+  const markerCenter = { x: markerBounds.x + markerBounds.width / 2, y: markerBounds.y + markerBounds.height / 2 };
+  const dragStart = { x: paneBounds.x + paneBounds.width / 2, y: paneBounds.y + paneBounds.height * .72 };
+  await page.mouse.move(dragStart.x, dragStart.y);
+  await page.mouse.down();
+  await page.mouse.move(dragStart.x + 190 - markerCenter.x, dragStart.y + 220 - markerCenter.y, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => markerAction.evaluate((action) => {
+    const bounds = action.getBoundingClientRect();
+    const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    return hit === action || Boolean(hit && action.contains(hit));
+  })).toBe(true);
+  await markerAction.click();
+  await expect(page.locator('.react-flow__node[data-id="anonymous-node-0"]')).toHaveClass(/selected/);
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.uiFontScale = "100";
+    document.documentElement.style.setProperty("--ui-font-scale", "1");
+  });
+  await page.getByRole("button", { name: "更多", exact: true }).click();
+  await page.getByRole("button", { name: /游戏设置/ }).click();
+  const settings = page.locator(".operations-workspace");
+  await expect(settings).toBeVisible();
+  await selectSettingsCategory(settings, "终局性能", "performance");
+  const groups = [
+    settings.getByRole("radiogroup", { name: "画布基础卡片" }),
+    settings.getByRole("radiogroup", { name: "重叠建筑显示方式" }),
+    settings.getByRole("radiogroup", { name: "交互卡片展开方式" }),
+  ];
+
+  for (const scale of [80, 100, 125, 150, 200]) {
+    await page.evaluate((value) => {
+      document.documentElement.dataset.uiFontScale = String(value);
+      document.documentElement.style.setProperty("--ui-font-scale", String(value / 100));
+    }, scale);
+    await expect.poll(() => settings.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+    for (const group of groups) {
+      await expect(group).toBeVisible();
+      expect(await group.getByRole("radio").evaluateAll((buttons) => buttons.every((button) => {
+        const bounds = button.getBoundingClientRect();
+        return bounds.width >= 44 && bounds.height >= 44 && button.scrollWidth <= button.clientWidth + 1 && button.scrollHeight <= button.clientHeight + 1;
+      })), `${scale}% ${await group.getAttribute("aria-label")}`).toBe(true);
+    }
+  }
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.uiFontScale = "100";
+    document.documentElement.style.setProperty("--ui-font-scale", "1");
+  });
+});
+
+test("all-card overlap mode keeps every entity and one explicit stack badge", async ({ page }) => {
+  await seedCanvas(page, { count: 8, exactStack: 8, overlap: "all", interactionDetail: "base" });
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-canvas-overlap-preference", "all");
+  await expect(shell).toHaveAttribute("data-canvas-stack-hidden-count", "0");
+  await expect(shell).toHaveAttribute("data-canvas-stack-marker-count", "0");
+  await expect(page.locator('.react-flow__node[data-id^="anonymous-node-"]')).toHaveCount(8);
+  await expect(page.locator(".factory-node-stack-badge")).toHaveCount(1);
+  await expect(page.locator(".factory-node-stack-badge")).toContainText("叠 8");
+  await page.locator(".factory-node-stack-badge").click();
+  await expect(page.locator('.react-flow__node[data-id="anonymous-node-1"]')).toHaveClass(/selected/);
+  await expect(page.locator('.react-flow__node[data-id="anonymous-node-1"]')).toHaveClass(/factory-flow-node--lod-full/);
+});
+
+test("fixed medium follows the current viewport and keeps hover expansion independently configurable", async ({ page }) => {
+  await seedCanvas(page, { count: 50, detail: "medium", overlap: "representative", interactionDetail: "selected", spacingX: 340 });
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-canvas-detail-preference", "medium");
+  await expect(shell).toHaveAttribute("data-canvas-detail-stage", "medium");
+  await page.locator(".react-flow__controls-fitview").click();
+
+  await expect.poll(async () => page.evaluate(() => {
+    const viewport = document.querySelector<HTMLElement>(".react-flow")?.getBoundingClientRect();
+    if (!viewport) return -1;
+    return [...document.querySelectorAll<HTMLElement>('.react-flow__node[data-id^="anonymous-node-"]')]
+      .filter((node) => {
+        const bounds = node.getBoundingClientRect();
+        return bounds.right >= viewport.left && bounds.left <= viewport.right && bounds.bottom >= viewport.top && bounds.top <= viewport.bottom;
+      })
+      .filter((node) => node.querySelector('[data-node-lod="compact"]')).length;
+  })).toBe(0);
+
+  const visibleMedium = page.locator('.react-flow__node[data-id^="anonymous-node-"] .factory-node[data-node-lod="medium"]');
+  await expect.poll(() => visibleMedium.count()).toBeGreaterThan(0);
+  const visibleMediumId = await page.evaluate(() => {
+    const viewport = document.querySelector<HTMLElement>(".react-flow")?.getBoundingClientRect();
+    if (!viewport) return null;
+    return [...document.querySelectorAll<HTMLElement>('.react-flow__node[data-id^="anonymous-node-"]')].find((candidate) => {
+      const bounds = candidate.getBoundingClientRect();
+      const centerX = bounds.left + bounds.width / 2;
+      const centerY = bounds.top + bounds.height / 2;
+      const hitNode = document.elementFromPoint(centerX, centerY)?.closest<HTMLElement>(".react-flow__node[data-id]");
+      return bounds.right >= viewport.left && bounds.left <= viewport.right && bounds.bottom >= viewport.top && bounds.top <= viewport.bottom &&
+        hitNode === candidate && Boolean(candidate.querySelector('[data-node-lod="medium"]'));
+    })?.dataset.id ?? null;
+  });
+  expect(visibleMediumId).not.toBeNull();
+  const node = page.locator(`.react-flow__node[data-id="${visibleMediumId}"]`);
+  await node.hover();
+  await expect(node).toHaveClass(/factory-flow-node--lod-medium/);
+  await node.click({ force: true });
+  await expect(node).toHaveClass(/factory-flow-node--lod-full/);
+
+  await page.getByLabel("打开设置").click();
+  const settings = page.locator(".operations-workspace");
+  await selectSettingsCategory(settings, "终局性能", "performance");
+  await expect(settings.getByRole("radiogroup", { name: "画布基础卡片" }).getByRole("radio", { name: "中等" })).toHaveAttribute("aria-checked", "true");
+  await expect(settings.getByRole("radiogroup", { name: "重叠建筑显示方式" }).getByRole("radio", { name: "代表卡片" })).toHaveAttribute("aria-checked", "true");
+  await expect(settings.getByRole("radiogroup", { name: "交互卡片展开方式" }).getByRole("radio", { name: "仅选中" })).toHaveAttribute("aria-checked", "true");
+  await settings.getByRole("radiogroup", { name: "交互卡片展开方式" }).getByRole("radio", { name: "悬停也展开" }).click();
+  await expect(shell).toHaveAttribute("data-canvas-interaction-detail-preference", "hover");
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), CANVAS_INTERACTION_DETAIL_KEY)).toBe("hover");
+  await page.keyboard.press("Escape");
+  const hoverNodeId = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.react-flow__node[data-id^="anonymous-node-"]')].find((candidate) => {
+    if (!candidate.querySelector('[data-node-lod="medium"]')) return false;
+    const bounds = candidate.getBoundingClientRect();
+    const hitNode = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)?.closest<HTMLElement>(".react-flow__node[data-id]");
+    return hitNode === candidate;
+  })?.dataset.id ?? null);
+  expect(hoverNodeId).not.toBeNull();
+  const hoverNode = page.locator(`.react-flow__node[data-id="${hoverNodeId}"]`);
+  await hoverNode.hover();
+  await expect(hoverNode).toHaveClass(/factory-flow-node--lod-full/);
+});
+
 test("an exact 50-card stack paints one leader and glow while retaining hidden edge geometry", async ({ page }) => {
   test.setTimeout(60_000);
   await seedCanvas(page, { count: 50, exactStack: 50 });
@@ -234,7 +546,7 @@ test("an exact 50-card stack paints one leader and glow while retaining hidden e
   await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
   const after = await page.locator(".react-flow__node.selected").getAttribute("data-id");
   expect(after).not.toBe(before);
-  await expect(page.locator('.factory-node[data-heavy-card="true"]')).toHaveCount(8);
+  await expect(page.locator('.factory-node[data-heavy-card="true"]')).toHaveCount(7);
   await page.getByLabel("打开设置").focus();
   await expect(page.locator('.factory-node[data-heavy-card="true"]')).toHaveCount(7);
   await expect(page.locator(".factory-node-stack-halo")).toHaveCount(1);
@@ -281,7 +593,7 @@ test("auto detail keeps a 500-visible paused canvas static across continue and p
   await page.getByLabel("打开设置").click();
   const settings = page.locator(".operations-workspace");
   await selectSettingsCategory(settings, "终局性能", "performance");
-  await expect(settings.getByRole("radiogroup", { name: "画布细节偏好" }).getByRole("radio", { name: "自动（推荐）" })).toHaveAttribute("aria-checked", "true");
+  await expect(settings.getByRole("radiogroup", { name: "画布基础卡片" }).getByRole("radio", { name: "自动" })).toHaveAttribute("aria-checked", "true");
   await expect(settings.locator(".canvas-detail-diagnostics")).toContainText(String(await shell.getAttribute("data-canvas-visible-node-count")));
 });
 
@@ -376,7 +688,7 @@ test("multi-drag shares the exact-overlap policy and preserves relative layout",
   expect(await page.evaluate((key) => window.localStorage.getItem(key), BLUEPRINT_OVERLAP_KEY)).toBe("true");
   await dragGroupOneCell();
   await expect(page.locator(".factory-canvas")).toHaveAttribute("data-drag-overlap-blocked", "false");
-  await expect(page.locator(".factory-node-stack-badge")).toContainText("×2");
+  await expect(page.locator(".factory-node-stack-badge")).toContainText("叠 2");
   await expect(first).not.toHaveAttribute("style", /translate\(0px, 0px\)/);
   await page.reload();
   await expect(page.locator(".game-shell")).toHaveAttribute("data-blueprint-allow-overlap", "true");
@@ -463,7 +775,7 @@ test("blueprint exact overlap is rejected by default and explicit opt-in covers 
   await expect(page.locator(".game-shell")).toHaveAttribute("data-active-planet-node-count", "8");
   await expect(page.locator(".game-shell")).toHaveAttribute("data-canvas-stack-hidden-count", "1");
   await expect(page.locator(".react-flow__node")).toHaveCount(7);
-  await expect(page.locator(".factory-node-stack-badge")).toContainText("×2");
+  await expect(page.locator(".factory-node-stack-badge")).toContainText("叠 2");
 
   await pane.dispatchEvent("click", { clientX: nodeBounds.x, clientY: nodeBounds.y, button: 0 });
   await expect(page.locator(".game-notice")).toContainText("已加入施工队列");
@@ -525,8 +837,12 @@ test("production preview records three identical pan/zoom runs for auto, full an
 
   for (const run of results.auto) {
     expect(run.samples).toBeGreaterThanOrEqual(20);
-    expect(run.p95Ms).toBeLessThanOrEqual(20);
+    // Windows Chrome reports rAF timestamps on the active display cadence.
+    // At 144 Hz, three refresh intervals quantize to 20.83 ms, so a 20.0 ms
+    // boundary intermittently rejects the same healthy frame sequence. Keep
+    // the budget below 22 ms while the independent 100 ms ceiling still
+    // catches a genuine long frame.
+    expect(run.p95Ms).toBeLessThanOrEqual(21);
     expect(run.maxMs).toBeLessThanOrEqual(100);
   }
 });
-

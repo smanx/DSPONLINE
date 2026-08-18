@@ -1,5 +1,9 @@
 import type { ThemeMode } from "./types";
-import type { CanvasDetailPreference } from "./canvasDensityPresentation";
+import type {
+  CanvasDetailPreference,
+  CanvasInteractionDetailPreference,
+  CanvasOverlapPreference,
+} from "./canvasDensityPresentation";
 
 /** Device-only preferences. These values never belong in GameState or cloud payloads. */
 export const UI_THEME_PREFERENCE_KEY = "dsp-idle-network.ui.theme.v1";
@@ -13,6 +17,8 @@ export const DEFAULT_BELT_LANES_PREFERENCE_KEY = "dsp-idle-network.ui.default-be
 export const CONNECT_EXPAND_ALL_PREFERENCE_KEY = "dsp-idle-network.ui.connect-expand-all.v1";
 export const FULL_REALTIME_SIMULATION_PREFERENCE_KEY = "dsp-idle-network.full-realtime-simulation.v1";
 export const CANVAS_DETAIL_PREFERENCE_KEY = "dsp-idle-network.ui.canvas-detail.v1";
+export const CANVAS_OVERLAP_PREFERENCE_KEY = "dsp-idle-network.ui.canvas-overlap.v1";
+export const CANVAS_INTERACTION_DETAIL_PREFERENCE_KEY = "dsp-idle-network.ui.canvas-interaction-detail.v1";
 export const BLUEPRINT_ALLOW_OVERLAP_PREFERENCE_KEY = "dsp-idle-network.ui.blueprint-allow-overlap.v1";
 export const LARGE_SAVE_AUTOSAVE_THROTTLE_PREFERENCE_KEY = "dsp-idle-network.ui.large-save-autosave-throttle.v1";
 export const FACTORY_ALERTS_PREFERENCE_KEY = "dsp-idle-network.ui.factory-alerts.v1";
@@ -204,7 +210,7 @@ export function readCanvasDetailPreference(): CanvasDetailPreference {
   if (!storage) return "auto";
   try {
     const value = storage.getItem(CANVAS_DETAIL_PREFERENCE_KEY);
-    return value === "full" || value === "minimal" || value === "auto" ? value : "auto";
+    return value === "full" || value === "medium" || value === "minimal" || value === "auto" ? value : "auto";
   } catch {
     return "auto";
   }
@@ -212,8 +218,44 @@ export function readCanvasDetailPreference(): CanvasDetailPreference {
 
 export function writeCanvasDetailPreference(preference: CanvasDetailPreference): void {
   const storage = localStorageOrNull();
-  if (!storage || (preference !== "auto" && preference !== "full" && preference !== "minimal")) return;
+  if (!storage || (preference !== "auto" && preference !== "full" && preference !== "medium" && preference !== "minimal")) return;
   try { storage.setItem(CANVAS_DETAIL_PREFERENCE_KEY, preference); } catch { /* optional preference */ }
+}
+
+/** How near-identical canvas entities remain discoverable. Never enters GameState. */
+export function readCanvasOverlapPreference(): CanvasOverlapPreference {
+  const storage = localStorageOrNull();
+  if (!storage) return "marker";
+  try {
+    const value = storage.getItem(CANVAS_OVERLAP_PREFERENCE_KEY);
+    return value === "marker" || value === "representative" || value === "all" ? value : "marker";
+  } catch {
+    return "marker";
+  }
+}
+
+export function writeCanvasOverlapPreference(preference: CanvasOverlapPreference): void {
+  const storage = localStorageOrNull();
+  if (!storage || (preference !== "marker" && preference !== "representative" && preference !== "all")) return;
+  try { storage.setItem(CANVAS_OVERLAP_PREFERENCE_KEY, preference); } catch { /* optional preference */ }
+}
+
+/** Which ordinary interactions may promote a reduced card to full detail. */
+export function readCanvasInteractionDetailPreference(): CanvasInteractionDetailPreference {
+  const storage = localStorageOrNull();
+  if (!storage) return "selected";
+  try {
+    const value = storage.getItem(CANVAS_INTERACTION_DETAIL_PREFERENCE_KEY);
+    return value === "selected" || value === "hover" || value === "base" ? value : "selected";
+  } catch {
+    return "selected";
+  }
+}
+
+export function writeCanvasInteractionDetailPreference(preference: CanvasInteractionDetailPreference): void {
+  const storage = localStorageOrNull();
+  if (!storage || (preference !== "selected" && preference !== "hover" && preference !== "base")) return;
+  try { storage.setItem(CANVAS_INTERACTION_DETAIL_PREFERENCE_KEY, preference); } catch { /* optional preference */ }
 }
 
 /** Blueprint placement policy is local UI state; placed/queued results remain ordinary GameState commands. */

@@ -50,6 +50,7 @@ import { getMissingContentPackRequirements, loadContentPackRegistry, type Conten
 import { projectPersistentSaveState } from "./saveProjection";
 import {
   clearPrimarySaveEmergencyMirror,
+  clearLocalSaveRawPayloadCache,
   flushLocalSaveWrites,
   getLocalSaveCatalog,
   getLocalSaveBackend,
@@ -85,7 +86,12 @@ import type {
   AuthoritativeSaveExpectedStateIdentity,
 } from "./authoritativeSaveSerializationProtocol";
 import type { AuthoritativeSavePersistenceProgress } from "./authoritativeSavePersistenceProtocol";
-import { SIMULATION_RUNTIME_PROTOCOL_VERSION, type SimulationStateTransfer } from "./simulationRuntimeProtocol";
+import {
+  SIMULATION_RUNTIME_PROTOCOL_VERSION,
+  type SimulationStateBlobTransfer,
+  type SimulationStateTransfer,
+} from "./simulationRuntimeProtocol";
+import { isWorkerBinaryPayload, workerBinaryPayloadByteLength, type WorkerBinaryPayload } from "./workerBinaryPayload";
 import { LocalSaveConflictError, LocalSaveReadOnlyError } from "./localSaveCoordination";
 import type { ActivityMaterialId, BeltConnection, BeltInputPortIndex, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SaveMode, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
 import type { OfflineApproximationReport } from "./offlineApproximation";
@@ -311,9 +317,9 @@ export interface SaveGameResult {
   skippedUnchanged?: boolean;
   timings?: SaveStageTimings;
   /** Returned only by explicit authority-replacement saves. */
-  sourceStateTransfer?: SimulationStateTransfer;
+  sourceStateTransfer?: SimulationStateTransfer | SimulationStateBlobTransfer;
   /** Original full envelope ownership, returned for retry/diagnostics. */
-  sourceEnvelopeTransfer?: ArrayBuffer;
+  sourceEnvelopeTransfer?: WorkerBinaryPayload;
 }
 
 export interface SaveStageTimings {
@@ -1359,14 +1365,20 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     }
   }
   // Preserve Array.find's historical first-match behavior for malformed saves
-  // with duplicate entity ids. Material hubs need their own first matching
-  // index because the legacy lookup included the building predicate.
+  // with duplicate entity ids. Special targets need their own first matching
+  // indexes because the legacy lookups included the building predicate. Keep
+  // all belt migration lookups O(E+B); a per-belt Array.find would turn a
+  // large factory reload into an E×B scan.
   const entityById = new Map<string, FactoryEntity>();
   const materialDeliveryHubById = new Map<string, FactoryEntity>();
+  const orbitalCargoTerminalById = new Map<string, FactoryEntity>();
   for (const entity of entities) {
     if (!entityById.has(entity.id)) entityById.set(entity.id, entity);
     if (entity.buildingId === "material_delivery_hub" && !materialDeliveryHubById.has(entity.id)) {
       materialDeliveryHubById.set(entity.id, entity);
+    }
+    if (entity.buildingId === "orbital_cargo_terminal" && !orbitalCargoTerminalById.has(entity.id)) {
+      orbitalCargoTerminalById.set(entity.id, entity);
     }
   }
   const migratedBelts: BeltConnection[] = Array.isArray(saved.belts) ? saved.belts.map((belt: Record<string, any>) => {
@@ -1429,7 +1441,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     target.deliveryItemIds = [...new Set(slots.flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
   }
   for (const belt of migratedBelts) {
-    const target = entities.find((entity) => entity.id === belt.target && entity.buildingId === "orbital_cargo_terminal");
+    const target = orbitalCargoTerminalById.get(belt.target);
     if (!target) continue;
     const ports = getOrbitalCargoPortItems(target);
     const requested = belt.targetPortIndex;
@@ -1965,6 +1977,11 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     : [];
   const productionHistory: GameState["productionHistory"] = Array.isArray(saved.productionHistory)
     ? saved.productionHistory.slice(-180).flatMap((sample: Record<string, any>) => {
+      // A historical runtime projection could leave an undefined array slot.
+      // JSON turns that slot into null before a later autosave validates the
+      // envelope. History is diagnostic-only, so discard malformed samples
+      // instead of rejecting an otherwise valid factory save.
+      if (!isRecord(sample)) return [];
       const elapsedSeconds = nonNegativeNumber(sample.elapsedSeconds);
       if (elapsedSeconds <= 0) return [];
       return [{
@@ -3047,8 +3064,11 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
   const primaryKey = primarySaveKey(mode);
   const backupKey = backupSaveKey(mode);
   let raw: string;
+  let serializedVerification: SaveTransferVerification | null = null;
   try {
-    raw = serializeEnvelope(state, savedAt);
+    const serialized = serializeEnvelopeProjection(state, savedAt);
+    raw = serialized.raw;
+    serializedVerification = serialized.verification;
   } catch {
     return failedSave("unavailable", "无法生成本地主存档，请立即导出当前进度");
   }
@@ -3099,10 +3119,20 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
     return failedSave("verification", "本地主存档写入校验失败，当前进度尚未保存。请立即导出存档。", bytes, removedAutomaticSnapshots);
   }
 
-  if (options.emergencyMirror) {
+  // A lifecycle callback can run even when the authoritative checkpoint has
+  // not changed since the last verified primary. In that case an emergency
+  // mirror would only duplicate the same state (and can be mistaken for an
+  // unfinished save on the next boot). Compare the state proof, rather than
+  // savedAt/payload bytes: a fresh timestamp is not a gameplay change.
+  const verifiedPrimary = getVerifiedPrimaryLocalSaveIdentity(mode);
+  const emergencyMirrorNeeded = !verifiedPrimary ||
+    !serializedVerification || verifiedPrimary.stateChecksum !== serializedVerification.stateChecksum;
+  if (options.emergencyMirror && emergencyMirrorNeeded) {
     // Page lifecycle handlers cannot await IndexedDB. A single primary-save
     // mirror is imported and removed after verified IndexedDB startup.
     writePrimarySaveEmergencyMirror(raw);
+  } else if (options.emergencyMirror) {
+    clearPrimarySaveEmergencyMirror(raw);
   }
 
   let backupSaved = false;
@@ -3329,19 +3359,25 @@ export async function saveGameVerifiedFromEnvelopeTransfer(
   } = {},
 ): Promise<SaveGameResult> {
   let removedAutomaticSnapshots = 0;
-  let serialized: AuthoritativeSerializedSavePayload | null = null;
+  let serialized: AuthoritativeSerializedSavePayload<WorkerBinaryPayload> | null = null;
   const withReturnedOwnership = (result: SaveGameResult): SaveGameResult => ({
     ...result,
-    ...(serialized?.sourceStateTransfer instanceof ArrayBuffer
-      ? { sourceStateTransfer: {
-        protocolVersion: SIMULATION_RUNTIME_PROTOCOL_VERSION,
-        byteLength: serialized.sourceStateTransfer.byteLength,
-        buffer: serialized.sourceStateTransfer,
-      } }
+    ...(isWorkerBinaryPayload(serialized?.sourceStateTransfer)
+      ? { sourceStateTransfer: serialized.sourceStateTransfer instanceof ArrayBuffer
+        ? {
+          protocolVersion: SIMULATION_RUNTIME_PROTOCOL_VERSION,
+          byteLength: serialized.sourceStateTransfer.byteLength,
+          buffer: serialized.sourceStateTransfer,
+        }
+        : {
+          protocolVersion: SIMULATION_RUNTIME_PROTOCOL_VERSION,
+          byteLength: serialized.sourceStateTransfer.size,
+          blob: serialized.sourceStateTransfer,
+        } }
       : {}),
-    ...(envelopeTransfer.buffer instanceof ArrayBuffer && envelopeTransfer.buffer.byteLength > 0
+    ...(isWorkerBinaryPayload(envelopeTransfer.buffer) && workerBinaryPayloadByteLength(envelopeTransfer.buffer) > 0
       ? { sourceEnvelopeTransfer: envelopeTransfer.buffer }
-      : serialized?.sourceEnvelopeTransfer instanceof ArrayBuffer
+      : isWorkerBinaryPayload(serialized?.sourceEnvelopeTransfer)
         ? { sourceEnvelopeTransfer: serialized.sourceEnvelopeTransfer }
         : {}),
   });
@@ -3508,6 +3544,7 @@ export async function saveVerifiedPayload(
       }
     }
     clearPrimarySaveEmergencyMirror(raw);
+    clearLocalSaveRawPayloadCache();
     return {
       success: true,
       message: "主存档已保存",
@@ -3554,7 +3591,11 @@ async function recoverLocalSaveCache(): Promise<void> {
  * an exact read-back plus envelope checksum validation. Optional backups and
  * automatic snapshots are deliberately attempted after the primary commit.
  */
-async function saveGameVerifiedOnce(state: GameState, stateTransfer?: SimulationStateTransfer): Promise<SaveGameResult> {
+async function saveGameVerifiedOnce(
+  state: GameState,
+  stateTransfer?: SimulationStateTransfer,
+  options: { deferBackup?: boolean } = {},
+): Promise<SaveGameResult> {
   if (stateTransfer) return saveGameVerifiedFromStateTransfer(state, stateTransfer);
   const totalStartedAt = monotonicNow();
   const serializeStartedAt = totalStartedAt;
@@ -3562,6 +3603,10 @@ async function saveGameVerifiedOnce(state: GameState, stateTransfer?: Simulation
   const mode = saveModeForState(state);
   const primaryKey = primarySaveKey(mode);
   const backupKey = backupSaveKey(mode);
+  // A catalog-bound identity was established by an earlier verified primary
+  // commit. Autosave can use it to move the old payload into a background
+  // backup job without parsing that multi-megabyte body on the UI thread.
+  const previousPrimaryIdentity = getVerifiedPrimaryLocalSaveIdentity(mode);
   let raw: string;
   let workerVerification: SaveTransferVerification | undefined;
   try {
@@ -3640,7 +3685,8 @@ async function saveGameVerifiedOnce(state: GameState, stateTransfer?: Simulation
 
   const backupStartedAt = monotonicNow();
   let backupSaved = false;
-  const previousProof = previous ? inspectEnvelopeForBackup(previous) : null;
+  const canDeferPreviousBackup = options.deferBackup === true && previousPrimaryIdentity !== null;
+  const previousProof = !canDeferPreviousBackup && previous ? inspectEnvelopeForBackup(previous) : null;
   if (previousProof) {
     try {
       setLocalSaveValue(backupKey, previousProof.raw);
@@ -3653,6 +3699,16 @@ async function saveGameVerifiedOnce(state: GameState, stateTransfer?: Simulation
     } catch {
       // The already verified primary remains authoritative.
     }
+  } else if (canDeferPreviousBackup && previous !== null && previousPrimaryIdentity) {
+    const currentPrimaryIdentity = getVerifiedPrimaryLocalSaveIdentity(mode);
+    if (currentPrimaryIdentity) {
+      scheduleDeferredPrimaryBackup({
+        mode,
+        raw: previous,
+        previousIdentity: previousPrimaryIdentity,
+        expectedPrimaryIdentity: currentPrimaryIdentity,
+      });
+    }
   }
   const backupMs = Math.max(0, monotonicNow() - backupStartedAt);
 
@@ -3662,6 +3718,9 @@ async function saveGameVerifiedOnce(state: GameState, stateTransfer?: Simulation
   } catch {
     // Recovery points never downgrade a successful primary commit.
   }
+  // The verified primary/backup are durable; retaining their full text would
+  // duplicate a large factory in the UI heap until the next reload.
+  clearLocalSaveRawPayloadCache();
   const automaticSnapshotMs = Math.max(0, monotonicNow() - automaticSnapshotStartedAt);
   return {
     success: true,
@@ -3687,6 +3746,7 @@ interface PendingPrimarySave {
   state: GameState;
   stateTransfer?: SimulationStateTransfer;
   checkpointOverlay?: AuthoritativeSaveCheckpointOverlay;
+  deferBackup?: boolean;
   waiters: Array<(result: SaveGameResult) => void>;
 }
 
@@ -3716,6 +3776,65 @@ function verifiedIdentityMatchesResult(
   return result.success && result.savedAt === identity.savedAt && result.bytes === identity.byteLength;
 }
 
+interface DeferredPrimaryBackupJob {
+  mode: SaveMode;
+  raw: string;
+  previousIdentity: VerifiedPrimaryLocalSaveIdentity;
+  expectedPrimaryIdentity: VerifiedPrimaryLocalSaveIdentity;
+}
+
+const deferredPrimaryBackups = new Map<SaveMode, DeferredPrimaryBackupJob>();
+let deferredPrimaryBackupTimer: ReturnType<typeof setTimeout> | null = null;
+let activeDeferredPrimaryBackupMode: SaveMode | null = null;
+
+function scheduleDeferredPrimaryBackup(job: DeferredPrimaryBackupJob): void {
+  // A newer primary save supersedes any pending copy for this mode. Its own
+  // previous payload is the only useful backup once it has been verified.
+  deferredPrimaryBackups.set(job.mode, job);
+  scheduleDeferredPrimaryBackupProcessor();
+}
+
+function scheduleDeferredPrimaryBackupProcessor(delayMs = 0): void {
+  if (deferredPrimaryBackupTimer !== null || activeDeferredPrimaryBackupMode !== null || deferredPrimaryBackups.size === 0) return;
+  deferredPrimaryBackupTimer = globalThis.setTimeout(() => {
+    deferredPrimaryBackupTimer = null;
+    void processDeferredPrimaryBackup();
+  }, delayMs);
+}
+
+async function processDeferredPrimaryBackup(): Promise<void> {
+  // Primary writes win over optional recovery copies. This also guarantees
+  // that a rapid 30-second autosave cadence cannot form a backup backlog.
+  if (activePrimarySave || activePrimaryRequest || pendingPrimarySaves.size > 0) {
+    scheduleDeferredPrimaryBackupProcessor(50);
+    return;
+  }
+  const next = deferredPrimaryBackups.entries().next();
+  if (next.done) return;
+  const [mode, job] = next.value;
+  deferredPrimaryBackups.delete(mode);
+  activeDeferredPrimaryBackupMode = mode;
+  try {
+    const currentPrimary = getVerifiedPrimaryLocalSaveIdentity(mode);
+    if (!currentPrimary || !sameVerifiedPrimaryIdentity(currentPrimary, job.expectedPrimaryIdentity)) return;
+    // The old payload came from a catalog-bound verified primary under the
+    // same writer lease. Keep its exact raw identity for read-back while
+    // avoiding a second full JSON.parse/checksum pass on the UI thread.
+    const previousProof: ExactEnvelopeProof = { raw: job.raw, checksumValid: true };
+    const backupKey = backupSaveKey(mode);
+    setLocalSaveValue(backupKey, job.raw);
+    const persistedExactly = await verifyPersistedEnvelope(backupKey, job.raw, undefined, previousProof);
+    if (!persistedExactly) await recoverLocalSaveCache();
+  } catch {
+    // A verified primary is already durable. Backup creation is best effort
+    // and must never turn a completed autosave into a visible failure.
+  } finally {
+    clearLocalSaveRawPayloadCache();
+    activeDeferredPrimaryBackupMode = null;
+    scheduleDeferredPrimaryBackupProcessor();
+  }
+}
+
 function unchangedPrimarySaveResult(mode: SaveMode, state: GameState): SaveGameResult | null {
   const memo = lastVerifiedPrimaryByMode.get(mode);
   if (!memo || memo.state !== state || !memo.result.success) return null;
@@ -3724,6 +3843,7 @@ function unchangedPrimarySaveResult(mode: SaveMode, state: GameState): SaveGameR
       lastVerifiedPrimaryByMode.delete(mode);
       return null;
     }
+    clearLocalSaveRawPayloadCache();
     return { ...memo.result, skippedUnchanged: true, message: "主存档未变化，跳过重复保存" };
   }
   const currentIdentity = getVerifiedPrimaryLocalSaveIdentity(mode);
@@ -3731,6 +3851,11 @@ function unchangedPrimarySaveResult(mode: SaveMode, state: GameState): SaveGameR
     lastVerifiedPrimaryByMode.delete(mode);
     return null;
   }
+  // A menu load temporarily retains the selected raw envelope so the legacy
+  // synchronous loader can consume it. If the verified-primary memo proves
+  // that no write is necessary, release that otherwise unbounded duplicate
+  // just as the successful write paths do.
+  clearLocalSaveRawPayloadCache();
   return { ...memo.result, skippedUnchanged: true, message: "主存档未变化，跳过重复保存" };
 }
 
@@ -3749,7 +3874,7 @@ function ensurePrimarySaveProcessor(): void {
           ? await saveGameVerifiedFromStateTransfer(request.state, request.stateTransfer, {
             ...(request.checkpointOverlay ? { checkpointOverlay: request.checkpointOverlay } : {}),
           })
-          : await saveGameVerifiedOnce(request.state);
+          : await saveGameVerifiedOnce(request.state, undefined, { deferBackup: request.deferBackup === true });
       } catch {
         result = failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度");
       }
@@ -3788,6 +3913,7 @@ export function saveGameVerified(
   state: GameState,
   stateTransfer?: SimulationStateTransfer,
   checkpointOverlay?: AuthoritativeSaveCheckpointOverlay,
+  options: { deferBackup?: boolean; force?: boolean } = {},
 ): Promise<SaveGameResult> {
   let ownedStateTransfer: SimulationStateTransfer | undefined;
   if (stateTransfer) {
@@ -3811,6 +3937,7 @@ export function saveGameVerified(
   return new Promise((resolve) => {
     const mode = saveModeForState(state);
     if (activePrimaryRequest?.mode === mode && activePrimaryRequest.state === state) {
+      if (options.deferBackup !== true) activePrimaryRequest.deferBackup = false;
       const pending = pendingPrimarySaves.get(mode);
       if (pending) {
         pendingPrimarySaves.delete(mode);
@@ -3823,6 +3950,7 @@ export function saveGameVerified(
     if (pending) {
       if (pending.state !== state) {
         pending.state = state;
+        pending.deferBackup = options.deferBackup === true;
         if (ownedStateTransfer) {
           pending.stateTransfer = ownedStateTransfer;
           if (checkpointOverlay) pending.checkpointOverlay = checkpointOverlay;
@@ -3835,9 +3963,10 @@ export function saveGameVerified(
         pending.stateTransfer = ownedStateTransfer;
         if (checkpointOverlay) pending.checkpointOverlay = checkpointOverlay;
       }
+      if (options.deferBackup !== true) pending.deferBackup = false;
       pending.waiters.push(resolve);
     } else {
-      const unchanged = unchangedPrimarySaveResult(mode, state);
+      const unchanged = options.force === true ? null : unchangedPrimarySaveResult(mode, state);
       if (unchanged) {
         resolve(unchanged);
         return;
@@ -3847,6 +3976,7 @@ export function saveGameVerified(
         state,
         ...(ownedStateTransfer ? { stateTransfer: ownedStateTransfer } : {}),
         ...(checkpointOverlay ? { checkpointOverlay } : {}),
+        ...(options.deferBackup === true ? { deferBackup: true } : {}),
         waiters: [resolve],
       });
     }

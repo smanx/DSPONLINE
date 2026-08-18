@@ -1,6 +1,10 @@
 # 系统架构
 
-> **1.0.46 durable recovery 热修边界（2026-08-17，未发布）**：模拟 Worker 失败或 durable finalize 回执失败时，`FactoryGame` 保留 T0 recovery base，使用 `replaySimulationRuntimeStartupInWorker` 回放 finalized/pending intent，将精确结果验证写入 T1，并以持久化 Worker 原子替换 recovery head 后安装新模拟 Worker。新 Worker 安装会清除旧 disabled latch；暂停状态可在同页恢复。若主存档已先完成 T1 读回而旧 head 尚未替换，head 身份比较会跳过旧 journal，待保存锁释放后从 T1 建立新基线；仅实验性编辑模式的额外 UI 视图会作为新 durable patch 重排。默认保存保护模式的 revision/head 一拍竞态采用最新已验证 revision，不改变 GameState、save envelope、cloud schema 或 SQLite layout。
+> **1.0.46 存档运行时边界（2026-08-18，未发布）**：普通构建默认使用 `runtimePersistenceMode.ts` 选择的 1.0.43-compatible verified-primary 协调器；模拟 Worker 生成权威检查点，保存 Worker 在既有 writer lease、backup、checksum 与逐字读回合同下提交主档。该默认路径不建立 recovery head，也不会因为打开既有玩家档而自动启用 durable WAL；自动保存前正在运行的模拟在保存期间和验证完成后保持运行，玩家主动暂停意图不变。`VITE_DURABLE_RUNTIME_RECOVERY=true` 只用于显式开发验证，空间站 v46 bridge 即使收到该变量也强制保持稳定协调器。默认保护模式拒绝保存窗口内的玩家编辑但不暂停模拟；设备级实验开关开启后，已接受编辑保留在 durable 队列，保存失败不回滚当前进度并允许立即导出。两条路径都不改变 GameState、save envelope、cloud schema、SQLite layout 或 IndexedDB records。
+
+> **1.0.46 durable 故障恢复边界（显式开发模式）**：模拟 Worker 失败或 durable finalize 回执失败时，`FactoryGame` 保留 T0 recovery base，使用 `replaySimulationRuntimeStartupInWorker` 回放 finalized/pending intent，将精确结果验证写入 T1，并以持久化 Worker 原子替换 recovery head 后安装新模拟 Worker。新 Worker 安装清除旧 disabled latch；暂停状态可在同页恢复。若主存档已先完成 T1 读回而旧 head 尚未替换，head 身份比较跳过旧 journal，待保存锁释放后从 T1 建立新基线。T1 revision 只取自生成对应 payload 的 Worker 回执；较新回执必须重新取得并验证新检查点，不能给旧 payload 提升 revision。
+
+> **1.0.46 手机连续拉线与错误边界**：next-mobile shell 只挂载非模态 `.mobile-batch-connection-actions`，桌面 `.batch-connection-panel` 在该分支不进入 React 树。底栏默认收起并位于导航与 safe area 上方；展开列表按最新候选优先、可滚动查看全部候选，并可按建筑名称/目标端口定位或删除任意一条。候选是临时 UI 状态，不进入 GameState、存档或同步。`DynamicImportBoundary` 只把真实 chunk/module/CSS-chunk 加载签名归类为动态导入故障；普通运行时异常使用独立脱敏文案、稳定诊断码和 React component stack，禁止记录错误正文、props、存档或云 payload。
 
 > **1.0.45 空间站扩展候选（2026-08-17）**：`codex/1.0.45-space-station` 已合并 `codex/space-station-expansion`，启用 GameState v47 / cloud schema v8 / SQLite layout v3。默认开启全星系空间站；M0 桥接开关 `VITE_SPACE_STATION_ENABLED=false` 可构建不升级 v46 的桥接版。完整发布交接见 [RELEASE_HANDOFF_1.0.45.md](./RELEASE_HANDOFF_1.0.45.md)。
 
@@ -216,7 +220,9 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 画布派生先按 `activePlanetId` 建立当前行星实体、线路和实体 ID Map。`canvasTopology.ts` 再缓存稳定建筑拓扑、端口占用、线路束和自动避让几何；节点与边使用视觉签名复用未变化对象，运行时库存、进度和告警仍来自最新只读快照。线路诊断消费预构建实体索引，不得把显示缓存反向写入模拟状态，也不能改变端口 ID、坐标或 React Flow handle 几何。当前行星达到 300 个实体后才启用视口裁剪，较小工厂保持全部节点可达；裁剪只影响 React Flow 展示对象，不影响模拟、存档、直接定位目标或线路层级。
 
-建筑细节同时服从设备偏好、真实 viewport 内的原始可见节点压力和当前交互保护集合。自动档在 140 个可见节点进入 `medium`、低于 100 个退出，在 480 个进入 `compact`、低于 360 个退出；完整档始终保留 full，最简档固定 compact。缩放仍参与端口、视口与连接呈现，但不能绕过密度上限把 fit-view 的整颗大行星恢复成 full。source、单一主选、hover/focus、当前拖动主节点、连接候选与直接定位目标可临时提升；批量选择、整网高亮和批量拖动的其余成员只保留简化选择/几何语义。
+建筑细节同时服从设备偏好、真实 viewport 内的原始可见节点压力和当前交互保护集合。自动档在 140 个可见节点进入 `medium`、低于 100 个退出，在 480 个进入 `compact`、低于 360 个退出；固定完整、中等、一行分别保持 `full/medium/compact` 内容层级，但高密度星球的固定完整档也只挂载视口附近的完整卡片，避免一次创建整颗星球的重 DOM。缩放仍参与端口、视口与连接呈现，但不能绕过密度上限把 fit-view 的整颗大行星恢复成 full。source、单一主选、hover/focus、当前拖动主节点、连接候选与直接定位目标可临时提升；批量选择、整网高亮和批量拖动的其余成员只保留简化选择/几何语义。
+
+卡片档位拥有稳定的展示几何：一行 `96×32`、中等 `244×118`、数量标记 `88×44` 点击区（可见胶囊约 `80×30`），视口裁剪、Canvas 线路端点和路由中心必须消费当前展示尺寸，不得复用上一档 React Flow measurement。带平移/缩放的 `.react-flow__viewport` 禁止 paint containment，否则世界坐标子节点会被裁到变换后的父盒内并出现“线路存在但建筑消失/半截”；只允许不改变绘制与命中的 style containment。完全无节点落入当前视角时，React Flow store 只保留四个边界恢复锚点供 Fit View 计算，权威节点仍在派生层；标准 SVG MiniMap 与低频 CanvasMiniMap 都必须把点击转换为同一世界中心命令。
 
 `GameState.constructionAutomation` 持久化建筑制造中心的启停、建筑/随身物流载具目标库存、轮询游标、累计制造量、累计销毁副产物和按中心 ID 隔离的递归任务。`recursiveCrafting.ts` 会对同一输出按 `recursivePriority` 和稳定 ID 排序，优先尝试已解锁的高级、稀有资源或精简配方；只有完整材料链不可完成时才回退基础配方。任务保存实际配方选择与回退说明，并将材料步骤、建筑成品步骤或载具入库步骤按确定性顺序执行。每个材料步骤完成后从后向前计算后续步骤的净 WIP 需求：必要中间产物留在任务库存，不受普通建筑缓存上限或固定 WIP 总量限制；可选副产物优先写入中心所在行星托盘，托盘已满时只销毁任务不再需要的新增副产物并累计到 `destroyedByproducts`。这样隐藏任务库存始终只包含未来步骤的真实净需求，不会因高成本巨构无限积累无关物品。暂停、断电或缺料只保留任务等待，恢复后继续原步骤；取消任务仍保护性返还全部剩余 WIP。加载器按非负安全整数保留任务库存，不套用建筑缓存的 1 亿上限。基础耗时为材料 0.1 秒/件、建筑成品 5 秒/个；两级升级同时缩短两类步骤。目标库存上限继续按科技分为 100、500 和最终 100,000，速度升级规则不变。每一步只从中心所在行星物资托盘原子扣料，运输机/运输船最终进入全局 `portableFleet`，原矿缺失时停机且不会凭空生成。施工托盘和即时手工递归快制也必须先证明整链可完成再一次性提交库存结果。
 
@@ -224,7 +230,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 线路模型包含源、汇、物品、等级、并联数量、分拣兼容字段、优先级、货物堆叠、路由、流量和拥堵。端口能够根据已有配方、物流槽或默认状态自动接受物品。连接草稿在开始拉线时锁定传送带等级；自动模式按 Mk.III→Mk.II→Mk.I 选择已解锁且有库存的最高等级，并优先复用已有并行线等级，手动模式保留显式选择。多条同端点线路由 bundle 信息进行视觉错位。
 
-`setBeltLaneCount()` 是修改已建线路并联数量的唯一命令入口：目标范围为 1～4096；增加数量原子扣除同级施工传送带，减少数量原子返还同级施工库存。命令只修改 `lanes` 和对应施工库存，必须保留 `progress`、`totalTransferred`、优先级、堆叠、路由、端口与在途物资。v38 加载器把非法超上限值限制到 4096，并把裁掉的实体传送带完整退回对应施工库存；蓝图参数同样夹紧但不凭空产生库存。64/256/1024/4096 四档基准均保持单个 bundle 对象和常数时间容量计算。`getBeltCapacity()` 继续统一按等级基础速度 × `lanes` × 货物堆叠计算。连续拉线只收集带源/目标/物品/端口/等级的临时候选；每次新增候选先用 `connectBeltsAtomically()` 对完整候选集合做累计预检，确认时再执行一次同一领域事务。重复、非法或累计库存不足会禁用确认，取消、Escape 或离开画布不改变线路与施工库存。
+`setBeltLaneCount()` 是修改已建线路并联数量的唯一命令入口：目标范围为 1～4096；增加数量原子扣除同级施工传送带，减少数量原子返还同级施工库存。命令只修改 `lanes` 和对应施工库存，必须保留 `progress`、`totalTransferred`、优先级、堆叠、路由、端口与在途物资。v38 加载器把非法超上限值限制到 4096，并把裁掉的实体传送带完整退回对应施工库存；蓝图参数同样夹紧但不凭空产生库存。64/256/1024/4096 四档基准均保持单个 bundle 对象和常数时间容量计算。`getBeltCapacity()` 继续统一按等级基础速度 × `lanes` × 货物堆叠计算。连续拉线只收集带源/目标/物品/端口/等级的临时候选。每次拟新增候选可用 `connectBeltsAtomically()` 对完整集合做累计预检；重复、不兼容、已有线路或材料不足只作为本次点击的非阻塞临时反馈，不新增候选、不扣料、不污染此前有效候选，也不禁用其确认。最终确认必须再次调用同一领域事务做严格原子复核；失败按候选索引展示原因并保持零创建、零扣料。撤销只删除最近一条，清空候选与退出连续模式是独立命令；取消、Escape 或离开画布不改变线路与施工库存。
 
 普通来源和分流器都按 `高 2 → 标准 1 → 低 0` 分配输出，同优先级线路按稳定 ID 与持久 `routingCursor` 确定性轮询。模拟步先结算已有输出，再为本步可生产输出预留目标容量并完成第二次转运，因此单个来源的 100 万输出缓存不再把多条高吞吐线路错误截断。`settings.beltBufferLimit` 只限制每条线路在大时间步累计的转运额度，范围 1,000～100,000,000；它不是实际货物库存，也不改变每秒吞吐。
 
@@ -420,15 +426,15 @@ API 表面：
 
 ### 1.0.44 补充：连线期间的视口限定节点呈现
 
-- `canvasConnectionPresentation.ts` 是纯呈现层：把 React Flow `{x,y,zoom}` 和画布尺寸转换为世界矩形，进入 overscan 为 300px，退出 overscan 为 380px。viewport 更新由 latest-only `requestAnimationFrame` publisher 合并；迟滞状态保存在节点呈现数据，不参与游戏规则或持久化。
+- `canvasConnectionPresentation.ts` 是纯呈现层：把 React Flow `{x,y,zoom}` 和画布尺寸转换为世界矩形，进入 overscan 为 300px，退出 overscan 为 380px。viewport 更新由 latest-only `requestAnimationFrame` publisher 合并，并在普通平移/缩放时持续发布，而不是只在连线草稿期间更新；因此密度统计和视口外简化不会读取陈旧矩形。迟滞状态保存在节点呈现数据，不参与游戏规则或持久化。
 - 未连线时沿用普通/极限模式既有 LOD。连线时仅 source、选择、当前 snap 候选、viewport/overscan 和必须保留详情的交互节点使用 full；其余节点最多 medium。显式 expand-all 只对 `activePlanetEntities` 生效。
 - `visualSignature` 只表示实体/运行内容，`presentationSignature` 只表示逐节点 draft token、选择、class、拖动、LOD 与极限视觉。远端节点不接收完整 `connectionDraft`；`measured` 仅在 `previous.data.lod !== lod` 时清空，因此候选或连续批次变化不会触发整星球 geometry 更新。
 - `dsp-idle-network.ui.connect-expand-all.v1` 是严格布尔的本机 `localStorage` 偏好，只有字面值 `true` 开启；缺失、损坏或存储异常均回退 false。它不属于 GameState v46、envelope v2、cloud schema v7、hash、排行榜或云同步。
 
 ### 1.0.44 补充：密集画布自适应、重叠分组与放置策略
 
-- `canvasDensityPresentation.ts` 以纯世界 viewport 计算原始可见数，以带迟滞的 full/medium/compact 阶段限制节点复杂度；重叠分组使用固定网格空间桶和屏幕距离阈值，复杂度为 O(N)，不能为求重叠做 O(N²) 两两扫描。分组只影响呈现，membership、leader、halo、告警聚合与数量徽标都不进入 GameState。
+- `canvasDensityPresentation.ts` 以纯世界 viewport 计算原始可见数，以带迟滞的 full/medium/compact 阶段限制节点复杂度；固定 `medium` 不再经过自动阈值。重叠分组使用固定网格空间桶和屏幕距离阈值，复杂度为 O(N)，不能为求重叠做 O(N²) 两两扫描。分组只影响呈现，membership、leader、marker、halo、告警聚合与数量徽标都不进入 GameState。
 - compact/offscreen 节点在执行供电、状态、容量、周期和输入输出等昂贵 getter 之前命中稳定分支；拓扑、位置、锁定、draggable、selection、stack 成员 token 或实际 LOD 未变时保留原 Node 引用，`setNodes` 在 changed=0 时返回原数组。compact steady edges 同样复用原对象。`CanvasFlowCommitBoundary` 只在 nodes、edges、完整呈现 token 与逐项交互 handler 引用均相等时跳过 React Flow 子树；连接半径、命中范围、裁剪、最小缩放、移动模式、放置/选择、蓝图策略或 handler 闭包变化都会立即击穿边界，不能以冻结旧回调换取性能。
-- stack 后层使用 `aria-hidden`、`tabIndex=-1`、无 pointer events 的无视觉壳；只有实际线路端点才保留隐藏 handle 几何。唯一 leader 绘制卡片、封顶 halo 和数量/聚合告警徽标；键盘循环、选中、hover、focus、alert/locator 或连接 source/candidate 会把目标移出隐藏层。历史重叠不迁移、不重排、不修改机器数量。
-- `dsp-idle-network.ui.canvas-detail.v1` 与 `dsp-idle-network.ui.blueprint-allow-overlap.v1` 都是设备级 UI 偏好，缺失/损坏分别回退 `auto` 与 false，不进入存档或云同步。重叠开关同时约束即时蓝图、排队蓝图和单/多选拖动；默认复用同一 rounded-position 冲突判定并排除正在移动成员自己的旧位置，开启时只跳过 exact-overlap guard，其他材料、ID、线路、资源锚点和锁定校验不变。
+- stack 后层使用 `aria-hidden`、`tabIndex=-1`、无 pointer events 的无视觉壳；只有实际线路端点才保留隐藏 handle 几何。`marker` 模式由唯一 halo 节点持有成员数组并绘制“叠放 N”入口，其他成员不复制该数组，避免展开模式形成 O(N²) 引用；入口通过画布级 inverse-zoom 变量维持至少 44px 屏幕点击高度。`representative` 绘制一张代表卡，`all` 保留全部卡；每组最多一个数量/聚合告警徽标。选择、采矿、拖动或连接 source/candidate 会把目标移出隐藏层，普通 focus 不会让数量入口闪退。历史重叠不迁移、不重排、不修改机器数量。
+- `dsp-idle-network.ui.canvas-detail.v1` 接受 `auto/full/medium/minimal`；`dsp-idle-network.ui.canvas-overlap.v1` 接受 `marker/representative/all`；`dsp-idle-network.ui.canvas-interaction-detail.v1` 接受 `selected/hover/base`。三者缺失或损坏分别回退 `auto`、`marker`、`selected`，并与 `dsp-idle-network.ui.blueprint-allow-overlap.v1` 一样只属于设备 UI，不进入存档或云同步。交互展开偏好只控制普通选择/悬停/聚焦；拖动、采矿和连线安全目标始终可强制完整显示。重叠放置开关仍同时约束即时蓝图、排队蓝图和单/多选拖动；默认复用同一 rounded-position 冲突判定并排除正在移动成员自己的旧位置，开启时只跳过 exact-overlap guard，其他材料、ID、线路、资源锚点和锁定校验不变。
 - 需要跨保存周期保留的只是订单当次命令语义：`ConstructionQueueEntry.allowExactOverlap?: true`。loader 只接受字面 true，旧/损坏值回退 undefined；`blueprintVersionId` 绝不编码策略后缀。1.0.43 客户端回滚会按旧 loader 丢弃此可选意图，因此重叠订单会变为不兼容而不会静默施工；玩家可取消并完整取回预留施工材料/载具，再在新版本重建订单。

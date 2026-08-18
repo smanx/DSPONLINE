@@ -12,14 +12,20 @@ import type {
   AuthoritativeSaveSerializationResponse,
   AuthoritativeSaveSerializationSummary,
 } from "./authoritativeSaveSerializationProtocol";
+import {
+  isWorkerBinaryPayload,
+  workerBinaryPayloadByteLength,
+  workerBinaryPayloadTransferables,
+  type WorkerBinaryPayload,
+} from "./workerBinaryPayload";
 
 const SAVE_FORMAT_VERSION = 2;
 const AUTHORITATIVE_SERIALIZATION_TIMEOUT_MS = 120_000;
 
-export interface AuthoritativeSerializedSavePayload {
-  bytes: ArrayBuffer;
-  sourceStateTransfer: ArrayBuffer;
-  sourceEnvelopeTransfer?: ArrayBuffer;
+export interface AuthoritativeSerializedSavePayload<Payload extends WorkerBinaryPayload = ArrayBuffer> {
+  bytes: Payload;
+  sourceStateTransfer: Payload;
+  sourceEnvelopeTransfer?: Payload;
   proof: AuthoritativeSavePayloadProof;
   catalogSeed: AuthoritativeSaveCatalogSeed;
   summary: AuthoritativeSaveSerializationSummary;
@@ -61,7 +67,7 @@ export class AuthoritativeSaveSerializationClientError extends Error {
 function serializeAuthoritativeSaveSourceInWorker(
   source: AuthoritativeSaveSerializationSource,
   options: AuthoritativeSaveSerializationOptions = {},
-): Promise<AuthoritativeSerializedSavePayload> {
+): Promise<AuthoritativeSerializedSavePayload<WorkerBinaryPayload>> {
   const savedAt = options.savedAt ?? Date.now();
   const kind = options.kind ?? "primary";
   const slot = options.slot ?? "main";
@@ -89,7 +95,7 @@ function serializeAuthoritativeSaveSourceInWorker(
     const id = 1;
     let settled = false;
     const timeoutMs = options.timeoutMs ?? AUTHORITATIVE_SERIALIZATION_TIMEOUT_MS;
-    const ownershipLost = () => source.transfer.buffer.byteLength === 0;
+    const ownershipLost = () => source.transfer.buffer instanceof ArrayBuffer && source.transfer.buffer.byteLength === 0;
     const finish = (operation: () => void) => {
       if (settled) return;
       settled = true;
@@ -120,23 +126,23 @@ function serializeAuthoritativeSaveSourceInWorker(
     worker.onmessage = (event: MessageEvent<AuthoritativeSaveSerializationResponse>) => {
       if (event.data.id !== id) return;
       const { bytes, proof, catalogSeed, summary, sourceStateTransfer, sourceEnvelopeTransfer } = event.data;
-      if (source.kind === "state" && sourceStateTransfer) source.transfer.buffer = sourceStateTransfer;
+      if (source.kind === "state" && sourceStateTransfer instanceof ArrayBuffer) source.transfer.buffer = sourceStateTransfer;
       if (source.kind === "envelope" && sourceEnvelopeTransfer) source.transfer.buffer = sourceEnvelopeTransfer;
       if (event.data.error) {
         finish(() => reject(new AuthoritativeSaveSerializationClientError("worker-operation", event.data.error!, ownershipLost())));
         return;
       }
-      if (!(bytes instanceof ArrayBuffer) || !proof || !catalogSeed || !summary ||
-        !(sourceStateTransfer instanceof ArrayBuffer) ||
-        (source.kind === "envelope" && !(sourceEnvelopeTransfer instanceof ArrayBuffer)) ||
-        proof.integrity !== "valid" || proof.byteLength !== bytes.byteLength ||
+      if (!isWorkerBinaryPayload(bytes) || !proof || !catalogSeed || !summary ||
+        !isWorkerBinaryPayload(sourceStateTransfer) ||
+        (source.kind === "envelope" && !isWorkerBinaryPayload(sourceEnvelopeTransfer)) ||
+        proof.integrity !== "valid" || proof.byteLength !== workerBinaryPayloadByteLength(bytes) ||
         proof.stateChecksum !== catalogSeed.stateChecksum || summary.stateChecksum !== catalogSeed.stateChecksum) {
         finish(() => reject(new AuthoritativeSaveSerializationClientError("protocol", "save Worker authoritative proof 响应不完整", ownershipLost())));
         return;
       }
       finish(() => {
         const durationMs = Math.max(0, event.data.durationMs ?? 0);
-        options.onProgress?.({ stage: "serialized", savedAt, bytes: bytes.byteLength, durationMs });
+        options.onProgress?.({ stage: "serialized", savedAt, bytes: workerBinaryPayloadByteLength(bytes), durationMs });
         resolve({ bytes, sourceStateTransfer, ...(sourceEnvelopeTransfer ? { sourceEnvelopeTransfer } : {}), proof, catalogSeed, summary, durationMs });
       });
     };
@@ -157,7 +163,7 @@ function serializeAuthoritativeSaveSourceInWorker(
       ...(options.checkpointOverlay ? { checkpointOverlay: options.checkpointOverlay } : {}),
     };
     try {
-      worker.postMessage(request, [source.transfer.buffer]);
+      worker.postMessage(request, workerBinaryPayloadTransferables(source.transfer.buffer));
     } catch (error) {
       finish(() => reject(new AuthoritativeSaveSerializationClientError(
         "worker-operation", error instanceof Error ? error.message : "无法发送save Worker请求", ownershipLost(),
@@ -169,14 +175,17 @@ function serializeAuthoritativeSaveSourceInWorker(
 export function serializeAuthoritativeSaveStateTransferInWorker(
   stateTransfer: SimulationStateTransfer,
   options: AuthoritativeSaveSerializationOptions = {},
-): Promise<AuthoritativeSerializedSavePayload> {
-  return serializeAuthoritativeSaveSourceInWorker({ kind: "state", transfer: stateTransfer }, options);
+): Promise<AuthoritativeSerializedSavePayload<ArrayBuffer>> {
+  return serializeAuthoritativeSaveSourceInWorker(
+    { kind: "state", transfer: stateTransfer },
+    options,
+  ) as Promise<AuthoritativeSerializedSavePayload<ArrayBuffer>>;
 }
 
 export function serializeAuthoritativeSaveEnvelopeTransferInWorker(
   envelopeTransfer: AuthoritativeSaveEnvelopeTransfer,
   options: AuthoritativeSaveSerializationOptions = {},
-): Promise<AuthoritativeSerializedSavePayload> {
+): Promise<AuthoritativeSerializedSavePayload<WorkerBinaryPayload>> {
   return serializeAuthoritativeSaveSourceInWorker({ kind: "envelope", transfer: envelopeTransfer }, options);
 }
 

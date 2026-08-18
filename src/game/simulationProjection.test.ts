@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInitialState } from "./engine";
-import { applySimulationProjectionToState, captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createFullCurrentPlanetSimulationProjection, createSimulationProjection } from "./simulationProjection";
+import { applySimulationProjectionToState, captureSimulationProjectionBaseline, chunkFullRecordSimulationProjection, createDeferredTopLevelSimulationProjection, createFullCurrentPlanetSimulationProjection, createSimulationProjection } from "./simulationProjection";
 
 describe("simulation projection", () => {
   it("reports only changed runtime ids while preserving aggregate counts", () => {
@@ -170,5 +170,38 @@ describe("simulation projection", () => {
     expect(applied.entities.find((entity) => entity.planetId === "home")?.progress).toBe(0.125);
     expect(applied.productionHistory).toEqual(authoritative.productionHistory);
     expect(applied.dysonPlans).toEqual(authoritative.dysonPlans);
+  });
+
+  it("streams a full durable-replay projection in bounded ordered chunks", () => {
+    const authoritative = createInitialState();
+    const template = structuredClone(authoritative.entities[0]);
+    for (let index = 0; index < 9; index += 1) {
+      authoritative.entities.push({ ...structuredClone(template), id: `chunk-entity-${index}`, progress: index / 10 });
+    }
+    const stale = structuredClone(authoritative);
+    for (const entity of stale.entities) entity.progress = 0;
+    authoritative.elapsedSeconds = 77;
+    authoritative.productionHistory = [{
+      elapsedSeconds: 77,
+      productionPerMinute: { iron_ore: 12 },
+      consumptionPerMinute: {},
+      inventory: {},
+      generationKw: 0,
+      demandKw: 0,
+    }];
+    const projection = createFullCurrentPlanetSimulationProjection(authoritative);
+    const chunks = chunkFullRecordSimulationProjection(projection, { entityChunkSize: 3, beltChunkSize: 2 });
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks.map((chunk) => chunk.index)).toEqual(chunks.map((_, index) => index));
+    expect(chunks.every((chunk) => chunk.total === chunks.length)).toBe(true);
+    expect(chunks.slice(1).every((chunk) => Object.keys(chunk.projection.topLevel).length === 0)).toBe(true);
+    expect(chunks.every((chunk) => chunk.projection.changedEntities.length <= 3)).toBe(true);
+    expect(chunks.every((chunk) => chunk.projection.changedBelts.length <= 2)).toBe(true);
+    const applied = chunks.reduce((current, chunk) =>
+      applySimulationProjectionToState(current, chunk.projection).state, stale);
+    expect(applied.elapsedSeconds).toBe(77);
+    expect(applied.entities).toEqual(authoritative.entities);
+    expect(applied.belts).toEqual(authoritative.belts);
+    expect(applied.productionHistory).toEqual(authoritative.productionHistory);
   });
 });
