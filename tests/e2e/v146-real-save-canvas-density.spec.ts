@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { selectSettingsCategory } from "./settings-helpers";
 
 // Opt-in local acceptance coverage. Player saves are never checked into the
@@ -43,6 +43,44 @@ async function setCanvasSettings(page: Page, preferences: {
   await expect(shell).toHaveAttribute("data-canvas-overlap-preference", preferences.overlap);
   await expect(shell).toHaveAttribute("data-canvas-interaction-detail-preference", preferences.interaction);
   await expect(settings).toBeHidden();
+}
+
+async function expectExpandedNodePainted(node: Locator): Promise<void> {
+  await expect(node).toBeVisible();
+  await expect(node).toHaveClass(/factory-flow-node--lod-full/);
+  await expect.poll(() => node.evaluate((wrapper) => {
+    const content = wrapper.querySelector<HTMLElement>('.factory-node[data-heavy-card="true"]');
+    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+    if (!content || !flow || !wrapper.isConnected) return { painted: false, hit: false };
+    const bounds = content.getBoundingClientRect();
+    const flowBounds = flow.getBoundingClientRect();
+    const left = Math.max(bounds.left, flowBounds.left);
+    const right = Math.min(bounds.right, flowBounds.right);
+    const top = Math.max(bounds.top, flowBounds.top);
+    const bottom = Math.min(bounds.bottom, flowBounds.bottom);
+    const contentStyle = getComputedStyle(content);
+    const wrapperStyle = getComputedStyle(wrapper);
+    const painted = right - left >= 2 && bottom - top >= 2 && contentStyle.display !== "none" &&
+      contentStyle.visibility !== "hidden" && Number(contentStyle.opacity) > 0 && wrapperStyle.display !== "none" &&
+      wrapperStyle.visibility !== "hidden" && Number(wrapperStyle.opacity) > 0;
+    let hit = false;
+    if (painted) {
+      // A centered node can legitimately grow beneath the fixed minimap or
+      // bottom construction rail. Require a usable painted point, not the
+      // geometric center specifically, so those UI surfaces keep ownership.
+      for (const xRatio of [0.18, 0.36, 0.54, 0.72, 0.9]) {
+        for (const yRatio of [0.12, 0.28, 0.44, 0.6, 0.76]) {
+          const topElement = document.elementFromPoint(left + (right - left) * xRatio, top + (bottom - top) * yRatio);
+          if (topElement && (wrapper === topElement || wrapper.contains(topElement))) {
+            hit = true;
+            break;
+          }
+        }
+        if (hit) break;
+      }
+    }
+    return { painted, hit };
+  }), { timeout: 60_000 }).toEqual({ painted: true, hit: true });
 }
 
 async function importFixture(page: Page): Promise<void> {
@@ -128,6 +166,58 @@ async function centerLargestCanvasStack(page: Page): Promise<{ count: number }> 
   }, { x: target.worldX, y: target.worldY });
   await svgMiniMap.click({ position: point });
   return { count: target.count };
+}
+
+async function centerCanvasRecipe(page: Page, recipeId: string): Promise<string | null> {
+  const target = await page.evaluate(async (requestedRecipeId) => {
+    const [{ readPersistedLocalSaveValue }, { inspectSave }, { projectCanvasMiniMap }] = await Promise.all([
+      import("/src/game/localSaveStore.ts"),
+      import("/src/game/storage.ts"),
+      import("/src/components/CanvasMiniMap.tsx"),
+    ]);
+    const raw = await readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    const state = raw ? inspectSave(raw).state : null;
+    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+    const viewport = document.querySelector<HTMLElement>(".react-flow__viewport");
+    if (!state || !flow || !viewport) throw new Error("real-save canvas state missing");
+    const active = state.entities.filter((entity) => entity.planetId === state.activePlanetId);
+    const entity = active.find((candidate) => candidate.recipeId === requestedRecipeId);
+    if (!entity) return null;
+    const transform = new DOMMatrixReadOnly(getComputedStyle(viewport).transform);
+    const flowRect = flow.getBoundingClientRect();
+    const projection = projectCanvasMiniMap(
+      active.map((candidate) => ({ id: candidate.id, kind: candidate.kind, x: candidate.position.x, y: candidate.position.y })),
+      { x: transform.e, y: transform.f, zoom: transform.a },
+      flowRect.width,
+      flowRect.height,
+    );
+    return {
+      id: entity.id,
+      worldX: entity.position.x,
+      worldY: entity.position.y,
+      minimapX: Math.max(1, Math.min(199, projection.offsetX + (entity.position.x - projection.minX) * projection.scale)),
+      minimapY: Math.max(1, Math.min(149, projection.offsetY + (entity.position.y - projection.minY) * projection.scale)),
+    };
+  }, recipeId);
+  if (!target) return null;
+  const canvasMiniMap = page.getByRole("img", { name: "低频画布小地图" });
+  if (await canvasMiniMap.count()) {
+    await canvasMiniMap.click({ position: { x: target.minimapX, y: target.minimapY } });
+  } else {
+    const svgMiniMap = page.locator(".react-flow__minimap svg").first();
+    await expect(svgMiniMap).toBeVisible();
+    const point = await svgMiniMap.evaluate((svg, world) => {
+      const viewBox = (svg as SVGSVGElement).viewBox.baseVal;
+      const bounds = svg.getBoundingClientRect();
+      return {
+        x: Math.max(1, Math.min(bounds.width - 1, (world.x - viewBox.x) / Math.max(1, viewBox.width) * bounds.width)),
+        y: Math.max(1, Math.min(bounds.height - 1, (world.y - viewBox.y) / Math.max(1, viewBox.height) * bounds.height)),
+      };
+    }, { x: target.worldX, y: target.worldY });
+    await svgMiniMap.click({ position: point });
+  }
+  await expect(page.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeVisible({ timeout: 60_000 });
+  return target.id;
 }
 
 test.describe("real save canvas density acceptance", () => {
@@ -358,6 +448,35 @@ test.describe("real save canvas density acceptance", () => {
       }
       await page.setViewportSize({ width: 1440, height: 900 });
     }
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("selected and hovered real-save recipe cards stay painted above nearby nodes", async ({ page }) => {
+    test.setTimeout(240_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await importFixture(page);
+
+    await setCanvasSettings(page, { detail: "medium", overlap: "marker", interaction: "selected" });
+    const targetId = await centerCanvasRecipe(page, "particle_container_from_unipolar");
+    test.skip(!targetId, "fixture has no active-planet unipolar particle-container recipe");
+    const target = page.locator(`.react-flow__node[data-id="${targetId}"]`);
+    await target.click();
+    await expect(target).toHaveClass(/selected/);
+    await expectExpandedNodePainted(target);
+
+    await page.locator(".react-flow__pane").dispatchEvent("click");
+    await expect(page.locator(".react-flow__node.selected")).toHaveCount(0);
+    await setCanvasSettings(page, { detail: "medium", overlap: "marker", interaction: "hover" });
+    await centerCanvasRecipe(page, "particle_container_from_unipolar");
+    await target.hover();
+    await expectExpandedNodePainted(target);
+    await page.screenshot({
+      path: `artifacts/qa/v146-real-save-${fixtureLabel}-interaction-expanded-stable.png`,
+      fullPage: true,
+      animations: "disabled",
+    });
     expect(pageErrors).toEqual([]);
   });
 });

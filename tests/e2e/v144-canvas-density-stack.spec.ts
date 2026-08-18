@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createBlueprint, createInitialState, placeBuilding } from "../../src/game/engine";
 import { serializeEnvelope } from "../../src/game/storage";
 import { selectSettingsCategory } from "./settings-helpers";
@@ -108,6 +108,45 @@ async function seedCanvas(page: Page, options: { count: number; exactStack?: num
   await page.goto("/");
   await expect(page.locator(".game-shell")).toBeVisible();
   await expect(page.locator(".game-shell")).toHaveAttribute("data-active-planet-node-count", String(options.count + 6));
+}
+
+async function expectNodePaintedAndHitTestable(node: Locator): Promise<void> {
+  await expect(node).toBeVisible();
+  const samplePaintState = () => node.evaluate((wrapper) => {
+    const content = wrapper.querySelector<HTMLElement>(".factory-node:not(.factory-node-stack-proxy)");
+    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+    if (!content || !flow || !wrapper.isConnected) return {
+      connected: wrapper.isConnected,
+      painted: false,
+      hit: false,
+      heavy: false,
+      topNodeId: null,
+    };
+    const bounds = content.getBoundingClientRect();
+    const flowBounds = flow.getBoundingClientRect();
+    const left = Math.max(bounds.left, flowBounds.left);
+    const right = Math.min(bounds.right, flowBounds.right);
+    const top = Math.max(bounds.top, flowBounds.top);
+    const bottom = Math.min(bounds.bottom, flowBounds.bottom);
+    const style = getComputedStyle(content);
+    const wrapperStyle = getComputedStyle(wrapper);
+    const painted = right - left >= 2 && bottom - top >= 2 && style.display !== "none" &&
+      style.visibility !== "hidden" && Number(style.opacity) > 0 && wrapperStyle.display !== "none" &&
+      wrapperStyle.visibility !== "hidden" && Number(wrapperStyle.opacity) > 0;
+    const hit = painted ? document.elementFromPoint((left + right) / 2, (top + bottom) / 2) : null;
+    const topNode = hit?.closest<HTMLElement>(".react-flow__node[data-id]");
+    return {
+      connected: true,
+      painted,
+      hit: Boolean(hit && (wrapper === hit || wrapper.contains(hit))),
+      heavy: content.dataset.heavyCard === "true",
+      topNodeId: topNode?.dataset.id ?? null,
+      nodeId: (wrapper as HTMLElement).dataset.id ?? null,
+      wrapperZIndex: wrapperStyle.zIndex,
+      topNodeZIndex: topNode ? getComputedStyle(topNode).zIndex : null,
+    };
+  });
+  await expect.poll(samplePaintState).toMatchObject({ connected: true, painted: true, hit: true, heavy: true });
 }
 
 async function togglePauseAndMeasure(page: Page, label: "继续模拟" | "暂停模拟") {
@@ -297,6 +336,7 @@ test("count-marker overlap mode never leaves an exact stack visually empty", asy
   await expect(shell).toHaveAttribute("data-canvas-stack-marker-count", "0");
   await expect(page.locator('.react-flow__node[data-id="anonymous-node-0"]')).toHaveClass(/selected/);
   await expect(page.locator('.react-flow__node[data-id="anonymous-node-0"]')).toHaveClass(/factory-flow-node--lod-full/);
+  await expectNodePaintedAndHitTestable(page.locator('.react-flow__node[data-id="anonymous-node-0"]'));
   await expect(page.locator(".factory-node-stack-badge")).toContainText("叠 50");
   await expect(page.locator(".game-notice")).toContainText("已展开重叠建筑 1/50");
 
@@ -454,6 +494,7 @@ test("fixed medium follows the current viewport and keeps hover expansion indepe
   await expect(node).toHaveClass(/factory-flow-node--lod-medium/);
   await node.click({ force: true });
   await expect(node).toHaveClass(/factory-flow-node--lod-full/);
+  await expectNodePaintedAndHitTestable(node);
 
   await page.getByLabel("打开设置").click();
   const settings = page.locator(".operations-workspace");
@@ -475,6 +516,7 @@ test("fixed medium follows the current viewport and keeps hover expansion indepe
   const hoverNode = page.locator(`.react-flow__node[data-id="${hoverNodeId}"]`);
   await hoverNode.hover();
   await expect(hoverNode).toHaveClass(/factory-flow-node--lod-full/);
+  await expectNodePaintedAndHitTestable(hoverNode);
 });
 
 test("an exact 50-card stack paints one leader and glow while retaining hidden edge geometry", async ({ page }) => {

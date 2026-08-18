@@ -85,8 +85,8 @@ const release1046Copy = {
   },
   canvasTitle: { "zh-CN": "画布显示可独立控制", en: "Canvas presentation controls are independent" },
   canvasDescription: {
-    "zh-CN": "基础卡片、重叠建筑和选择/悬停展开不再混在一个自动档中。重叠组默认留下紧凑的层叠图标与数量；一行卡不会再被裁成半截，空白视角可用适应全部或小地图恢复。",
-    en: "Base card detail, overlapping buildings, and selection or hover expansion are no longer mixed into one automatic mode. Overlap groups keep a compact layers-and-count marker by default; one-line cards are no longer clipped, and a blank saved view can recover through Fit View or the minimap.",
+    "zh-CN": "基础卡片、重叠建筑和选择/悬停展开不再混在一个自动档中。重叠组默认留下紧凑的层叠图标与数量；选中或悬停展开的卡片会稳定置顶，不再被附近建筑盖住或瞬间消失。一行卡不会再被裁成半截，空白视角可用适应全部或小地图恢复。",
+    en: "Base card detail, overlapping buildings, and selection or hover expansion are no longer mixed into one automatic mode. Overlap groups keep a compact layers-and-count marker by default. Selected or hovered expanded cards stay above nearby buildings instead of being covered or vanishing. One-line cards are no longer clipped, and a blank saved view can recover through Fit View or the minimap.",
   },
   idleTitle: { "zh-CN": "纯挂机日志与宏观进度保留", en: "Pure-idle logs and macro progress are preserved" },
   idleDescription: {

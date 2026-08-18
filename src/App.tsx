@@ -494,6 +494,9 @@ const CANVAS_MEDIUM_NODE_WIDTH = 244;
 const CANVAS_MEDIUM_NODE_HEIGHT = 118;
 const CANVAS_FULL_NODE_FALLBACK_WIDTH = 256;
 const CANVAS_FULL_NODE_FALLBACK_HEIGHT = 180;
+const CANVAS_STACK_HALO_Z_INDEX = 6;
+const CANVAS_INTERACTION_Z_INDEX = 20;
+const CANVAS_SELECTED_Z_INDEX = 30;
 
 /**
  * React Flow can retain a measurement from the previous detail mode for one
@@ -8431,6 +8434,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           stackMemberIdReferenceCount += stackPresentation.memberIds.length;
           const stackHidden = stackPresentation.hidden;
           const stackMarker = stackPresentation.marker;
+          // A compact/medium card grows well beyond its old footprint when it
+          // is selected, focused or hovered. Keep that interaction target
+          // above later siblings for the entire transition; otherwise the
+          // newly expanded area is covered by another node, pointer ownership
+          // jumps away, and hover expansion immediately collapses again.
+          const nodeZIndex = selected
+            ? CANVAS_SELECTED_Z_INDEX
+            : interactionProtected
+              ? CANVAS_INTERACTION_Z_INDEX
+              : stackPresentation.halo ? CANVAS_STACK_HALO_Z_INDEX : 0;
           const stackGeometryHandlesRequired = canvasConnectedEntityIds.has(entity.id);
           const nodeHidden = stackHidden && !stackGeometryHandlesRequired;
           const nodeDraggable = draggable && !stackHidden && !stackMarker;
@@ -8453,6 +8466,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             previous.data.stackAlertCount === stackPresentation.alertCount &&
             previous.data.stackCriticalAlertCount === stackPresentation.criticalAlertCount &&
             previous.data.stackGeometryHandlesRequired === stackGeometryHandlesRequired && previous.hidden === nodeHidden &&
+            previous.zIndex === nodeZIndex &&
             previous.data.stackMembershipToken === stackPresentation.membershipToken);
           if (staticPresentation && staticPresentationStable && previous) {
             stableNodeCount += 1;
@@ -8534,6 +8548,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                 producedOutputItemIds,
               } as FactoryNodeData,
               selected,
+              zIndex: nodeZIndex,
               className,
               draggable: nodeDraggable,
               selectable: nodeSelectable,
@@ -8669,13 +8684,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             stackPresentation.alertCount,
             stackPresentation.criticalAlertCount,
             stackGeometryHandlesRequired,
+            nodeZIndex,
             stackPresentation.membershipToken,
           ].join("|");
           if (previous?.data.visualSignature === visualSignature && previous.data.presentationSignature === presentationSignature &&
             previous.position.x === entity.position.x && previous.position.y === entity.position.y &&
             previous.selected === selected && previous.className === className && previous.draggable === nodeDraggable &&
             previous.selectable === nodeSelectable && previous.focusable === nodeFocusable && previous.connectable === nodeConnectable &&
-            previous.hidden === nodeHidden) return previous;
+            previous.hidden === nodeHidden && previous.zIndex === nodeZIndex) return previous;
           return {
             id: entity.id,
             type: entity.kind,
@@ -8728,6 +8744,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               producedOutputItemIds,
             } as unknown as FactoryNodeData,
             selected,
+            zIndex: nodeZIndex,
             className,
             draggable: nodeDraggable,
             selectable: nodeSelectable,

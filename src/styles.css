@@ -2770,7 +2770,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   height: 10px;
 }
 
-.factory-flow-node--stack-halo { z-index: 6 !important; }
+.factory-flow-node--stack-halo { z-index: 6; }
 
 .factory-node-stack-halo {
   position: absolute;
