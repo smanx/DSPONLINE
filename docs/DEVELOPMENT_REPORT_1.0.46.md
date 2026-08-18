@@ -16,6 +16,8 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 
 最后一轮真人反馈还定位到一个独立根因：画面当时仍处于“线路网络聚焦”检查状态，旧逻辑把不属于该网络的节点统一加上 0.18 透明度，而选中/悬停展开没有覆盖这个 dim class；LOD 从一行/中等切到完整时又未给 React Flow wrapper 提供新档位初始尺寸，测量窗口会把 wrapper 暂时设为 `visibility:hidden`。鼠标移到下一个节点后，前一节点重新进入重叠隐藏，因此视觉上就是“悬停哪个哪个消失”。同时，这些几乎透明的节点仍是 `draggable/nopan`，密集区域会截获画布拖动，造成卡死感。现在交互目标不再继承 dim，LOD 均有确定初始几何；上下文节点降为可辨识的 0.5 透明度且不再阻断画布平移，建筑或空白点击会退出临时线路聚焦。
 
+随后“放置/拉线后画布卡死、视角外建筑不显示、小地图不移动、框选和放置坐标失效”又暴露了另一条状态脱节：React Flow 手势中的 `onMove` 已经更新 CSS transform 和线路 Canvas，但虚拟节点矩形、密度展示 zoom 与 CanvasMiniMap 仍等到 `onMoveEnd` 才发布；节点拖动触发的自动平移不保证产生该结束事件。虚拟窗口因此停在旧世界坐标，屏外节点被继续卸载，所有依赖当前 transform 的交互看起来一起失灵。修复后，手势中以 120 CSS px 阈值和 160 px overscan 发布虚拟窗口，zoom/节点发布进入 transition；小地图用单次节点遍历并按 80 ms 节流实时重绘，结束时必定补最终帧。回归在 pointer 尚未松开时检查小地图、跨旧窗口拖动建筑、框选、选中展开和移动后放置坐标。
+
 ## 最终设计边界
 
 1. **默认保存路径回到稳定协调器**：缺失、关闭或错误设置 durable 环境变量时均选择 1.0.43-compatible verified-primary；打开旧玩家档不会隐式启用 durable。空间站 v46 bridge 也强制使用稳定路径。
@@ -25,13 +27,14 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 5. **临时 UI 不进入存档**：连续拉线候选、展开状态、临时提示和定位状态均不新增 GameState、云同步、迁移或 IndexedDB 字段。
 6. **画布三类决策互不覆盖**：基础卡片只决定普通卡片层级，重叠处理只决定同坐标组如何留下入口，交互展开只决定普通选择/悬停/聚焦；拖动、采矿和连线目标仍可按安全规则强制完整显示。三项均只写本机 localStorage。
 7. **密集保护保持可恢复**：玩家选择“完整 + 全部卡片”时，视口节点超过 480/1,000 会统一改用中等/一行基础卡，并在界面明确显示“密集保护”；单个选中或悬停目标仍完整展开，不更改设置值，也不写入存档。
+8. **视口发布只有一个实时坐标真相**：节点虚拟化、线路端点、放置坐标、框选和小地图都从同一实时 React Flow transform 派生；节流只减少重绘频率，不允许把最终视口留在旧值。
 
 ## 两份真实玩家存档的只读验收
 
 | 输入 | 精确字节 | SHA-256 | 第一次自动保存 | 第二次自动保存 | 结果 |
 | --- | ---: | --- | ---: | ---: | --- |
-| `dsp-idle-save-2026-08-14.json` | 36,704,109 | `cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1` | 3,598 ms | 3,267 ms | 两次均 Worker active、`paused=false`，刷新后主档仍为运行态 |
-| `dsp-idle-local-backup-2026-08-17 (1).json` | 11,723,913 | `f832f7fb909bad1981cd8476f28dcf0f1026c62955d822904218cee270a43d2a` | 1,143 ms | 1,022 ms | 两次均 Worker active、`paused=false`，刷新后主档仍为运行态 |
+| `dsp-idle-save-2026-08-14.json` | 36,704,109 | `cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1` | 6,441 ms | 4,943 ms | 两次均 Worker active、`paused=false`，刷新后主档仍为运行态 |
+| `dsp-idle-local-backup-2026-08-17 (1).json` | 11,723,913 | `f832f7fb909bad1981cd8476f28dcf0f1026c62955d822904218cee270a43d2a` | 1,087 ms | 835 ms | 两次均 Worker active、`paused=false`，刷新后主档仍为运行态 |
 
 两份源文件的 bytes、mtime 与 SHA-256 在测试前后完全一致。专项还断言自动保存期间没有任何 `paused=true` 或 Worker fallback 状态变化，没有 durable/recovery 刷新提示，backup 与重载后的 primary 均通过完整检查。
 
@@ -54,13 +57,14 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 - “完整 + 全部卡片”增加 480/1,000 视口节点安全阈值，分别统一使用中等/一行基础卡。设置值保持不变，状态栏和设置页显示密集保护，选中/悬停仍是完整卡。
 - 展开模式只让单个 halo/marker 节点持有成员数组，其他成员共享 membership token，不为每个成员复制整组引用；4,213 个 exact-overlap 的派生仍保持线性边界。
 - 普通平移和缩放现在持续刷新世界视口矩形，固定中等与自动密度不会在 Fit View 或普通拖动画布后把屏内节点误判为视口外。
+- 节点拖动/放置自动平移也在 `onMove` 阶段发布虚拟矩形，不再依赖可能缺失的 `onMoveEnd`。发布用 overscan 保留边缘节点，小地图以 80 ms 上限重绘并在结束时强制精确同步；节点派生的 no-op 更新直接复用旧状态，避免为每个手势帧重算整棵重卡树。
 - 变换中的 React Flow viewport 已移除 `contain: paint`，避免线路仍在但节点层被错误裁空；一行卡及 wrapper 固定为 `96×32`，中等、数量标记和完整卡的裁剪/线路几何也按当前档位尺寸计算。
 - fully-deferred 空白视角保留四个边界恢复节点，Fit View 不再因节点仓为空而失效；标准 SVG MiniMap 与低频 CanvasMiniMap 均可点击定位世界坐标。
 - 本机键为 `dsp-idle-network.ui.canvas-detail.v1`、`dsp-idle-network.ui.canvas-overlap.v1`、`dsp-idle-network.ui.canvas-interaction-detail.v1`；缺失/损坏分别回退 `auto`、`marker`、`selected`，不新增任何存档字段。
 
 ## 本地验证结果
 
-以下数字均来自固定运行时候选 `1c01e79384283f02057e8c56d30b497fa3c5842e`；完整 Chromium、durable、production preview、PWA、跨浏览器、服务端、运维、原生静态和两份真实存档均已在最终画布增量合入后重跑。
+以下数字均来自固定运行时候选 `c24a0f57efeb83a54202b1ede5ce2b073820dde5`；完整 Chromium、durable、production preview、PWA、跨浏览器、服务端、运维、原生静态和两份真实存档均已在最终画布增量合入后重跑。
 
 | 范围 | 结果 |
 | --- | --- |
@@ -74,21 +78,22 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 | 默认保存进度 | 2/2；保护模式和实验模式分别验证 |
 | 纯挂机教程与宏 | 20 passed / 1 条真实夹具条件跳过 |
 | 手机连续拉线 | 21/21，含 6/10/50/100 候选、390×844、360×640、844×390 与 80%～200% 字体 |
-| 完整 Chromium | 422 passed / 24 explicit conditional skips / 0 failed（446 总项） |
+| 完整 Chromium | 424 passed / 25 explicit conditional skips / 0 failed（449 总项） |
 | Firefox / WebKit | 2/2 |
-| Production preview | PWA、连接视口与画布 26/26；自动密度三轮 P95 20.8 / 7.0 / 13.9 ms、0 个 >50 ms 帧；连接视口 bounded entry 9.6 ms、P95 13.9 ms、max 41.8 ms；展开全部三轮 P95 约 69.5 ms、max 90.3 ms、无 >100 ms 帧 |
-| 真实存档专项 | 两份档的自动保存、画布核心与选中/悬停专项全部通过；各 18 张设置/横竖屏截图，pageerror 0；前者空白 Fit View 恢复 0→33 并显示 1,000 重叠组，后者 Fit View 后约 31 个可见节点 |
+| Production preview | 功能门禁 27/27，PWA 3/3；自动密度性能在独立进程连续 3/3，九次手势 P95 7～20.8 ms、max 27.8 ms、0 个 >50/>100 ms 帧；连接 bounded entry 9.8 ms、P95 13.9 ms、max 34.8 ms |
+| 真实存档专项 | 两份档的自动保存、画布核心、选中/悬停和实时虚拟化平移全部通过；各 19 张设置/横竖屏截图，pageerror 0；前者空白 Fit View 恢复 0→33 并显示 1,000 重叠组，后者 Fit View 后约 31 个可见节点 |
 | 匿名 v47 发布夹具 | 12/12 |
 | 许可证与依赖 | 125 个运行时包一致；root/server `npm audit --audit-level=high` 均 0 漏洞 |
-| Web 构建 | 1,961 modules；startup 194,823 B gzip；menu 281,392 B gzip；forbidden startup modules 0；Build ID `1.0.46+1c01e7938428` |
+| Web 构建 | 1,961 modules；startup 194,813 B gzip（JS 101,826 B、CSS 92,987 B、最大 JS 58,974 B）；menu 281,356 B gzip；forbidden startup modules 0；Build ID `1.0.46+c24a0f57efeb` |
 
-Chromium 的 24 条跳过均由用例内显式条件控制，包括未提供的其他真实夹具、durable-only、production-preview-only 和未显式提供玩家存档路径的 opt-in 场景；它们不是失败。两份用户指定玩家档已由独立 opt-in 用例实际运行，不包含在这些跳过项里。开发 E2E 的 `/api → 127.0.0.1:65534` 拒绝是线上 API 隔离，不是产品故障。
+Chromium 的 25 条跳过均由用例内显式条件控制，包括未提供的其他真实夹具、durable-only、production-preview-only 和未显式提供玩家存档路径的 opt-in 场景；它们不是失败。两份用户指定玩家档已由独立 opt-in 用例实际运行，不包含在这些跳过项里。开发 E2E 的 `/api → 127.0.0.1:65534` 拒绝是线上 API 隔离，不是产品故障。
 
 ## 审计中额外处理
 
 - 修正保存失败 E2E 的注入位置：现在拦截真正写主档的 authoritative persistence Worker `commit`，并正确返还 transferable payload；已证明连续 quota 失败时实验性编辑仍保留、可导出、刷新后精确恢复且不暂停。
 - 修正 production Web 构建门禁：`npm run build:web` 强制 Web 平台，release gate 在构建后执行 PWA 生命周期，避免 Android/Desktop 的旧 `dist` 被误当 Web 候选。
 - 更新匿名 v47/空间站发布夹具及服务端持久化原子性回归；根与 server 高危依赖审计均为零。
+- 修正 PWA 离线测试的旧 document listener 竞态：重载前用 context init script 在新 document 安装状态监听，并主动请求 Service Worker 状态；产品缓存逻辑未为测试放宽。
 - 保留开发服务器偶发的 `ResizeObserver loop completed with undelivered notifications` 为非阻断诊断；候选稳定性专项没有 pageerror、dynamic-import-fatal 或 runtime render error。后续若处理，应先在 production preview 独立采样，不能用吞错掩盖真实异常。
 
 ## 残余风险与优化方向
@@ -97,8 +102,9 @@ Chromium 的 24 条跳过均由用例内显式条件控制，包括未提供的�
 2. `FactoryRuntime` 约 695 KB minified，主 CSS 约 608 KB，Vite 仍报告大 chunk 警告。后续优先从 `App.tsx` 拆出 persistence lifecycle、Worker lifecycle 与 batch-connection presentation，但不得改变权威状态边界。
 3. Android/Windows 正式签名、实体设备、Linux systemd/Nginx 备份与切换、线上 smoke、下载页更新均未执行，不能视为已发布或已签名。
 4. 固定源码、候选归档、manifest、SBOM 与 provenance 只证明开发侧输入与输出一致；正式证书、生产备份、目标节点与受保护切换仍属于 release agent。
-5. 固定“完整”在 500 个可见、非合并重卡压力场景仍测得约 153～389 ms 的帧 P95；自动档没有 >50 ms 帧，“完整 + 全部卡片”已有 480/1,000 密集保护。后续仍应拆分重卡内容，但不能把固定完整档的成本描述成自动档结果。
+5. 合成 506 个重卡的固定“完整”或显式“展开全部”override 仍会产生数百毫秒到约 1.9 秒的帧；组合功能进程里的展开全部诊断也有 max 111.3 ms、2 帧 >50 ms。自动档在独立干净浏览器连续三轮没有 >50 ms 帧，“完整 + 全部卡片”已有 480/1,000 密集保护。后续仍应拆分重卡内容，但不能把 override 的成本描述成自动档结果。
+6. production 功能 27/27 与自动性能 3/3 是分进程门禁。把性能用例接在重型功能矩阵后同进程运行时，第三轮 P95 曾为 34.8 ms（max 48.7 ms、仍无 >50 ms），说明采样会受前序页面/浏览器进程污染；交接不得宣称组合 28/28，也不得通过放宽阈值掩盖。
 
 ## 发布交接原则
 
-开发侧已从干净固定 SHA `1c01e79384283f02057e8c56d30b497fa3c5842e` 生成并复验 Web/API/source、未签名原生诊断制品、10 文件 candidate manifest、SBOM 与 3-subject provenance；完整路径和哈希见发布交接。release agent 仍必须独立复算，并在签名、目标节点、备份 evidence、回滚指针和公开 smoke 齐备后才能发布；本报告本身不授权部署。
+开发侧已从干净固定 SHA `c24a0f57efeb83a54202b1ede5ce2b073820dde5` 生成并复验 Web/API/source、未签名原生诊断制品、10 文件 candidate manifest、SBOM 与 3-subject provenance；完整路径和哈希见发布交接。release agent 仍必须独立复算，并在签名、目标节点、备份 evidence、回滚指针和公开 smoke 齐备后才能发布；本报告本身不授权部署。
