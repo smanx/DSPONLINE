@@ -359,6 +359,140 @@ test("network focus keeps interaction cards opaque and permits panning from cont
   await expectNodePaintedAndHitTestable(contextual);
 });
 
+test("dense viewport virtualization and minimap follow an in-progress pan", async ({ page }) => {
+  await seedCanvas(page, {
+    count: 800,
+    detail: "minimal",
+    overlap: "all",
+    interactionDetail: "hover",
+    spacingX: 500,
+    savedViewport: { x: 120, y: 100, zoom: 1 },
+  });
+  const shell = page.locator(".game-shell");
+  const pane = page.locator(".react-flow__pane");
+  const viewport = page.locator(".react-flow__viewport");
+  const minimap = page.getByRole("img", { name: "低频画布小地图" });
+  await expect(shell).toHaveAttribute("data-canvas-viewport-culling", "true");
+  await expect(minimap).toBeVisible();
+  const paneBox = await pane.boundingBox();
+  if (!paneBox) throw new Error("dense pan fixture has no pane geometry");
+
+  const before = await page.evaluate(() => ({
+    transform: getComputedStyle(document.querySelector<HTMLElement>(".react-flow__viewport")!).transform,
+    visibleCount: Number(document.querySelector<HTMLElement>(".game-shell")!.dataset.canvasVisibleNodeCount),
+    drawCount: Number(document.querySelector<HTMLCanvasElement>('canvas[aria-label="低频画布小地图"]')!.dataset.drawCount),
+    mountedIds: [...document.querySelectorAll<HTMLElement>('.react-flow__node[data-id^="anonymous-node-"]')]
+      .map((node) => node.dataset.id),
+  }));
+  await page.mouse.move(paneBox.x + paneBox.width * 0.75, paneBox.y + paneBox.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(paneBox.x + paneBox.width * 0.15, paneBox.y + paneBox.height * 0.5, { steps: 12 });
+  await expect.poll(() => viewport.evaluate((element) => getComputedStyle(element).transform)).not.toBe(before.transform);
+  await expect.poll(() => page.evaluate((snapshot) => {
+    const visibleCount = Number(document.querySelector<HTMLElement>(".game-shell")!.dataset.canvasVisibleNodeCount);
+    const drawCount = Number(document.querySelector<HTMLCanvasElement>('canvas[aria-label="低频画布小地图"]')!.dataset.drawCount);
+    const mountedIds = [...document.querySelectorAll<HTMLElement>('.react-flow__node[data-id^="anonymous-node-"]')]
+      .map((node) => node.dataset.id ?? "");
+    return {
+      visibleChanged: visibleCount !== snapshot.visibleCount,
+      minimapChanged: drawCount > snapshot.drawCount,
+      mountedSetChanged: mountedIds.some((id) => !snapshot.mountedIds.includes(id)),
+    };
+  }, before)).toEqual({ visibleChanged: true, minimapChanged: true, mountedSetChanged: true });
+  await page.mouse.up();
+});
+
+test("dense canvas remains selectable, draggable and placement-aligned after panning", async ({ page }) => {
+  await seedCanvas(page, {
+    count: 800,
+    blueprint: true,
+    detail: "minimal",
+    overlap: "all",
+    interactionDetail: "selected",
+    spacingX: 500,
+    savedViewport: { x: 120, y: 100, zoom: 1 },
+  });
+  const pane = page.locator(".react-flow__pane");
+  const paneBox = await pane.boundingBox();
+  if (!paneBox) throw new Error("dense interaction fixture has no pane geometry");
+  await page.mouse.move(paneBox.x + paneBox.width * 0.76, paneBox.y + paneBox.height * 0.45);
+  await page.mouse.down();
+  await page.mouse.move(paneBox.x + paneBox.width * 0.22, paneBox.y + paneBox.height * 0.45, { steps: 12 });
+  await page.mouse.up();
+
+  const targetId = await page.evaluate(() => {
+    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+    if (!flow) return null;
+    const flowBounds = flow.getBoundingClientRect();
+    return [...document.querySelectorAll<HTMLElement>('.react-flow__node[data-id^="anonymous-node-"]')]
+      .find((node) => {
+        const bounds = node.getBoundingClientRect();
+        const centerX = bounds.left + bounds.width / 2;
+        const centerY = bounds.top + bounds.height / 2;
+        const hit = document.elementFromPoint(centerX, centerY);
+        return centerX > flowBounds.left + 30 && centerX < flowBounds.right - 30 &&
+          centerY > flowBounds.top + 30 && centerY < flowBounds.bottom - 120 &&
+          Boolean(hit && (hit === node || node.contains(hit)));
+      })?.dataset.id ?? null;
+  });
+  expect(targetId).not.toBeNull();
+  const target = page.locator(`.react-flow__node[data-id="${targetId}"]`);
+  await target.click({ force: true });
+  await expect(target).toHaveClass(/selected/);
+  await expect(target).toHaveClass(/factory-flow-node--lod-full/);
+  await expectNodePaintedAndHitTestable(target);
+
+  const beforeDragTransform = await target.evaluate((element) => getComputedStyle(element).transform);
+  const beforeDragStopCount = Number(await page.locator(".factory-canvas").getAttribute("data-drag-stop-count") ?? 0);
+  const dragBox = await target.locator(".factory-node__header").boundingBox();
+  if (!dragBox) throw new Error("expanded dense node has no drag header");
+  await page.mouse.move(dragBox.x + dragBox.width * 0.55, dragBox.y + dragBox.height * 0.55);
+  await page.mouse.down();
+  await page.mouse.move(dragBox.x + dragBox.width * 0.55 + 42, dragBox.y + dragBox.height * 0.55 + 22, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => Number(await page.locator(".factory-canvas").getAttribute("data-drag-stop-count") ?? 0))
+    .toBeGreaterThan(beforeDragStopCount);
+  await expect.poll(() => target.evaluate((element) => getComputedStyle(element).transform)).not.toBe(beforeDragTransform);
+
+  await page.getByLabel("框选模式").click();
+  await page.mouse.move(paneBox.x + 8, paneBox.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(paneBox.x + paneBox.width - 8, paneBox.y + paneBox.height - 120, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(() => page.locator(".react-flow__node.selected").count()).toBeGreaterThan(0);
+  await page.getByLabel("指针模式").click();
+
+  const existingIds = await page.locator(".react-flow__node[data-id]").evaluateAll((nodes) =>
+    nodes.map((node) => (node as HTMLElement).dataset.id ?? ""));
+  await page.getByTitle("部署小型储物仓", { exact: true }).click();
+  const clickPosition = { x: paneBox.width * 0.52, y: paneBox.height * 0.72 };
+  const expected = await page.evaluate(({ x, y }) => {
+    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow")!;
+    const viewport = document.querySelector<HTMLElement>(".react-flow__viewport")!;
+    const bounds = flow.getBoundingClientRect();
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(viewport).transform);
+    const snap = (value: number) => Math.round(value / 20) * 20;
+    return {
+      x: snap((bounds.left + x - bounds.left - matrix.e) / matrix.a),
+      y: snap((bounds.top + y - bounds.top - matrix.f) / matrix.d),
+    };
+  }, clickPosition);
+  await pane.click({ position: clickPosition });
+  const findPlacedId = async () => {
+    const ids = await page.locator(".react-flow__node[data-id]").evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLElement).dataset.id ?? ""));
+    return ids.find((id) => !existingIds.includes(id)) ?? null;
+  };
+  await expect.poll(findPlacedId).not.toBeNull();
+  const placedId = await findPlacedId();
+  if (!placedId) throw new Error("placed dense node did not mount in the clicked viewport");
+  const placed = page.locator(`.react-flow__node[data-id="${placedId}"]`);
+  await expect.poll(() => placed.evaluate((element) => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+    return { x: matrix.e, y: matrix.f };
+  })).toEqual(expected);
+});
+
 test("a large translated compact viewport still paints and hit-tests its one-line card", async ({ page }) => {
   await seedCanvas(page, {
     count: 50,

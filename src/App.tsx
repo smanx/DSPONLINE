@@ -10721,7 +10721,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     viewportRef.current = viewport;
     if (connectionHandleSpatialIndexRef.current) connectionHandleSpatialIndexRef.current.viewport = viewport;
     canvasBeltLayerRef.current?.setViewport(viewport);
-    if (connectionDraftRef.current) scheduleConnectionViewport(viewport, canvasSizeRef.current ?? canvasViewportSize);
+    // React Flow can move the viewport without a matching `onMoveEnd` while
+    // auto-panning a dragged node or a continuous placement pointer. The
+    // Canvas belt layer already follows that live transform imperatively; keep
+    // the virtualized node window and low-frequency minimap on the same source
+    // of truth so they cannot remain frozen at the gesture's starting view.
+    scheduleConnectionViewport(viewport, canvasSizeRef.current ?? canvasViewportSize);
+    canvasMiniMapRef.current?.setViewport(viewport);
     if (blueprintPlacementId) setPendingBlueprintViewport(viewport);
     const currentLod = getCanvasLod(viewportZoom);
     const nextLod = getCanvasLod(viewport.zoom);

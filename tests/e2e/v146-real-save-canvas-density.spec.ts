@@ -479,4 +479,109 @@ test.describe("real save canvas density acceptance", () => {
     });
     expect(pageErrors).toEqual([]);
   });
+
+  test("real-save canvas stays interactive through autosave and a live virtualized pan", async ({ page }) => {
+    test.setTimeout(240_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.addInitScript(() => {
+      // Keep this canvas regression deterministic even for the large fixture:
+      // capture the exact 30-second user-selected interval and invoke it below
+      // instead of waiting for the optional large-save cadence throttle.
+      localStorage.setItem("dsp-idle-network.ui.large-save-autosave-throttle.v1", "false");
+      const tracker: { autosaveHandler: TimerHandler | null } = { autosaveHandler: null };
+      Object.assign(window, { __dspCanvasAutosaveTracker: tracker });
+      const nativeSetInterval = window.setInterval.bind(window);
+      window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+        if (timeout === 30_000) {
+          tracker.autosaveHandler = handler;
+          return 0 as unknown as ReturnType<typeof window.setInterval>;
+        }
+        return nativeSetInterval(handler, timeout, ...args);
+      }) as typeof window.setInterval;
+    });
+    await importFixture(page);
+    await setCanvasSettings(page, { detail: "minimal", overlap: "all", interaction: "selected" });
+
+    await page.getByLabel("打开设置").click();
+    const settings = page.locator(".operations-workspace");
+    await selectSettingsCategory(settings, "存档与云同步", "storage");
+    await settings.getByRole("button", { name: "30 秒", exact: true }).click();
+    await settings.getByRole("button", { name: "关闭运营中心" }).click();
+    const shell = page.locator(".game-shell");
+    await expect(shell).toHaveAttribute("data-autosave-configured-seconds", "30");
+    const resume = page.getByLabel("继续模拟");
+    if (await resume.isVisible()) await resume.click();
+    await expect(shell).toHaveAttribute("data-simulation-paused", "false", { timeout: 30_000 });
+    await page.evaluate(() => {
+      const tracker = (window as typeof window & {
+        __dspCanvasAutosaveTracker?: { autosaveHandler: TimerHandler | null };
+      }).__dspCanvasAutosaveTracker;
+      if (!tracker || typeof tracker.autosaveHandler !== "function") {
+        throw new Error("30-second canvas autosave handler missing");
+      }
+      tracker.autosaveHandler();
+    });
+    await expect(shell).toHaveAttribute("data-persistence-kind", "autosave", { timeout: 60_000 });
+    await expect(shell).toHaveAttribute("data-persistence-phase", "complete", { timeout: 120_000 });
+    await expect(shell).toHaveAttribute("data-simulation-worker", "active");
+    await expect(shell).toHaveAttribute("data-simulation-paused", "false");
+
+    await page.locator(".react-flow__controls-fitview").click();
+    const pane = page.locator(".react-flow__pane");
+    const paneBox = await pane.boundingBox();
+    if (!paneBox) throw new Error("real-save live pan has no pane geometry");
+    const before = await page.evaluate(() => ({
+      transform: getComputedStyle(document.querySelector<HTMLElement>(".react-flow__viewport")!).transform,
+      ids: [...document.querySelectorAll<HTMLElement>(".react-flow__node[data-id]")].map((node) => node.dataset.id ?? ""),
+    }));
+    await page.mouse.move(paneBox.x + paneBox.width * 0.72, paneBox.y + paneBox.height * 0.42);
+    await page.mouse.down();
+    await page.mouse.move(paneBox.x + paneBox.width * 0.2, paneBox.y + paneBox.height * 0.42, { steps: 12 });
+    await expect.poll(() => page.locator(".react-flow__viewport").evaluate((element) => getComputedStyle(element).transform))
+      .not.toBe(before.transform);
+    await expect.poll(() => page.locator(".react-flow__node[data-id]").evaluateAll((nodes, ids) =>
+      nodes.some((node) => !ids.includes((node as HTMLElement).dataset.id ?? "")), before.ids)).toBe(true);
+    await page.mouse.up();
+
+    const targetId = await page.evaluate(() => {
+      const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+      if (!flow) return null;
+      const flowBounds = flow.getBoundingClientRect();
+      return [...document.querySelectorAll<HTMLElement>(".react-flow__node[data-id]")].find((node) => {
+        if (node.dataset.stackHiddenWrapper === "true") return false;
+        const bounds = node.getBoundingClientRect();
+        const x = bounds.left + bounds.width / 2;
+        const y = bounds.top + bounds.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        return x > flowBounds.left + 30 && x < flowBounds.right - 30 &&
+          y > flowBounds.top + 30 && y < flowBounds.bottom - 140 &&
+          Boolean(hit && (hit === node || node.contains(hit)));
+      })?.dataset.id ?? null;
+    });
+    expect(targetId).not.toBeNull();
+    const target = page.locator(`.react-flow__node[data-id="${targetId}"]`);
+    await target.click({ force: true });
+    await expect(target).toHaveClass(/selected/);
+    await expectExpandedNodePainted(target);
+
+    const dragStopsBefore = Number(await page.locator(".factory-canvas").getAttribute("data-drag-stop-count") ?? 0);
+    const header = await target.locator(".factory-node__header").boundingBox();
+    if (!header) throw new Error("selected real-save node has no drag geometry");
+    await page.mouse.move(header.x + header.width / 2, header.y + header.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(header.x + header.width / 2 + 42, header.y + header.height / 2 + 22, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(async () => Number(await page.locator(".factory-canvas").getAttribute("data-drag-stop-count") ?? 0))
+      .toBeGreaterThan(dragStopsBefore);
+
+    await page.getByLabel("框选模式").click();
+    await page.mouse.move(paneBox.x + 8, paneBox.y + 8);
+    await page.mouse.down();
+    await page.mouse.move(paneBox.x + paneBox.width - 8, paneBox.y + paneBox.height - 140, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(() => page.locator(".react-flow__node.selected").count()).toBeGreaterThan(0);
+    expect(pageErrors).toEqual([]);
+  });
 });
