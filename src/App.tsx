@@ -8061,11 +8061,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       (callback) => window.requestAnimationFrame(callback),
       (handle) => window.cancelAnimationFrame(handle),
       ({ viewport, size }) => {
-        // This boundary also decides whether ordinary cards are allowed to use
-        // their selected base detail. Keeping it current only while connecting
-        // leaves newly panned-in nodes mislabeled as off-screen compact cards.
-        const nextBounds = getConnectionViewportBounds(viewport, size);
-        setConnectionViewportBounds((current) => connectionViewportBoundsEqual(current, nextBounds) ? current : nextBounds);
+        // Connection targets need the exact live bounds. Ordinary panning uses
+        // the virtualized viewport publication below; writing this separate
+        // state on every pointer frame would re-derive the entire App tree.
+        if (connectionDraftRef.current) {
+          const nextBounds = getConnectionViewportBounds(viewport, size);
+          setConnectionViewportBounds((current) => connectionViewportBoundsEqual(current, nextBounds) ? current : nextBounds);
+        }
         const nextVisible = getCanvasWorldRectangle(viewport, size);
         const nextVisibleNodeCount = countVisibleCanvasNodes(canvasPositionNodesRef.current, nextVisible);
         // An empty virtualized canvas remains visually identical while the
@@ -8074,13 +8076,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         // still publish as soon as either rectangle contains a node, so
         // re-entering the factory and all non-empty pans remain exact.
         if (connectionDraftRef.current || canvasVisibleNodeCountRef.current > 0 || nextVisibleNodeCount > 0) {
-          setCanvasVisibleRectangle((current) =>
-            Math.abs(current.left - nextVisible.left) <= 0.01 &&
-            Math.abs(current.top - nextVisible.top) <= 0.01 &&
-            Math.abs(current.right - nextVisible.right) <= 0.01 &&
-            Math.abs(current.bottom - nextVisible.bottom) <= 0.01
-              ? current
-              : nextVisible);
+          setCanvasVisibleRectangle((current) => {
+            const visibilityBoundaryChanged = (canvasVisibleNodeCountRef.current === 0) !== (nextVisibleNodeCount === 0);
+            // Rendered nodes already include 160 CSS px of overscan. Refresh
+            // after half that distance so newly entering nodes mount before
+            // they can become visible without forcing a 4k-node derivation on
+            // every pointer event. Active connections retain exact per-frame
+            // publication above because their candidate geometry is stricter.
+            const publishThreshold = 80 / Math.max(0.3, viewport.zoom);
+            const movedBeyondPrefetch = Math.abs(current.left - nextVisible.left) >= publishThreshold ||
+              Math.abs(current.top - nextVisible.top) >= publishThreshold ||
+              Math.abs(current.right - nextVisible.right) >= publishThreshold ||
+              Math.abs(current.bottom - nextVisible.bottom) >= publishThreshold;
+            return connectionDraftRef.current || visibilityBoundaryChanged || movedBeyondPrefetch
+              ? nextVisible
+              : current;
+          });
         }
         if (Math.abs(canvasPresentationZoomStateRef.current - viewport.zoom) > 0.0001) {
           canvasPresentationZoomStateRef.current = viewport.zoom;
@@ -8097,10 +8108,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     scheduleConnectionViewport(viewportRef.current, canvasSizeRef.current ?? canvasViewportSize);
   }, [canvasGame.activePlanetId, canvasViewportSize, scheduleConnectionViewport]);
   const selectedEntityIdSet = useMemo(() => new Set(selectedEntityIds), [selectedEntityIds]);
-  const activeConnectionViewportBounds = useMemo(() => connectionDraft
+  const ordinaryViewportBounds = useMemo(() => {
+    const size = canvasSizeRef.current ?? canvasViewportSize;
+    const worldWidth = canvasVisibleRectangle.right - canvasVisibleRectangle.left;
+    const worldHeight = canvasVisibleRectangle.bottom - canvasVisibleRectangle.top;
+    const zoom = size.width > 0 && worldWidth > 0
+      ? size.width / worldWidth
+      : size.height > 0 && worldHeight > 0 ? size.height / worldHeight : 1;
+    return getConnectionViewportBounds({
+      x: -canvasVisibleRectangle.left * zoom,
+      y: -canvasVisibleRectangle.top * zoom,
+      zoom,
+    }, size);
+  }, [canvasViewportSize, canvasVisibleRectangle]);
+  const activeConnectionViewportBounds = connectionDraft
     ? getConnectionViewportBounds(viewportRef.current, canvasSizeRef.current ?? canvasViewportSize)
-    : connectionViewportBounds,
-  [canvasViewportSize, connectionDraft, connectionViewportBounds]);
+    : ordinaryViewportBounds;
   const visibleFactoryAlertProjection = !factoryAlertsEnabled || game.paused
     ? EMPTY_FACTORY_ALERT_PROJECTION
     : factoryAlertProjection;
