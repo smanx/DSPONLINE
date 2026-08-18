@@ -28,6 +28,7 @@ interface MiniMapProjection {
 const MINIMAP_WIDTH = 200;
 const MINIMAP_HEIGHT = 150;
 const MINIMAP_PADDING = 10;
+const MINIMAP_GESTURE_FRAME_MS = 80;
 const NODE_WIDTH = 256;
 const NODE_HEIGHT = 180;
 
@@ -50,10 +51,16 @@ export function projectCanvasMiniMap(
   const visibleTop = -viewport.y / Math.max(0.01, viewport.zoom);
   const visibleRight = visibleLeft + canvasWidth / Math.max(0.01, viewport.zoom);
   const visibleBottom = visibleTop + canvasHeight / Math.max(0.01, viewport.zoom);
-  const minX = Math.min(visibleLeft, ...nodes.map((node) => node.x));
-  const minY = Math.min(visibleTop, ...nodes.map((node) => node.y));
-  const maxX = Math.max(visibleRight, ...nodes.map((node) => node.x + NODE_WIDTH));
-  const maxY = Math.max(visibleBottom, ...nodes.map((node) => node.y + NODE_HEIGHT));
+  let minX = visibleLeft;
+  let minY = visibleTop;
+  let maxX = visibleRight;
+  let maxY = visibleBottom;
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x);
+    minY = Math.min(minY, node.y);
+    maxX = Math.max(maxX, node.x + NODE_WIDTH);
+    maxY = Math.max(maxY, node.y + NODE_HEIGHT);
+  }
   const worldWidth = Math.max(1, maxX - minX);
   const worldHeight = Math.max(1, maxY - minY);
   const scale = Math.min(
@@ -77,9 +84,12 @@ export const CanvasMiniMap = memo(forwardRef<CanvasMiniMapHandle, CanvasMiniMapP
   const viewportRef = useRef(viewport);
   const projectionRef = useRef(projectCanvasMiniMap(nodes, viewport, canvasWidth, canvasHeight));
   const drawFrameRef = useRef<number | null>(null);
+  const drawTimerRef = useRef<number | null>(null);
+  const lastDrawAtRef = useRef(0);
 
   const draw = useCallback(() => {
     drawFrameRef.current = null;
+    lastDrawAtRef.current = performance.now();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const currentViewport = viewportRef.current;
@@ -121,8 +131,16 @@ export const CanvasMiniMap = memo(forwardRef<CanvasMiniMapHandle, CanvasMiniMapP
   }, [canvasHeight, canvasWidth, lightTheme, nodes, onUnavailable]);
 
   const scheduleDraw = useCallback(() => {
-    if (drawFrameRef.current != null) return;
-    drawFrameRef.current = window.requestAnimationFrame(draw);
+    if (drawFrameRef.current != null || drawTimerRef.current != null) return;
+    const remaining = MINIMAP_GESTURE_FRAME_MS - (performance.now() - lastDrawAtRef.current);
+    if (remaining <= 0) {
+      drawFrameRef.current = window.requestAnimationFrame(draw);
+      return;
+    }
+    drawTimerRef.current = window.setTimeout(() => {
+      drawTimerRef.current = null;
+      drawFrameRef.current = window.requestAnimationFrame(draw);
+    }, remaining);
   }, [draw]);
 
   useImperativeHandle(ref, () => ({
@@ -139,7 +157,9 @@ export const CanvasMiniMap = memo(forwardRef<CanvasMiniMapHandle, CanvasMiniMapP
     // updates use the imperative RAF path below, so a delayed initial frame
     // cannot be mistaken for a redraw during an active pan.
     if (drawFrameRef.current != null) window.cancelAnimationFrame(drawFrameRef.current);
+    if (drawTimerRef.current != null) window.clearTimeout(drawTimerRef.current);
     drawFrameRef.current = null;
+    drawTimerRef.current = null;
     draw();
   }, [draw, viewport]);
 
@@ -151,7 +171,9 @@ export const CanvasMiniMap = memo(forwardRef<CanvasMiniMapHandle, CanvasMiniMapP
     return () => {
       canvas.removeEventListener("contextlost", handleContextLoss);
       if (drawFrameRef.current != null) window.cancelAnimationFrame(drawFrameRef.current);
+      if (drawTimerRef.current != null) window.clearTimeout(drawTimerRef.current);
       drawFrameRef.current = null;
+      drawTimerRef.current = null;
     };
   }, [onUnavailable]);
 

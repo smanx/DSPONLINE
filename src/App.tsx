@@ -8097,7 +8097,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             Math.abs(current.bottom - nextVisible.bottom) > 0.01;
           if (rectangleChanged && (connectionDraftRef.current || visibilityBoundaryChanged || movedBeyondPrefetch)) {
             canvasVisibleRectangleRef.current = nextVisible;
-            setCanvasVisibleRectangle(nextVisible);
+            startTransition(() => setCanvasVisibleRectangle(nextVisible));
           }
         }
       },
@@ -10778,7 +10778,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     // the existing cards visually aligned with its live CSS transform meanwhile.
     if (Math.abs(canvasPresentationZoomStateRef.current - viewport.zoom) > 0.0001) {
       canvasPresentationZoomStateRef.current = viewport.zoom;
-      setCanvasPresentationZoom(viewport.zoom);
+      startTransition(() => setCanvasPresentationZoom(viewport.zoom));
     }
     if (blueprintPlacementId) setPendingBlueprintViewport(viewport);
     canvasMiniMapRef.current?.setViewport(viewport);
