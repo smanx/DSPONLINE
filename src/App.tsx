@@ -1404,6 +1404,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [canvasViewportSize, setCanvasViewportSize] = useState<CanvasViewportSize>(() => ({ width: window.innerWidth, height: window.innerHeight }));
   const [canvasVisibleRectangle, setCanvasVisibleRectangle] = useState(() =>
     getCanvasWorldRectangle(initialViewport, { width: window.innerWidth, height: window.innerHeight }));
+  const canvasVisibleRectangleRef = useRef(canvasVisibleRectangle);
+  canvasVisibleRectangleRef.current = canvasVisibleRectangle;
   const [canvasPresentationZoom, setCanvasPresentationZoom] = useState(initialViewport.zoom);
   const canvasPresentationZoomStateRef = useRef(initialViewport.zoom);
   canvasPresentationZoomStateRef.current = canvasPresentationZoom;
@@ -8076,22 +8078,26 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         // still publish as soon as either rectangle contains a node, so
         // re-entering the factory and all non-empty pans remain exact.
         if (connectionDraftRef.current || canvasVisibleNodeCountRef.current > 0 || nextVisibleNodeCount > 0) {
-          setCanvasVisibleRectangle((current) => {
-            const visibilityBoundaryChanged = (canvasVisibleNodeCountRef.current === 0) !== (nextVisibleNodeCount === 0);
-            // Rendered nodes already include 160 CSS px of overscan. Refresh
-            // after half that distance so newly entering nodes mount before
-            // they can become visible without forcing a 4k-node derivation on
-            // every pointer event. Active connections retain exact per-frame
-            // publication above because their candidate geometry is stricter.
-            const publishThreshold = 80 / Math.max(0.3, viewport.zoom);
-            const movedBeyondPrefetch = Math.abs(current.left - nextVisible.left) >= publishThreshold ||
-              Math.abs(current.top - nextVisible.top) >= publishThreshold ||
-              Math.abs(current.right - nextVisible.right) >= publishThreshold ||
-              Math.abs(current.bottom - nextVisible.bottom) >= publishThreshold;
-            return connectionDraftRef.current || visibilityBoundaryChanged || movedBeyondPrefetch
-              ? nextVisible
-              : current;
-          });
+          const current = canvasVisibleRectangleRef.current;
+          const visibilityBoundaryChanged = (canvasVisibleNodeCountRef.current === 0) !== (nextVisibleNodeCount === 0);
+          // Rendered nodes already include 160 CSS px of overscan. Refresh
+          // after half that distance so newly entering nodes mount before
+          // they can become visible without forcing a 4k-node derivation on
+          // every pointer event. Active connections retain exact per-frame
+          // publication above because their candidate geometry is stricter.
+          const publishThreshold = 80 / Math.max(0.3, viewport.zoom);
+          const movedBeyondPrefetch = Math.abs(current.left - nextVisible.left) >= publishThreshold ||
+            Math.abs(current.top - nextVisible.top) >= publishThreshold ||
+            Math.abs(current.right - nextVisible.right) >= publishThreshold ||
+            Math.abs(current.bottom - nextVisible.bottom) >= publishThreshold;
+          const rectangleChanged = Math.abs(current.left - nextVisible.left) > 0.01 ||
+            Math.abs(current.top - nextVisible.top) > 0.01 ||
+            Math.abs(current.right - nextVisible.right) > 0.01 ||
+            Math.abs(current.bottom - nextVisible.bottom) > 0.01;
+          if (rectangleChanged && (connectionDraftRef.current || visibilityBoundaryChanged || movedBeyondPrefetch)) {
+            canvasVisibleRectangleRef.current = nextVisible;
+            setCanvasVisibleRectangle(nextVisible);
+          }
         }
         if (Math.abs(canvasPresentationZoomStateRef.current - viewport.zoom) > 0.0001) {
           canvasPresentationZoomStateRef.current = viewport.zoom;
