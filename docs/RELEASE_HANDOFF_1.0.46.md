@@ -10,7 +10,7 @@
 
 ## Task ID / title
 
-`DSPIDLE-1046-SAVE-STABILITY-MOBILE-BATCH-CANVAS`：修复自动保存暂停模拟、暂停后 Worker 无法恢复、纯挂机保存状态污染，重构手机连续拉线 UI、重复点击状态机与大候选列表稳定性，并把画布卡片、重叠处理和交互展开拆成独立的本机偏好。
+`DSPIDLE-1046-SAVE-STABILITY-MOBILE-BATCH-CANVAS`：修复自动保存暂停模拟、暂停后 Worker 无法恢复、纯挂机保存状态污染，重构手机连续拉线 UI、重复点击状态机与大候选列表稳定性，并把画布卡片、重叠处理和交互展开拆成独立的本机偏好；最终增量修复密集画布的半透明、悬停消失、拖动卡死和极端完整卡过载。
 
 ## Priority
 
@@ -22,6 +22,8 @@ P0 存档/模拟稳定性 + P1 手机交互。任何修复都必须保留玩家�
 - 保存设置合同：默认关闭“保存期间允许继续操作”时拒绝保存窗口内操作；开启时已接受操作保留，失败不回滚且可立即导出。
 - 手机玩家反馈：连续拉线时桌面面板与底部条同时出现、遮挡地图；超过 5 条后曾显示“页面模块未能载入”，重复点击会阻断整批确认。
 - 画布反馈：自动档同时出现完整卡、中等卡、一行卡和完全隐藏的重叠组，玩家无法分别控制基础卡片、重叠建筑和交互展开；重叠位置至少必须留下可识别数量入口。
+- 画布二次反馈：检查线路网络后，非网络节点被降到极低透明度；选中或悬停展开仍继承 dim class，LOD 切换又缺少初始几何，表现为“悬停哪个哪个消失”。大量半透明节点同时保留 `draggable/nopan`，还会形成无法从卡片区域平移的画布死区。
+- 一行卡反馈：密集模式应优先显示配方和产物，而不是大量相同的建筑名称。
 - 两份本地只读玩家存档：
   - `dsp-idle-save-2026-08-14.json`：36,704,109 bytes，SHA-256 `cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1`
   - `dsp-idle-local-backup-2026-08-17 (1).json`：11,723,913 bytes，SHA-256 `f832f7fb909bad1981cd8476f28dcf0f1026c62955d822904218cee270a43d2a`
@@ -78,6 +80,9 @@ P0 存档/模拟稳定性 + P1 手机交互。任何修复都必须保留玩家�
 - React Flow 变换层不再使用会裁空世界坐标子节点的 paint containment；一行卡及 wrapper 固定 `96×32`，各档裁剪与线路端点统一使用当前展示尺寸。
 - fully-deferred 空白视角保留四个 Fit View 边界锚点；标准 SVG MiniMap 与低频 CanvasMiniMap 均可点击恢复到建筑区。
 - 选中、悬停、聚焦、拖动和连线安全目标使用高于重叠 halo 与普通邻居的交互层级；展开卡通过 `elementFromPoint()` 屏幕命中回归确认不会再被遮挡后看似消失。
+- 线路/任务/生产链检查只淡化上下文节点；当前选中、悬停或其他交互目标保持不透明。上下文节点不再创建 `nopan` 死区，点击建筑或空白画布会退出临时线路聚焦。
+- 一行生产卡优先显示“配方 · 产物”，例如“金伯利矿提炼 · 金刚石”；没有配方/产物的特殊建筑可靠回退到建筑名称。
+- “完整 + 全部卡片”在视口节点超过 480/1,000 时统一降到中等/一行基础卡并标明“密集保护”；被选中或悬停的单卡仍完整展开，避免数千重卡让页面失去响应。
 
 ## Compatibility and data-preservation constraints
 
@@ -94,11 +99,11 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 
 ## Required tests and exact results
 
-以下结果均来自保存、连续拉线和画布增量合并后的固定运行时候选 `44224c862b6662023772a8410be1ea13245943e4`：
+以下结果均来自保存、连续拉线和最终画布交互增量合并后的固定运行时候选 `1c01e79384283f02057e8c56d30b497fa3c5842e`：
 
 - `npm ci`：456 packages；安装成功。
 - `npm run typecheck`：passed。
-- `npm test -- --maxWorkers=1`：171 files passed / 7 conditional skipped；1,421 passed / 20 skipped / 0 failed。
+- `npm test -- --maxWorkers=1`：171 files passed / 7 conditional skipped；1,422 passed / 20 skipped / 0 failed。
 - `npm run test:server`：server 363 passed / 2 skipped；station 3/3。
 - `npm run test:ops`：56 passed / 6 Linux-only skipped。
 - `npm run release:test-switch`：29/29。
@@ -106,14 +111,14 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 - `npm run licenses:check`：125 runtime packages consistent。
 - root/server `npm audit`：0 vulnerabilities。
 - `npm run test:e2e:durable -- --workers=1`：7/7。
-- `npm run test:e2e -- --project=chromium --workers=4`：418 passed / 24 explicit conditional skips / 0 failed / 0 flaky（442 total；371.7 秒）。
+- `npm run test:e2e -- --project=chromium --workers=4`：422 passed / 24 explicit conditional skips / 0 failed（446 total；约 6.2 分钟）。
 - `npm run test:e2e:nightly -- --workers=1`：Firefox/WebKit 2/2。
-- production preview PWA + connection viewport + canvas：22/22；自动档三轮无 >50 ms 帧；性能用例另行连续重复 3/3。
-- 两份真实玩家档 autosave + canvas 核心：4/4；每份各完成 17 张设置/横竖屏矩阵，pageerror 0，源 bytes、mtime、SHA-256 未变。
+- production preview PWA + connection viewport + canvas：26/26；自动档三轮均无 >50 ms 帧；连接 bounded entry 9.6 ms、P95 13.9 ms、max 41.8 ms；“展开全部”三轮 P95 约 69.5 ms、max 90.3 ms、无 >100 ms 帧。
+- 两份真实玩家档 autosave + canvas 核心以及交互展开专项全部通过；每份各完成 18 张设置/横竖屏截图，pageerror 0，源 bytes、mtime、SHA-256 未变。
 - 手机矩阵：390×844、360×640、844×390；80/100/125/150/200% 字体；数量标记、连续拉线和三组设置无阻断。
 - 匿名 v47 fixture / release-gate contracts：12/12。
-- `npm run build:web`：1,961 modules；startup 194,826 B gzip；menu 281,082 B gzip；forbidden startup modules 0；Build ID `1.0.46+44224c862b66`。
-- API 展开候选：166 files / 96 archive source files；临时 SQLite health 200；schema/layout 8/3；aggregate `ea53c0ae5ee6be93db2d3b388fda968ef93d5ddbd5d77b8fa80dfd57dac88cd7`。
+- `npm run build:web`：1,961 modules；startup 194,823 B gzip；menu 281,392 B gzip；forbidden startup modules 0；Build ID `1.0.46+1c01e7938428`。
+- API 展开候选：临时 SQLite health 200；cloud schema/layout 8/3；归档 SHA-256 已纳入候选清单。
 - Windows unsigned unpacked：`1.0.46 / 1.0.46.0`，ASAR Build ID 正确，4 个进程 smoke 均 responding，Authenticode `NotSigned`。
 - Android unsigned：APK/AAB、bundle/assemble/lintVital 通过；`1.0.46 / 1000046`。首轮因当前 shell 未设置 SDK 环境停止，发现本机既有 SDK 后仅对重试命令注入 `ANDROID_HOME`/`ANDROID_SDK_ROOT` 并成功；没有创建或提交本机 `local.properties`。
 
@@ -121,7 +126,7 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 
 ## Release target and version
 
-开发目标已形成可由 release agent 独立复验的 `1.0.46-44224c862b66` 固定源码和候选制品。本交接不授权香港、上海、下载页、Android、Windows 或任何 stable channel 发布。
+开发目标已形成可由 release agent 独立复验的 `1.0.46-1c01e7938428` 固定源码和候选制品。本交接不授权香港、上海、下载页、Android、Windows 或任何 stable channel 发布。
 
 ## Known risks / rollback
 
@@ -129,11 +134,11 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 - `FactoryRuntime` 和主 CSS 仍有大 chunk 警告，属于后续拆分目标，不影响当前 startup/menu 预算。
 - Android/Windows 正式签名与实体设备、Linux systemd/Nginx、备份、生产健康、公开 PWA 与下载页门禁均未执行。
 - 当前香港线上回退/版本由其他任务负责；development 任务不得改生产或替换线上 rollback pointer。
-- 固定完整与连接“展开全部”在 500 个同时可见重卡压力场景仍可能出现秒级长帧；自动档已通过当前门禁，发布说明不得把高成本固定档描述成自动性能结论。
+- 固定“完整”在 500 个可见、非合并重卡压力场景仍测得约 153～389 ms 的帧 P95；这是玩家明确选择高细节的残余成本。自动档已通过门禁，“完整 + 全部卡片”另有 480/1,000 密集保护，发布说明不得混淆三者。
 
 ## Development handoff
 
-Runtime / candidate Commit SHA: **`44224c862b6662023772a8410be1ea13245943e4`**。Build ID：**`1.0.46+44224c862b66`**。候选来自隔离 checkout，source gate 记录为 clean；之后的交接文档提交不改变运行时候选 SHA。
+Runtime / candidate Commit SHA: **`1c01e79384283f02057e8c56d30b497fa3c5842e`**。Build ID：**`1.0.46+1c01e7938428`**。候选来自隔离 checkout，source gate 记录为 clean；之后的交接文档提交不改变运行时候选 SHA。
 
 Changed files:
 
@@ -148,27 +153,28 @@ Changed files:
 
 发布 agent 必须从最终提交的 `git diff --name-only <baseline>...<sha>` 取得完整清单，不能把上述分组当作 manifest。
 
-Artifact root：`D:\GameDev\DSPidle2\artifacts\release-bundle\1.0.46-44224c862b66`。其中 10 个文件已经 candidate manifest 独立复验，总计 170,050,828 bytes。辅助元数据位于：
+Artifact root：`D:\GameDev\DSPidle2\artifacts\release-bundle\1.0.46-1c01e7938428`。其中 10 个文件已经 candidate manifest 独立复验，总计 170,063,845 bytes。辅助元数据位于：
 
-- `artifacts/release-manifests/1.0.46-44224c862b66.json`：Web `dist` + API source manifest，251/251，aggregate `13997ce01fed6b3e7127fd80d89f9a0548538da42125a1744c0c30671ed062de`。
-- `artifacts/release-manifests/1.0.46-44224c862b66-candidate.json`：bundle 10/10，aggregate `a336f4d0b1be8b2dbd496eecb2dbdfa222bc92180c64af08ad06df24ae211742`。
-- `artifacts/release-manifests/1.0.46-44224c862b66-provenance.json`：3/3 subjects verified against runtime SHA。
-- `artifacts/release-manifests/1.0.46-44224c862b66-SHA256SUMS.txt`：12 个交接文件逐项 SHA-256，已复算 12/12。
-- `artifacts/release-gate/1.0.46-44224c862b66-{source-gate,sbom.cdx,gate-report}.json`：clean source、CycloneDX SBOM 与脱敏门禁报告。
+- `artifacts/release-manifests/1.0.46-1c01e7938428.json`：Web `dist` + API source manifest，251/251，aggregate `0741eb8e475f2ceeb4f0789947ebb2bd59a3033268155f719da445821b5cb3a7`。
+- `artifacts/release-manifests/1.0.46-1c01e7938428-candidate.json`：bundle 10/10，aggregate `0fb1175441e61cf79ab95e1057f1bc3f227b744f4666d433b01ef800b4f839ac`。
+- `artifacts/release-manifests/1.0.46-1c01e7938428-provenance.json`：3/3 subjects verified against runtime SHA。
+- `artifacts/release-manifests/1.0.46-1c01e7938428-SHA256SUMS.txt`：12 个交接文件逐项 SHA-256，已复算 12/12。
+- `artifacts/release-gate/1.0.46-1c01e7938428-{source-gate,sbom.cdx,gate-report}.json`：clean source、CycloneDX SBOM 与脱敏门禁报告。
 
 | 制品 | 字节 | SHA-256 |
 | --- | ---: | --- |
-| source archive | 6,702,989 | `43260f95c5c79ee067a4fe27af99cac3e77a5692aa90ffdaeaece5fa48c76bde` |
-| Web archive | 1,734,432 | `34da20bdd6d085f95df4a7e9b02fc8fdfda8dafeb53123e26e0a227001ee3500` |
-| API archive | 668,354 | `c3f7a55c0919b50a531207f060a4a664fd2193396a7034c588ce41e805fb8663` |
-| Windows unpacked unsigned diagnostic | 150,429,114 | `a5fbf5ba9de0dfb101dfd1ba929dec472a025cfc66fa3dce32ed3d5bff2d246a` |
-| Android unsigned APK | 5,123,242 | `34283551a9b44e15bd75b8e5b36fdcd3d4d3b35ad869b3adf103556502b0d30b` |
-| Android unsigned AAB | 4,939,646 | `c4062d443f936e120017617b467b33af0249a792f6e59f68fe139dce1f43c926` |
-| candidate manifest | 2,565 | `a0c9dd868da92fe24e18f47ff14ba7c34c2c28661c51b57580d3288e3274e6ce` |
-| provenance | 2,309 | `f524efee9bdc8ace1ad9aa91d16e8f5bfb1f08c66bad015b8fb219dc9edc29c6` |
-| SBOM | 407,391 | `062a191e62e91eb303ae4de86c1c170ef59badd3c0647d50c5ec59b0806261a6` |
+| source archive | 6,708,390 | `634869e8b4f1ad0980285f89188a26f0c746f701d23b9a34edda35bf650b0423` |
+| Web archive | 1,736,646 | `23da1e698cfdc6deee54b43a849720481e89b157a8776ed9abe6be2c1c799073` |
+| API archive | 668,354 | `1151a6f8d57c015924369b3f9ba2d382d981e6fe015d31069c9fad9e71a727c6` |
+| Windows unpacked unsigned diagnostic | 150,429,422 | `67a062d4a8a82404cced532670f45d38300a12f7ee91da6b67ee23bd74461856` |
+| Android unsigned APK | 5,124,173 | `66428949dcc20acea6d63bb39acf83bb919ad19f0bba089727abdf1a1d139a61` |
+| Android unsigned AAB | 4,940,579 | `f01c3cc8e85dfe39b2156758f4e93cd9f27628ddd1f88bdd065f8400cd0154ab` |
+| source manifest | 42,721 | `1e814a2fb80e5ef3eb879ab1ea0f8558596a147f4f71c89f20ca0dbb899d5721` |
+| source gate | 176 | `1b16cd07f8271100eb40171240982a01e3610e2930f4dc2368c5408754452f0e` |
+| SBOM | 407,391 | `1c09b1bcaa06a090e51c6386e69efa80a9ab0928db5001474ec459dd5bb88041` |
+| gate report | 5,993 | `f4d9726a6afa1056a049d575f2bdf2255396c66abdd5645e0ff8a7c587b86c6c` |
 
-source/Web/API/Windows/APK/AAB 六种归档共列举 2,728 个条目，未发现真实 `.env`、数据库、私钥、证书、玩家存档名、本机下载路径或 AppData 路径；source 中仅保留无凭据的 `.env.example` 模板。两份真实存档源文件的 bytes、mtime、SHA-256 在最终复核时仍逐字一致。
+source/Web/API/Windows/APK/AAB 六种归档共列举 2,728 个条目，未发现真实 `.env`、数据库、私钥、证书、玩家存档名、本机下载路径或 AppData 路径；source 中仅保留无凭据的 `.env.example` 模板。两份真实存档最终只读复核仍分别为 36,704,109 / 11,723,913 bytes，mtime UTC `2026-08-14T07:42:32.9900309Z` / `2026-08-17T09:03:45.1183114Z`，SHA-256 与本交接开头完全一致。
 
 Unverified gaps：正式 Windows/Android 签名与证书连续性、Android 实体设备、真实 Linux/systemd/Nginx、生产备份和切换、公开 PWA/API/download smoke、下载页更新与观察窗口。Windows/Android 诊断制品明确不可进入 stable feed。
 
@@ -176,7 +182,7 @@ Unverified gaps：正式 Windows/Android 签名与证书连续性、Android 实�
 
 只有用户明确批准发布后才能继续：
 
-1. 从 runtime SHA `44224c862b6662023772a8410be1ea13245943e4` 建立新的隔离 checkout，并复核本交接的版本、默认环境与完整测试结果；不得把后续 docs-only commit 当成运行时制品 SHA。
+1. 从 runtime SHA `1c01e79384283f02057e8c56d30b497fa3c5842e` 建立新的隔离 checkout，并复核本交接的版本、默认环境与完整测试结果；不得把后续 docs-only commit 当成运行时制品 SHA。
 2. 先按 `SHA256SUMS`、candidate manifest 和 provenance 独立复算当前候选，再执行 `npm ci`、`npm run build:web`、production-preview PWA 与完整 release gate；不得复用 Android/Desktop 覆盖后的 `dist/`。
 3. 使用批准证书重建并验证 Windows/Android 正式制品；检查证书连续性、时间戳、APK/AAB 签名和 Android 实体设备。当前 unsigned 诊断制品只能用于比对，禁止发布。
 4. 若包含 API，先在临时 SQLite 和展开后的发布目录启动验证；生产写入前取得并验证备份 evidence。
