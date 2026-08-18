@@ -162,13 +162,15 @@ test("production PWA isolates caches, upgrades atomically and reopens offline", 
     // Remove only the current immutable entry point. The retained previous
     // shell must remain independently bootable and report the fallback.
     await context.setOffline(false);
-    await page.evaluate(async ({ shellPrefix, nextBuildId: expectedBuild }) => {
-      sessionStorage.removeItem("dsp-e2e-pwa-status");
-      navigator.serviceWorker.addEventListener("message", (event) => {
+    await context.addInitScript(() => {
+      navigator.serviceWorker?.addEventListener("message", (event) => {
         if (event.data?.type === "DSP_PWA_STATUS") {
           sessionStorage.setItem("dsp-e2e-pwa-status", JSON.stringify(event.data));
         }
       });
+    });
+    await page.evaluate(async ({ shellPrefix, nextBuildId: expectedBuild }) => {
+      sessionStorage.removeItem("dsp-e2e-pwa-status");
       const shell = (await caches.keys()).find((key) => key.startsWith(shellPrefix) && key.endsWith(expectedBuild));
       if (!shell) throw new Error("Current synthetic PWA shell is missing");
       await (await caches.open(shell)).delete("/index.html", { ignoreVary: true });
@@ -176,6 +178,7 @@ test("production PWA isolates caches, upgrades atomically and reopens offline", 
     await context.setOffline(true);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.locator("#root > *").first()).toBeVisible({ timeout: 30_000 });
+    await page.evaluate(() => navigator.serviceWorker.controller?.postMessage({ type: "GET_PWA_STATUS" }));
     await expect.poll(() => page.evaluate(() => sessionStorage.getItem("dsp-e2e-pwa-status"))).not.toBeNull();
     const fallbackStatus = await page.evaluate(() => JSON.parse(sessionStorage.getItem("dsp-e2e-pwa-status") ?? "null"));
     expect(fallbackStatus).toMatchObject({
