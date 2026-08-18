@@ -12,7 +12,7 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 
 手机连续拉线也完成重构：next-mobile shell 只挂载一个非模态、可折叠的底部操作面；全部候选可滚动查看、按最新优先显示，并可定位或移除任意一条。重复、已有线路、不兼容或缺料点击只产生短暂反馈，不会污染此前有效候选；最终提交仍由领域层严格原子复核。
 
-画布展示现已从一个混合开关拆成三个独立设备偏好。玩家可以固定完整、中等或一行卡片，也可以独立决定重叠位置显示数量标记、代表卡或全部卡片，以及普通选择/悬停是否展开。默认数量标记会在每个重叠组留下“层叠图标 + 数量”，不再让建筑位置完全消失；它在低缩放下维持可触控的屏幕尺寸，点击后展开并选择代表建筑。
+画布展示现已从一个混合开关拆成三个独立设备偏好。玩家可以固定完整、中等或一行卡片，也可以独立决定重叠位置显示数量标记、代表卡或全部卡片，以及普通选择/悬停是否展开。默认数量标记会在每个重叠组留下“层叠图标 + 数量”，不再让建筑位置完全消失；它在低缩放下维持可触控的屏幕尺寸，点击后展开并选择代表建筑。选中、悬停、聚焦、拖动与连线安全目标还会获得独立交互层级，展开卡不会再被后渲染的相邻卡片盖住而看似消失。
 
 ## 最终设计边界
 
@@ -44,7 +44,7 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 
 - 基础卡片新增固定“中等”，形成自动、完整、中等、一行四档；自动档仍按视口原始可见节点数和 140/100、480/360 两组迟滞阈值切换，固定档不再被阈值覆盖。
 - 重叠处理提供数量标记、代表卡片、全部卡片。默认数量标记每组只挂载一个 `88×44` 点击入口，可见胶囊约 `80×30`，只显示层叠图标、数量和聚合告警；完整“叠放 N”保留在无障碍名称与悬停说明中。其屏幕尺寸用 inverse zoom 补偿，低缩放不再退化成难以点击的小字。
-- 交互展开提供仅选中、悬停也展开、保持基础。普通 focus/hover 不再让数量标记闪退；选中、采矿、拖动和连线 source/candidate 仍解除标记并展示真实建筑卡。
+- 交互展开提供仅选中、悬停也展开、保持基础。普通 focus/hover 不再让数量标记闪退；选中、采矿、拖动和连线 source/candidate 仍解除标记并展示真实建筑卡。React Flow 节点层级明确分为普通 0、重叠 halo 6、交互展开 20、选中 30，CSS 不再用 `!important` 把选中节点压回 halo 层；展开后的卡片通过实际屏幕命中测试验证可见且可交互。
 - 展开模式只让单个 halo/marker 节点持有成员数组，其他成员共享 membership token，不为每个成员复制整组引用；4,213 个 exact-overlap 的派生仍保持线性边界。
 - 普通平移和缩放现在持续刷新世界视口矩形，固定中等与自动密度不会在 Fit View 或普通拖动画布后把屏内节点误判为视口外。
 - 变换中的 React Flow viewport 已移除 `contain: paint`，避免线路仍在但节点层被错误裁空；一行卡及 wrapper 固定为 `96×32`，中等、数量标记和完整卡的裁剪/线路几何也按当前档位尺寸计算。
@@ -53,12 +53,12 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 
 ## 本地验证结果
 
-以下数字均来自当前 1.0.46 开发 tip；完整 Chromium、durable、production preview、PWA、跨浏览器、服务端、运维、原生静态和两份真实存档均已在画布增量合入后重跑。
+以下数字均来自固定运行时候选 `44224c862b6662023772a8410be1ea13245943e4`；完整 Chromium、durable、production preview、PWA、跨浏览器、服务端、运维、原生静态和两份真实存档均已在画布增量合入后重跑。
 
 | 范围 | 结果 |
 | --- | --- |
 | TypeScript | `npm run typecheck` 通过 |
-| 全量 Vitest | 171 files passed / 7 conditional skipped；1,421 passed / 20 skipped / 0 failed；其中 canvas density / UI preferences 9/9 |
+| 全量 Vitest | 171 files passed / 7 conditional skipped；1,421 passed / 20 skipped / 0 failed |
 | 服务端与空间站 | server 363 passed / 2 skipped；station 3/3 |
 | 运维与切换模拟 | ops 56 passed / 6 Linux-only skipped；release switch 29/29 |
 | 原生静态安全 | 24/24 |
@@ -67,15 +67,15 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 | 默认保存进度 | 2/2；保护模式和实验模式分别验证 |
 | 纯挂机教程与宏 | 20 passed / 1 条真实夹具条件跳过 |
 | 手机连续拉线 | 21/21，含 6/10/50/100 候选、390×844、360×640、844×390 与 80%～200% 字体 |
-| 完整 Chromium | 418 passed / 23 explicit conditional skips / 0 failed（441 总项） |
+| 完整 Chromium | 418 passed / 24 explicit conditional skips / 0 failed / 0 flaky（442 总项） |
 | Firefox / WebKit | 2/2 |
-| Production preview | PWA、连接视口与画布 22/22；自动档三轮 P95 7.0 / 7.0 / 20.9 ms、0 个 >50 ms 帧；另行连续重复性能门禁 3/3 |
+| Production preview | PWA、连接视口与画布 22/22；自动密度三轮 P95 7.0 / 7.0 / 13.9 ms、0 个 >50 ms 帧；连接视口 bounded P95 7.1 ms、max 20.9 ms；另行连续重复性能门禁 3/3 |
 | 真实存档专项 | 两份档的自动保存 + 画布核心 4/4；各 17 张设置/横竖屏截图，pageerror 0；前者空白 Fit View 恢复 0→33 并显示 1,000 重叠组，后者 Fit View 后约 31 个可见节点 |
 | 匿名 v47 发布夹具 | 12/12 |
 | 许可证与依赖 | 125 个运行时包一致；root/server `npm audit --audit-level=high` 均 0 漏洞 |
-| Web 构建 | 1,961 modules；startup 194,838 B gzip；menu 280,997 B gzip；forbidden startup modules 0 |
+| Web 构建 | 1,961 modules；startup 194,826 B gzip；menu 281,082 B gzip；forbidden startup modules 0 |
 
-Chromium 的 23 条跳过均由用例内显式条件控制，包括未提供的其他真实夹具、durable-only 或 production-preview-only 场景；它们不是失败。两份用户指定玩家档已由独立 opt-in 用例实际运行，不包含在这些跳过项里。开发 E2E 的 `/api → 127.0.0.1:65534` 拒绝是线上 API 隔离，不是产品故障。
+Chromium 的 24 条跳过均由用例内显式条件控制，包括未提供的其他真实夹具、durable-only、production-preview-only 和未显式提供玩家存档路径的 opt-in 场景；它们不是失败。两份用户指定玩家档已由独立 opt-in 用例实际运行，不包含在这些跳过项里。开发 E2E 的 `/api → 127.0.0.1:65534` 拒绝是线上 API 隔离，不是产品故障。
 
 ## 审计中额外处理
 
@@ -94,4 +94,4 @@ Chromium 的 23 条跳过均由用例内显式条件控制，包括未提供的�
 
 ## 发布交接原则
 
-开发侧会从干净、固定 SHA 生成并复验 Web/API/source、未签名原生诊断制品、manifest、SBOM 与 provenance，再把路径和哈希写入发布交接。release agent 仍必须独立复算，并在签名、目标节点、备份 evidence、回滚指针和公开 smoke 齐备后才能发布；本报告本身不授权部署。
+开发侧已从干净固定 SHA `44224c862b6662023772a8410be1ea13245943e4` 生成并复验 Web/API/source、未签名原生诊断制品、10 文件 candidate manifest、SBOM 与 3-subject provenance；完整路径和哈希见发布交接。release agent 仍必须独立复算，并在签名、目标节点、备份 evidence、回滚指针和公开 smoke 齐备后才能发布；本报告本身不授权部署。

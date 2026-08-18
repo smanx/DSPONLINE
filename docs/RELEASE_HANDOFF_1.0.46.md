@@ -77,6 +77,7 @@ P0 存档/模拟稳定性 + P1 手机交互。任何修复都必须保留玩家�
 - 交互展开独立提供仅选中、悬停也展开、保持基础；拖动、采矿和连线安全目标不受关闭限制。
 - React Flow 变换层不再使用会裁空世界坐标子节点的 paint containment；一行卡及 wrapper 固定 `96×32`，各档裁剪与线路端点统一使用当前展示尺寸。
 - fully-deferred 空白视角保留四个 Fit View 边界锚点；标准 SVG MiniMap 与低频 CanvasMiniMap 均可点击恢复到建筑区。
+- 选中、悬停、聚焦、拖动和连线安全目标使用高于重叠 halo 与普通邻居的交互层级；展开卡通过 `elementFromPoint()` 屏幕命中回归确认不会再被遮挡后看似消失。
 
 ## Compatibility and data-preservation constraints
 
@@ -89,11 +90,11 @@ P0 存档/模拟稳定性 + P1 手机交互。任何修复都必须保留玩家�
 
 ## Target platforms
 
-Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器门禁。Windows/Android 完成共享代码、静态工具与未签名诊断构建；正式签名、证书连续性和实体设备仍属于 release agent 门禁。
+Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器门禁。Windows unpacked 诊断包已完成 4 进程隔离启动并确认为 `NotSigned`；Android unsigned APK/AAB 已完成 bundle、assemble 与 lintVital，版本为 `1.0.46 / 1000046`。正式签名、证书连续性和实体设备仍属于 release agent 门禁。
 
 ## Required tests and exact results
 
-以下结果均来自保存、连续拉线和画布增量合并后的当前 1.0.46 tip：
+以下结果均来自保存、连续拉线和画布增量合并后的固定运行时候选 `44224c862b6662023772a8410be1ea13245943e4`：
 
 - `npm ci`：456 packages；安装成功。
 - `npm run typecheck`：passed。
@@ -105,19 +106,22 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 - `npm run licenses:check`：125 runtime packages consistent。
 - root/server `npm audit`：0 vulnerabilities。
 - `npm run test:e2e:durable -- --workers=1`：7/7。
-- `npm run test:e2e -- --project=chromium --workers=4`：418 passed / 23 explicit conditional skips / 0 failed（441 total）。
+- `npm run test:e2e -- --project=chromium --workers=4`：418 passed / 24 explicit conditional skips / 0 failed / 0 flaky（442 total；371.7 秒）。
 - `npm run test:e2e:nightly -- --workers=1`：Firefox/WebKit 2/2。
 - production preview PWA + connection viewport + canvas：22/22；自动档三轮无 >50 ms 帧；性能用例另行连续重复 3/3。
 - 两份真实玩家档 autosave + canvas 核心：4/4；每份各完成 17 张设置/横竖屏矩阵，pageerror 0，源 bytes、mtime、SHA-256 未变。
 - 手机矩阵：390×844、360×640、844×390；80/100/125/150/200% 字体；数量标记、连续拉线和三组设置无阻断。
 - 匿名 v47 fixture / release-gate contracts：12/12。
-- `npm run build:web`：1,961 modules；startup 194,838 B gzip；menu 280,997 B gzip；forbidden startup modules 0。
+- `npm run build:web`：1,961 modules；startup 194,826 B gzip；menu 281,082 B gzip；forbidden startup modules 0；Build ID `1.0.46+44224c862b66`。
+- API 展开候选：166 files / 96 archive source files；临时 SQLite health 200；schema/layout 8/3；aggregate `ea53c0ae5ee6be93db2d3b388fda968ef93d5ddbd5d77b8fa80dfd57dac88cd7`。
+- Windows unsigned unpacked：`1.0.46 / 1.0.46.0`，ASAR Build ID 正确，4 个进程 smoke 均 responding，Authenticode `NotSigned`。
+- Android unsigned：APK/AAB、bundle/assemble/lintVital 通过；`1.0.46 / 1000046`。首轮因当前 shell 未设置 SDK 环境停止，发现本机既有 SDK 后仅对重试命令注入 `ANDROID_HOME`/`ANDROID_SDK_ROOT` 并成功；没有创建或提交本机 `local.properties`。
 
 开发 E2E 的 `/api` 代理故意指向 `127.0.0.1:65534`，其 `ECONNREFUSED` 是线上 API 隔离证据。偶发 `ResizeObserver loop completed with undelivered notifications` 目前是开发服务器非阻断诊断，不应被吞错逻辑掩盖。
 
 ## Release target and version
 
-开发目标是形成可由 release agent 独立复验的 `1.0.46` 固定源码和候选制品。本交接不授权香港、上海、下载页、Android、Windows 或任何 stable channel 发布。
+开发目标已形成可由 release agent 独立复验的 `1.0.46-44224c862b66` 固定源码和候选制品。本交接不授权香港、上海、下载页、Android、Windows 或任何 stable channel 发布。
 
 ## Known risks / rollback
 
@@ -129,7 +133,7 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 
 ## Development handoff
 
-Commit SHA: **unavailable**。当前仍是等待用户真人验收的工作树，不能把未提交或 dirty tree 当作可发布 SHA。
+Runtime / candidate Commit SHA: **`44224c862b6662023772a8410be1ea13245943e4`**。Build ID：**`1.0.46+44224c862b66`**。候选来自隔离 checkout，source gate 记录为 clean；之后的交接文档提交不改变运行时候选 SHA。
 
 Changed files:
 
@@ -144,18 +148,36 @@ Changed files:
 
 发布 agent 必须从最终提交的 `git diff --name-only <baseline>...<sha>` 取得完整清单，不能把上述分组当作 manifest。
 
-Artifact paths: **none**。当前 `dist/` 是本地验证输出，不是不可变发布制品；没有生成 APK、AAB、EXE、release archive、SBOM 或 provenance。
+Artifact root：`D:\GameDev\DSPidle2\artifacts\release-bundle\1.0.46-44224c862b66`。其中 10 个文件已经 candidate manifest 独立复验，总计 170,050,828 bytes。辅助元数据位于：
 
-Manifest and aggregate hash: **unknown / intentionally not generated**。需等待真人验收、干净提交和明确制品授权。
+- `artifacts/release-manifests/1.0.46-44224c862b66.json`：Web `dist` + API source manifest，251/251，aggregate `13997ce01fed6b3e7127fd80d89f9a0548538da42125a1744c0c30671ed062de`。
+- `artifacts/release-manifests/1.0.46-44224c862b66-candidate.json`：bundle 10/10，aggregate `a336f4d0b1be8b2dbd496eecb2dbdfa222bc92180c64af08ad06df24ae211742`。
+- `artifacts/release-manifests/1.0.46-44224c862b66-provenance.json`：3/3 subjects verified against runtime SHA。
+- `artifacts/release-manifests/1.0.46-44224c862b66-SHA256SUMS.txt`：12 个交接文件逐项 SHA-256，已复算 12/12。
+- `artifacts/release-gate/1.0.46-44224c862b66-{source-gate,sbom.cdx,gate-report}.json`：clean source、CycloneDX SBOM 与脱敏门禁报告。
 
-Unverified gaps: 生产目标与授权、不可变 commit/manifest、签名原生制品、实体设备、真实 Linux/备份/切换、公开 smoke、下载页更新和观察窗口。
+| 制品 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| source archive | 6,702,989 | `43260f95c5c79ee067a4fe27af99cac3e77a5692aa90ffdaeaece5fa48c76bde` |
+| Web archive | 1,734,432 | `34da20bdd6d085f95df4a7e9b02fc8fdfda8dafeb53123e26e0a227001ee3500` |
+| API archive | 668,354 | `c3f7a55c0919b50a531207f060a4a664fd2193396a7034c588ce41e805fb8663` |
+| Windows unpacked unsigned diagnostic | 150,429,114 | `a5fbf5ba9de0dfb101dfd1ba929dec472a025cfc66fa3dce32ed3d5bff2d246a` |
+| Android unsigned APK | 5,123,242 | `34283551a9b44e15bd75b8e5b36fdcd3d4d3b35ad869b3adf103556502b0d30b` |
+| Android unsigned AAB | 4,939,646 | `c4062d443f936e120017617b467b33af0249a792f6e59f68fe139dce1f43c926` |
+| candidate manifest | 2,565 | `a0c9dd868da92fe24e18f47ff14ba7c34c2c28661c51b57580d3288e3274e6ce` |
+| provenance | 2,309 | `f524efee9bdc8ace1ad9aa91d16e8f5bfb1f08c66bad015b8fb219dc9edc29c6` |
+| SBOM | 407,391 | `062a191e62e91eb303ae4de86c1c170ef59badd3c0647d50c5ec59b0806261a6` |
+
+source/Web/API/Windows/APK/AAB 六种归档共列举 2,728 个条目，未发现真实 `.env`、数据库、私钥、证书、玩家存档名、本机下载路径或 AppData 路径；source 中仅保留无凭据的 `.env.example` 模板。两份真实存档源文件的 bytes、mtime、SHA-256 在最终复核时仍逐字一致。
+
+Unverified gaps：正式 Windows/Android 签名与证书连续性、Android 实体设备、真实 Linux/systemd/Nginx、生产备份和切换、公开 PWA/API/download smoke、下载页更新与观察窗口。Windows/Android 诊断制品明确不可进入 stable feed。
 
 ## 给 release agent 的下一跳
 
 只有用户明确批准发布后才能继续：
 
-1. 从 development 最终干净 SHA 建立隔离 checkout，并复核本交接的版本、默认环境与完整测试结果。
-2. 执行 `npm ci`、`npm run build:web`、production-preview PWA、完整 release gate；不得复用本工作区 `dist/`。
-3. 生成并独立验证 source/Web/API manifest、aggregate SHA-256、SBOM 与 provenance。
+1. 从 runtime SHA `44224c862b6662023772a8410be1ea13245943e4` 建立新的隔离 checkout，并复核本交接的版本、默认环境与完整测试结果；不得把后续 docs-only commit 当成运行时制品 SHA。
+2. 先按 `SHA256SUMS`、candidate manifest 和 provenance 独立复算当前候选，再执行 `npm ci`、`npm run build:web`、production-preview PWA 与完整 release gate；不得复用 Android/Desktop 覆盖后的 `dist/`。
+3. 使用批准证书重建并验证 Windows/Android 正式制品；检查证书连续性、时间戳、APK/AAB 签名和 Android 实体设备。当前 unsigned 诊断制品只能用于比对，禁止发布。
 4. 若包含 API，先在临时 SQLite 和展开后的发布目录启动验证；生产写入前取得并验证备份 evidence。
 5. 证书、签名、目标节点、previous-stable pointer、回滚命令或健康门禁任一缺失即停止，不得绕过。
