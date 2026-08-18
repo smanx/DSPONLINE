@@ -187,7 +187,7 @@ test("performance monitoring samples paused canvas percentiles and render attrib
   await page.getByRole("button", { name: "停止采样" }).click();
 });
 
-test("minimap throttle can independently fall back without resetting the viewport", async ({ page }) => {
+test("minimap snapshot follows a live pan and can independently fall back without resetting the viewport", async ({ page }) => {
   await page.addInitScript(seedDensePausedFactory);
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/");
@@ -200,9 +200,9 @@ test("minimap throttle can independently fall back without resetting the viewpor
   await page.mouse.move(bounds!.x + 24, bounds!.y + 24);
   await page.mouse.down();
   await page.mouse.move(bounds!.x + 120, bounds!.y + 84, { steps: 12 });
-  expect(Number(await minimapCanvas.getAttribute("data-draw-count"))).toBe(drawsBeforePan);
+  await expect.poll(async () => Number(await minimapCanvas.getAttribute("data-draw-count")))
+    .toBeGreaterThan(drawsBeforePan);
   await page.mouse.up();
-  await expect.poll(async () => Number(await minimapCanvas.getAttribute("data-draw-count"))).toBeGreaterThan(drawsBeforePan);
   const viewportAfterPan = await page.locator(".react-flow__viewport").getAttribute("style");
 
   await page.getByLabel("打开设置").click();

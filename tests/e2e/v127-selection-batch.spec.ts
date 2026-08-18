@@ -122,7 +122,7 @@ for (const fontScale of [0.8, 1, 1.25, 1.5, 2] as const) {
       document.documentElement.style.setProperty("--ui-font-scale", String(scale));
     }, fontScale);
     const handles = page.locator(".react-flow__node .factory-handle");
-    expect(await handles.count()).toBeGreaterThanOrEqual(3);
+    await expect.poll(() => handles.count()).toBeGreaterThanOrEqual(3);
     for (const handle of await handles.all()) {
       await expect(handle).toBeVisible();
       const box = await handle.boundingBox();
