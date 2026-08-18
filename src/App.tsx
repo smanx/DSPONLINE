@@ -8080,12 +8080,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         if (connectionDraftRef.current || canvasVisibleNodeCountRef.current > 0 || nextVisibleNodeCount > 0) {
           const current = canvasVisibleRectangleRef.current;
           const visibilityBoundaryChanged = (canvasVisibleNodeCountRef.current === 0) !== (nextVisibleNodeCount === 0);
-          // Rendered nodes already include 160 CSS px of overscan. Refresh
-          // after half that distance so newly entering nodes mount before
-          // they can become visible without forcing a 4k-node derivation on
-          // every pointer event. Active connections retain exact per-frame
+          // Rendered nodes already include 160 CSS px of overscan. Keep a
+          // 40 px safety margin and refresh after 120 px of movement, so a
+          // newly entering node still mounts before it can become visible
+          // without repeatedly deriving the 4k-node App tree during ordinary
+          // wheel/pan gestures. Active connections retain exact per-frame
           // publication above because their candidate geometry is stricter.
-          const publishThreshold = 80 / Math.max(0.3, viewport.zoom);
+          const publishThreshold = 120 / Math.max(0.3, viewport.zoom);
           const movedBeyondPrefetch = Math.abs(current.left - nextVisible.left) >= publishThreshold ||
             Math.abs(current.top - nextVisible.top) >= publishThreshold ||
             Math.abs(current.right - nextVisible.right) >= publishThreshold ||
@@ -8098,10 +8099,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             canvasVisibleRectangleRef.current = nextVisible;
             setCanvasVisibleRectangle(nextVisible);
           }
-        }
-        if (Math.abs(canvasPresentationZoomStateRef.current - viewport.zoom) > 0.0001) {
-          canvasPresentationZoomStateRef.current = viewport.zoom;
-          setCanvasPresentationZoom(viewport.zoom);
         }
       },
     );
@@ -10774,6 +10771,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (Math.abs(viewportZoomStateRef.current - viewport.zoom) > 0.0001) {
       viewportZoomStateRef.current = viewport.zoom;
       setViewportZoom(viewport.zoom);
+    }
+    // Stack grouping depends on screen-space distance, but does not need to
+    // rebuild the entire node presentation on every intermediate wheel/pinch
+    // frame. Publish the exact zoom once the gesture settles; React Flow keeps
+    // the existing cards visually aligned with its live CSS transform meanwhile.
+    if (Math.abs(canvasPresentationZoomStateRef.current - viewport.zoom) > 0.0001) {
+      canvasPresentationZoomStateRef.current = viewport.zoom;
+      setCanvasPresentationZoom(viewport.zoom);
     }
     if (blueprintPlacementId) setPendingBlueprintViewport(viewport);
     canvasMiniMapRef.current?.setViewport(viewport);
