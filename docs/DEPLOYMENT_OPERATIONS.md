@@ -383,14 +383,22 @@ chmod 0600 backup-private.pem
 
 云服务自身每 6 小时的快速快照也已改为 `DSP_CLOUD_BACKUP_DIRECTORY=/lhcos-data/dsp-idle-archive/auto`，因此不会再把 30 份约 1 GiB 文件写满香港根盘；该目录位于私有 COS 挂载，不代替加密日备份。香港节点探针的 `DSP_MONITOR_MIN_DISK_FREE_RATIO` 已从 0.15 提高到 0.20，剩余空间低于约 8 GiB 时提前告警。
 
+### 2026-08-19 日备份与恢复演练加固
+
+每日加密备份不得把 SQLite Backup API 的明文 staging 直接放在 COSFS。生产配置已恢复为先写香港本机 `/var/lib/dsp-idle-cloud/offsite-staging`，完成 `quick_check`、加密和 manifest 后再通过固定主机指纹及受限账号传到上海；本机只保留两份完整密文。COS 继续承载每 6 小时自动快照和已经逐份验证的历史归档，但不是 SQLite 在线备份的直接写入目标。
+
+备份、恢复演练和节点探针从独立不可变目录 `/usr/local/lib/dsp-idle-ops/releases/<ops-release>` 运行，由 `/usr/local/lib/dsp-idle-ops/current` 原子指向当前运维包，不再依赖应用 `/opt/dsp-idle-cloud/current` 是否包含对应脚本。备份与恢复 service 都设置有限启动/停止超时，并在主进程开始前原子写入 `running` 状态，避免长任务期间继续暴露上一次成功。上海恢复私钥通过 systemd `LoadCredential` 只读注入单次 service，不扩大私钥或父目录权限。
+
+2026-08-19 真实闭环验证使用 schema v7 密文：两端密文 SHA-256 和 manifest 完全一致，上海隔离恢复得到 schema v7；909 个账号、731 个当前云档、8,660 条修订等受保护计数与备份 manifest 一致，随机本机端口健康检查通过，结束后恢复工作目录明文 SQLite 数量为 0。完整证据见 [releases/ops-backup-restore-2026-08-19.md](./releases/ops-backup-restore-2026-08-19.md)。本次只调整运维工具和 systemd 配置，没有发布或切换 1.0.46 应用制品。
+
 本次爆满原因是历史备份副本而非游戏数据库异常：香港本地 `backups` 曾累积约 25 GiB、35 份 0.16～1.0 GiB SQLite 快照；异地 staging 另有约 1.5 GiB 加密副本；旧 API 发布目录约 0.86 GiB，日志、APT 缓存和新版本备份又叠加约 0.5 GiB。原 COS 挂载为空且每日任务仍按 SCP + 本地保留 14 份运行，导致三天内再次接近满盘。
 
 长期运营规则：
 
 1. 生产盘只保留当前数据库、当前/回滚代码、4 份本地快速恢复副本和 staging 2 份；所有更早快照必须先生成加密对象、manifest 和跨重挂载哈希，再删除本地副本。
-2. 每日备份写 COS，保留上海已有异地加密副本作为第二恢复位置；COS 桶设置 30～90 天生命周期和版本控制，避免对象无限增长。任何切换到新桶都要先完成小文件写入、重挂载读取和完整对象计数校验。
+2. 每日备份先在香港本机完成一致性快照、校验和加密，再传到上海恢复节点；COS 作为独立自动快照/验证归档位置，禁止把在线 SQLite 备份的明文 staging 直接写到 COSFS。COS 桶设置 30～90 天生命周期和版本控制；任何切换到新桶都要先完成小文件写入、重挂载读取和完整对象计数校验。
 3. 磁盘探针将告警阈值设为 80%，硬保护阈值设为 90%；超过 80% 自动暂停非必要发布/快照并提示归档，超过 90% 只允许完成当前备份和清理已验证副本，不能删除数据库或手动恢复点。
-4. 每周检查 `cloud.sqlite`、本地快照、staging、发布目录、日志和 COS 对象数量；每月在隔离端口用 COS 密文完成一次恢复演练。密钥应替换为只允许 COS 指定前缀读写的 CAM 子账号，并定期轮换。
+4. 每周检查 `cloud.sqlite`、本地快照、staging、上海接收目录、发布目录、日志和 COS 对象数量；每月在上海隔离端口用最新的完整密文与 manifest 完成一次恢复演练。密钥和对象存储凭据使用最小权限并定期轮换。
 
 ## 9. 监控与日常检查
 
@@ -405,7 +413,7 @@ chmod 0600 backup-private.pem
 - 香港 `dsp-idle-offsite-backup.timer` 与上海 `dsp-idle-restore-drill.timer`：检查最后成功时间、timer 上次结果和报告文件。
 - 玩家指标：检查 `players.total`、`players.today`、`players.online` 和 `players.onlineWindowSeconds`；两个节点分别统计，不能直接相加当作严格独立用户数。
 
-这些 oneshot 服务从 `/opt/dsp-idle-cloud/current/deploy` 软链接执行脚本。CLI 入口判断必须比较真实路径；若 unit 显示 `success` 却没有生成对应状态文件，应按空运行故障处理，不能视为监控或备份成功。
+备份、恢复演练和节点探针 oneshot 必须从独立不可变运维包 `/usr/local/lib/dsp-idle-ops/current/deploy` 执行；不得绑定应用 `current` 软链接。CLI 入口判断必须比较真实路径；unit 只有在退出码为 0、最新状态文件为 `ok=true` 且制品/报告存在时才算成功。若 unit 显示 `success` 却没有生成对应状态文件，应按空运行故障处理，不能视为监控或备份成功。
 
 匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v7 后端前必须先使用 SQLite Backup API 创建并验证备份，并在隔离副本验证 v6→v7 归一化：每个旧账号获得稳定唯一用户名，原邮箱与验证状态不变，账号、会话、主存档、三个手动槽、各槽历史、榜单、玩家和匿名统计数量不得减少。切换后不得用测试账号或测试存档对生产数据库执行写验证。
 
