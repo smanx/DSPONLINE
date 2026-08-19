@@ -4,8 +4,8 @@ import { createInitialState, placeBuilding } from "../../src/game/engine";
 const RELEASE_NOTE_ID = "2026-08-14-v1.0.42";
 const PUBLIC_ID = `station_${"a".repeat(32)}`;
 
-async function installOperationalStationSave(page: Page) {
-  await page.addInitScript(({ releaseNoteId }) => {
+async function installOperationalStationSave(page: Page, options: { withTerminalContract?: boolean } = {}) {
+  await page.addInitScript(({ releaseNoteId, withTerminalContract }) => {
     const now = Date.now();
     const taskDay = Math.floor((now + 8 * 60 * 60 * 1_000) / (24 * 60 * 60 * 1_000));
     const orbitalStation = {
@@ -57,7 +57,21 @@ async function installOperationalStationSave(page: Page) {
         taskDay,
         lastConfirmedWallClockMs: now,
         offers: [],
-        accepted: [],
+        accepted: withTerminalContract ? [{
+          id: "e2e-terminal-contract",
+          templateId: "origin",
+          slot: 0,
+          title: "原产处理器订单",
+          summary: "指定来源终端，也可由量子库存手动交付。",
+          taskDay,
+          expiresAtTaskDay: taskDay + 3,
+          special: false,
+          difficulty: "P1",
+          status: "accepted",
+          acceptedAtTaskDay: taskDay,
+          requirements: [{ itemId: "processor", amount: "100", delivered: "0", sourcePlanetIds: ["home"], channel: "terminal", weight: 3 }],
+          rewards: { baseMarks: "10", baseReputation: "10", completionMarks: "5", completionReputation: "5" },
+        }] : [],
         history: [],
         settledIds: [],
         featuredContractId: null,
@@ -136,7 +150,7 @@ async function installOperationalStationSave(page: Page) {
     localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: now, state }));
-  }, { releaseNoteId: RELEASE_NOTE_ID });
+  }, { releaseNoteId: RELEASE_NOTE_ID, withTerminalContract: options.withTerminalContract ?? false });
 }
 
 async function openDesktopStation(page: Page, viewport = { width: 1366, height: 768 }) {
@@ -245,6 +259,31 @@ test("desktop station entry, contracts, decoration editor and factory return for
   await returnEntry.click();
   await expect(workspace).toHaveCount(0);
   await expect(page.locator(".factory-canvas")).toBeVisible();
+});
+
+test("ordinary source-restricted contracts can be completed from confirmed quantum inventory", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await installOperationalStationSave(page, { withTerminalContract: true });
+  await page.goto("/");
+  await expect(page.locator(".game-shell")).toBeVisible();
+  await page.getByRole("button", { name: /打开全星系空间站/ }).click();
+  const workspace = page.getByRole("dialog", { name: "全星系空间站" });
+  await workspace.getByRole("button", { name: /出口合同/ }).click();
+
+  const contract = workspace.locator(".station-accepted-contracts > article").filter({ hasText: "原产处理器订单" });
+  await expect(contract).toBeVisible();
+  const quantumDelivery = contract.getByRole("button", { name: "量子交付" });
+  await expect(quantumDelivery).toBeEnabled();
+  await quantumDelivery.click();
+  const prompt = page.getByRole("alertdialog", { name: "量子库存手动交付" });
+  await expect(prompt).toContainText("可交付上限 100 件");
+  await prompt.getByRole("button", { name: "预览交付" }).click();
+  const confirmation = page.getByRole("alertdialog", { name: "确认量子交付" });
+  await expect(confirmation).toContainText("处理器 100 件");
+  await confirmation.getByRole("button", { name: "确认交付" }).click();
+
+  await expect(contract).toContainText("100 / 100");
+  await expect(contract.getByRole("button", { name: "领取完成奖励" })).toBeEnabled();
 });
 
 test("returning from the station canvas preserves factory drag, selection, and connection interaction", async ({ page }) => {

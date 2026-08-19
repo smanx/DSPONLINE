@@ -6,6 +6,8 @@
 
 > **1.0.46 手机连续拉线与错误边界**：next-mobile shell 只挂载非模态 `.mobile-batch-connection-actions`，桌面 `.batch-connection-panel` 在该分支不进入 React 树。底栏默认收起并位于导航与 safe area 上方；展开列表按最新候选优先、可滚动查看全部候选，并可按建筑名称/目标端口定位或删除任意一条。候选是临时 UI 状态，不进入 GameState、存档或同步。`DynamicImportBoundary` 只把真实 chunk/module/CSS-chunk 加载签名归类为动态导入故障；普通运行时异常使用独立脱敏文案、稳定诊断码和 React component stack，禁止记录错误正文、props、存档或云 payload。
 
+> **1.0.46 周期显示、纯挂机终局输出与合同交付边界（2026-08-19，未发布）**：生产进度的 aria、文字和 fill 继续由单一 `displayProgress` 派生；发布门禁在浏览器内连续采样 `performance.now()`，按配方周期、100 ms 视觉刷新和 1 秒权威模拟发布窗口寻找可成立的 0/1/多圈前向展开，不再使用固定下降阈值，也不允许无法由时间与回绕解释的倒退。纯挂机展示只对白矩阵、累计发射/吸收、结构点与活动交付等单调计数做非负桶间插值；戴森功率、壳面帆和在轨帆属于非单调瞬时状态，显示最后一次 30 秒已结算快照。空间站量子手动交付是所有普通合同要求的玩家确认兜底；`sourcePlanetIds` 继续只约束自动货运终端，`channel=quantum` 仍拒绝终端交付。三项均不新增 GameState、存档、云端或数据库字段。
+
 > **1.0.45 空间站扩展候选（2026-08-17）**：`codex/1.0.45-space-station` 已合并 `codex/space-station-expansion`，启用 GameState v47 / cloud schema v8 / SQLite layout v3。默认开启全星系空间站；M0 桥接开关 `VITE_SPACE_STATION_ENABLED=false` 可构建不升级 v46 的桥接版。完整发布交接见 [RELEASE_HANDOFF_1.0.45.md](./RELEASE_HANDOFF_1.0.45.md)。
 
 > **1.0.44 本地存档目录开发态（未发布）**：IndexedDB 继续使用 version 2 与同一个 `records` store，存档正文仍是既有 `value: string`。每份正文旁增加小型 catalog side-record，和 payload/revision 在同一事务提交并绑定精确 UTF-8 byte length、正文 checksum 与 revision。启动只枚举 key 和读取小记录，禁止 `records.getAll()`；主页持有 handle/summary 而不保留 raw，只有玩家选择继续、槽位或恢复源后才逐份读取并在 inspection Worker 做完整解析和 checksum 核对。旧记录按 key 一次一份在 catalog Worker 完整 `JSON.parse` 后后台建索引，写入前再次读取并核对原文与 revision；Worker 不可用只允许带诊断的同步兼容回退。主档损坏仍按 primary → backup → snapshot 的既有顺序惰性回退，原 writer lease、fencing、CAS、冲突双副本与逐字读回合同不变；正文 LRU 只保留最多两个显式选中的 payload，主页 idle 为零。存档索引与云账号面板都位于动态加载边界，避免把 catalog builder 或云端管理代码重新并入菜单静态闭包。
@@ -33,6 +35,7 @@
 - 三阶段成本快照、合同板、徽记/声望、装饰收藏、布局、档案和独立视口属于全局空间站；四个输入口、绑定、缓存、分配游标和累计上传属于各行星 `orbital_cargo_terminal` 实体。
 - 货运终端复用权威模拟域和 `SimulationLookupContext.orbitalCargoTerminals` 索引；没有终端的旧档不会在每步扫描实体。批量、逐秒、低电和稀疏端口使用同一整数公平游标。
 - 每日合同属于墙钟域，按 `Asia/Shanghai` 单调任务日、银河种子、槽位和规则版本派生；模拟倍率、暂停和时间扭曲不推进任务日。匿名公共状态中的服务端时间只允许向前校准。
+- 普通合同可由玩家确认后从量子共享库存原子交付，即使要求指定来源行星；指定来源只约束货运终端的自动上传。量子专属要求仍不接受终端，所有路径只扣目标尚缺量并保持量子库存与合同进度同一状态提交。
 - `/station/:publicId` 在启动层被分流到独立只读页面，不初始化本地存档。服务端只从普通主云档重建 `station-showcase-v1` 白名单快照，客户端不能提交自制快照。
 - SQLite layout v3 将 `station_profiles`、`station_favorites`、`station_signals`、`station_moderation` 与 `app_state`、云存档正文分离；v2→v3 迁移不重写云 payload/blob 行。
 - 公开主页可见性与 `leaderboardVisible` 独立。收藏、通讯信号和访问不进入 GameState、模拟哈希、奖励或排行榜公式。

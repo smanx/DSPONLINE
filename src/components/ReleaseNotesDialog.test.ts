@@ -42,9 +42,14 @@ describe("release notes history", () => {
     const english = getCurrentReleaseNotes("en");
     expect(chinese).toMatchObject({ id: CURRENT_RELEASE_NOTES.id, version: "1.0.46" });
     expect(english).toMatchObject({ id: CURRENT_RELEASE_NOTES.id, version: "1.0.46" });
-    expect(chinese.items).toHaveLength(7);
+    expect(chinese.items).toHaveLength(10);
     expect(chinese.items.map((item) => item.id)).toContain("mobile-batch-connections");
     expect(chinese.items.map((item) => item.id)).toContain("canvas-presentation");
+    expect(chinese.items.map((item) => item.id)).toEqual(expect.arrayContaining([
+      "time-aware-cycle-progress",
+      "committed-terminal-output",
+      "ordinary-contract-quantum-delivery",
+    ]));
     expect(english.items.map((item) => item.id)).toEqual(chinese.items.map((item) => item.id));
     expect(english.summary).toContain("GameState v47");
     expect(getReleaseNotes1044("en")).toMatchObject({ id: "2026-08-15-v1.0.44", version: "1.0.44" });

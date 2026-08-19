@@ -60,8 +60,8 @@ const release1046Copy = {
   date: { "zh-CN": "2026年8月17日", en: "August 17, 2026" },
   title: { "zh-CN": "存档稳定性与手机连续拉线热修", en: "Save Stability and Mobile Belt Batch Hotfix" },
   summary: {
-    "zh-CN": "1.0.46 将普通游戏恢复为 1.0.43-compatible 的验证主存档协调器，修复自动保存后模拟被暂停、暂停后 Worker 无法恢复，以及保存失败污染纯挂机状态的问题；durable WAL 仅保留为显式开发验证路径。手机连续拉线改为不遮挡地图的可折叠底栏，重复或无效点击不会破坏已有候选，6～100 条候选可完整查看和原子提交。画布卡片、重叠处理和交互展开现可分别设置，重叠位置保留紧凑数量入口；交互卡片不会再变淡、消失或阻断画布拖动，极密集视口会自动保护流畅度。GameState v47、存档 envelope v2、cloud schema v8 与 SQLite layout v3 不变。",
-    en: "Version 1.0.46 restores the 1.0.43-compatible verified-primary coordinator for normal play, fixing autosaves that paused simulation, Workers that could not resume after a pause, and save failures that polluted pure-idle status. The durable WAL remains an explicit development-only validation path. Mobile continuous connections now use a collapsible non-blocking bottom bar; duplicate or invalid taps preserve valid candidates, and 6-100 candidates remain inspectable and atomically committable. Canvas card detail, overlap handling, and interaction expansion are now separate settings, with a compact count marker preserving every overlap location. Interactive cards no longer fade, vanish, or block canvas panning, and extremely dense views use a safety detail level to remain responsive. GameState v47, save envelope v2, cloud schema v8, and SQLite layout v3 remain unchanged.",
+    "zh-CN": "1.0.46 将普通游戏恢复为 1.0.43-compatible 的验证主存档协调器，修复自动保存后模拟被暂停、暂停后 Worker 无法恢复，以及保存失败污染纯挂机状态的问题；durable WAL 仅保留为显式开发验证路径。手机连续拉线改为不遮挡地图的可折叠底栏，重复或无效点击不会破坏已有候选，6～100 条候选可完整查看和原子提交。画布卡片、重叠处理和交互展开现可分别设置，重叠位置保留紧凑数量入口；交互卡片不会再变淡、消失或阻断画布拖动。纯挂机戴森功率不再显示错误的桶间负增量，普通空间站合同也可由玩家确认后从量子库存交付。GameState v47、存档 envelope v2、cloud schema v8 与 SQLite layout v3 不变。",
+    en: "Version 1.0.46 restores the 1.0.43-compatible verified-primary coordinator for normal play, fixing autosaves that paused simulation, Workers that could not resume after a pause, and save failures that polluted pure-idle status. The durable WAL remains an explicit development-only validation path. Mobile continuous connections now use a collapsible non-blocking bottom bar; duplicate or invalid taps preserve valid candidates, and 6-100 candidates remain inspectable and atomically committable. Canvas presentation controls are independent, pure-idle Dyson power no longer shows a false between-bucket negative gain, and confirmed quantum inventory can fulfill ordinary station contracts. GameState v47, save envelope v2, cloud schema v8, and SQLite layout v3 remain unchanged.",
   },
   recoveryTitle: { "zh-CN": "自动保存保持模拟运行", en: "Autosaves keep simulation running" },
   recoveryDescription: {
@@ -92,6 +92,21 @@ const release1046Copy = {
   idleDescription: {
     "zh-CN": "纯挂机终态保存仍要求主存档验证、Worker 接管和恢复日志提交全部完成；失败时可继续重试或立即导出，不会清空当前进度。",
     en: "Pure-idle terminal saves still require verified primary persistence, Worker hand-off, and recovery-log commit. Failures remain retryable and exportable without clearing current progress.",
+  },
+  progressTitle: { "zh-CN": "生产周期按真实时间验证", en: "Production cycles follow measured time" },
+  progressDescription: {
+    "zh-CN": "经典进度条继续使用同一个值驱动无障碍数值、文字与填充。跨周期回绕按浏览器实测时间、配方周期和权威发布窗口判定，不会再把调度延迟误报为倒退，也不会放过无法由回绕解释的真实回退。",
+    en: "Classic progress bars still drive accessibility, text, and fill from one value. Wraps are validated against in-page timestamps, recipe speed, and the authority publication window, preventing scheduler delays from looking like regressions while still rejecting backsteps that no wrap can explain.",
+  },
+  idleOutputTitle: { "zh-CN": "终局功率使用已结算快照", en: "Endgame power uses committed snapshots" },
+  idleOutputDescription: {
+    "zh-CN": "戴森功率与在轨数量是可升可降的瞬时状态，不再沿上一结算桶的负斜率外推；界面明确标注 30 秒已结算快照，累计产出计数仍可平滑插值。",
+    en: "Dyson power and orbital populations are non-monotonic instantaneous state and are no longer extrapolated from a previous bucket's negative slope. The UI labels the committed 30-second snapshot while cumulative output counters continue to interpolate safely.",
+  },
+  stationDeliveryTitle: { "zh-CN": "普通合同支持量子库存兜底", en: "Quantum inventory can backstop ordinary contracts" },
+  stationDeliveryDescription: {
+    "zh-CN": "每日前三份普通合同，包括指定来源行星的订单，都可由玩家预览并确认后从量子共享库存交付；来源行星限制仍只约束自动货运终端，量子专属合同也仍拒绝终端绕过。",
+    en: "All three ordinary daily contracts, including source-planet orders, can be previewed and fulfilled from shared quantum inventory after confirmation. Source restrictions still constrain automatic cargo terminals, and quantum-only contracts still reject terminal delivery.",
   },
   compatibilityTitle: { "zh-CN": "协议与存档格式保持兼容", en: "Save and online formats remain compatible" },
   compatibilityDescription: {
@@ -362,6 +377,9 @@ export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteR
       { id: "mobile-batch-connections", title: currentMessage(locale, "batchTitle"), description: currentMessage(locale, "batchDescription") },
       { id: "canvas-presentation", title: currentMessage(locale, "canvasTitle"), description: currentMessage(locale, "canvasDescription") },
       { id: "pure-idle-preservation", title: currentMessage(locale, "idleTitle"), description: currentMessage(locale, "idleDescription") },
+      { id: "time-aware-cycle-progress", title: currentMessage(locale, "progressTitle"), description: currentMessage(locale, "progressDescription") },
+      { id: "committed-terminal-output", title: currentMessage(locale, "idleOutputTitle"), description: currentMessage(locale, "idleOutputDescription") },
+      { id: "ordinary-contract-quantum-delivery", title: currentMessage(locale, "stationDeliveryTitle"), description: currentMessage(locale, "stationDeliveryDescription") },
       { id: "version-upgrade", title: currentMessage(locale, "compatibilityTitle"), description: currentMessage(locale, "compatibilityDescription") },
     ],
   };

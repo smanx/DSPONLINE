@@ -70,6 +70,27 @@ describe("production refresh policy", () => {
     expect(paused.snapshotProgress).toBe(0.22);
   });
 
+  it("accepts a sparse authority snapshot only after the visual clock has naturally wrapped", () => {
+    const previous = {
+      mode: "cycle" as const,
+      semanticKey: "machine:magnet",
+      snapshotProgress: 0.9,
+      publishedAtMs: 1_000,
+      cyclesPerSecond: 2 / 3,
+      effectiveSimulationMultiplier: 1,
+      active: true,
+    };
+    expect(getWorkDisplayProgress(previous, 1_100)).toBeCloseTo(0.966666, 5);
+    expect(getWorkDisplayProgress(previous, 1_200)).toBeCloseTo(0.033333, 5);
+
+    const afterNaturalWrap = reconcileWorkDisplaySnapshot(previous, { ...previous, snapshotProgress: 0.55 }, 1_200);
+    expect(afterNaturalWrap).not.toBe(previous);
+    expect(afterNaturalWrap.snapshotProgress).toBe(0.55);
+
+    const beforeNaturalWrap = reconcileWorkDisplaySnapshot(previous, { ...previous, snapshotProgress: 0.55 }, 1_100);
+    expect(beforeNaturalWrap).toBe(previous);
+  });
+
   it("keeps the one-hour simulation hash identical for every visual refresh profile", () => {
     const initial = createInitialState(9_090_909);
     const expectedHash = hashGameState(advanceSimulation(initial, 60 * 60));

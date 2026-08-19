@@ -191,13 +191,13 @@ function createContract(
     const planetId = rotatePick(planets, 1, seed, taskDay, slot, "origin:planet")[0];
     requirements = [requirement(candidate, difficulty, "terminal", [planetId])];
     title = `${getPlanet(planetId).name}原产订单`;
-    summary = `本订单必须经${getPlanet(planetId).name}的轨道货运终端提交。`;
+    summary = `由${getPlanet(planetId).name}的轨道货运终端提交，或由玩家确认后从量子库存交付。`;
   } else if (templateId === "multi-origin") {
     const selectedPlanets = rotatePick(planets, 2, seed, taskDay, slot, "multi:planets");
     const selectedItems = choose(items, 2, "multi:items");
     requirements = selectedPlanets.map((planetId, index) => requirement(selectedItems[index % selectedItems.length], difficulty, "terminal", [planetId], 0.65));
     title = "多行星协同出口";
-    summary = "由两颗指定行星分别完成各自的出口配额。";
+    summary = "由两颗指定行星分别完成出口配额，也可由玩家确认后从量子库存交付。";
   } else if (templateId === "quantum") {
     const selected = choose(advanced, difficulty === "P3" ? 2 : 1, "quantum");
     requirements = selected.map((candidate) => requirement(candidate, difficulty, "quantum", undefined, 0.7));
@@ -406,8 +406,7 @@ export function getStationContractRemaining(
   sourcePlanetId?: PlanetId,
 ): bigint {
   return contract.requirements.reduce((sum, entry) => {
-    if (entry.itemId !== itemId || (entry.channel !== "any" && entry.channel !== channel)) return sum;
-    if (entry.sourcePlanetIds?.length && (!sourcePlanetId || !entry.sourcePlanetIds.includes(sourcePlanetId))) return sum;
+    if (entry.itemId !== itemId || !contractRequirementAcceptsDelivery(entry, channel, sourcePlanetId)) return sum;
     const required = stationInteger(entry.amount);
     const delivered = stationInteger(entry.delivered);
     return sum + (required > delivered ? required - delivered : 0n);
@@ -417,6 +416,19 @@ export function getStationContractRemaining(
 export interface StationContractDeliveryResult {
   accepted: string;
   reason: "delivered" | "missing-contract" | "invalid-channel" | "complete";
+}
+
+function contractRequirementAcceptsDelivery(
+  entry: StationContractRequirement,
+  channel: Exclude<StationContractChannel, "any">,
+  sourcePlanetId?: PlanetId,
+): boolean {
+  // A player-confirmed quantum withdrawal is the manual fallback for every
+  // ordinary contract requirement. Source-planet restrictions continue to
+  // describe and constrain automatic cargo-terminal delivery only.
+  if (channel === "quantum") return true;
+  if (entry.channel === "quantum") return false;
+  return !entry.sourcePlanetIds?.length || Boolean(sourcePlanetId && entry.sourcePlanetIds.includes(sourcePlanetId));
 }
 
 /** Mutates only the supplied station clone and is safe for the simulation hot path. */
@@ -435,8 +447,7 @@ export function deliverStationContractMutable(
   let accepted = 0n;
   let matchedChannel = false;
   for (const entry of contract.requirements) {
-    if (remaining <= 0n || entry.itemId !== itemId || (entry.channel !== "any" && entry.channel !== channel)) continue;
-    if (entry.sourcePlanetIds?.length && (!sourcePlanetId || !entry.sourcePlanetIds.includes(sourcePlanetId))) continue;
+    if (remaining <= 0n || entry.itemId !== itemId || !contractRequirementAcceptsDelivery(entry, channel, sourcePlanetId)) continue;
     matchedChannel = true;
     const required = stationInteger(entry.amount);
     const delivered = stationInteger(entry.delivered);

@@ -148,6 +148,44 @@ describe("global orbital station", () => {
     expect(deliverOrbitalQuantumInventory(result.state, { kind: "construction" }, "titanium_alloy", "1").state).toBe(result.state);
   });
 
+  it("atomically uses quantum inventory for an ordinary source-restricted contract", () => {
+    const state = createInitialState();
+    state.orbitalStation.status = "operational";
+    state.orbitalStation.contractBoard.accepted = [{
+      id: "ordinary-origin-contract",
+      templateId: "origin",
+      slot: 0,
+      title: "原产处理器订单",
+      summary: "来源终端或量子库存均可完成",
+      taskDay: state.orbitalStation.contractBoard.taskDay,
+      expiresAtTaskDay: state.orbitalStation.contractBoard.taskDay + 3,
+      special: false,
+      difficulty: "P1",
+      status: "accepted",
+      requirements: [{ itemId: "processor", amount: "100", delivered: "0", sourcePlanetIds: ["home"], channel: "terminal", weight: 3 }],
+      rewards: { baseMarks: "10", baseReputation: "10", completionMarks: "5", completionReputation: "5" },
+    }];
+    state.quantumLogisticsNetwork.enabled = true;
+    state.quantumLogisticsNetwork.inventory.processor = "150";
+
+    const target = { kind: "contract", contractId: "ordinary-origin-contract" } as const;
+    expect(previewOrbitalQuantumDelivery(state, target, "processor", "999")).toMatchObject({
+      accepted: "100",
+      inventory: "150",
+      remaining: "100",
+      reason: "delivered",
+    });
+    const delivered = deliverOrbitalQuantumInventory(state, target, "processor", "999");
+    expect(delivered).toMatchObject({ accepted: "100", reason: "delivered" });
+    expect(delivered.state.quantumLogisticsNetwork.inventory.processor).toBe("50");
+    expect(delivered.state.orbitalStation.contractBoard.accepted[0]).toMatchObject({
+      status: "claimable",
+      requirements: [{ delivered: "100" }],
+    });
+    expect(state.quantumLogisticsNetwork.inventory.processor).toBe("150");
+    expect(state.orbitalStation.contractBoard.accepted[0].requirements[0].delivered).toBe("0");
+  });
+
   it("rejects invalid quantum delivery without mutation and still allows explicit delivery while paused", () => {
     const state = createInitialState();
     state.totalProduced.universe_matrix = 1;

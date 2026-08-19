@@ -9,6 +9,7 @@ import {
   claimStationContract,
   deliverStationContractMutable,
   getStationContractCompletionBasisPoints,
+  getStationContractRemaining,
   stationTaskDayIndex,
   synchronizeStationContracts,
 } from "./stationContracts";
@@ -147,7 +148,7 @@ describe("orbital station contracts", () => {
     expect(staleServer.contractBoard.taskDay).toBe(52);
   });
 
-  it("enforces channel and source-planet requirements before consuming progress", () => {
+  it("keeps terminal source restrictions while allowing confirmed quantum fallback", () => {
     const game = contractReadyState();
     game.orbitalStation.contractBoard.offers = [{
       id: "origin-contract",
@@ -163,12 +164,43 @@ describe("orbital station contracts", () => {
       requirements: [{ itemId: "processor", amount: "100", delivered: "0", sourcePlanetIds: ["home"], channel: "terminal", weight: 3 }],
       rewards: { baseMarks: "10", baseReputation: "10", completionMarks: "5", completionReputation: "5" },
     }];
-    const station = cloneOrbitalStationState(acceptStationContract(game.orbitalStation, "origin-contract"));
-    expect(deliverStationContractMutable(station, "origin-contract", "processor", 100n, "quantum").reason).toBe("invalid-channel");
-    expect(deliverStationContractMutable(station, "origin-contract", "processor", 100n, "terminal", "verdant").reason).toBe("invalid-channel");
-    expect(station.contractBoard.accepted[0].requirements[0].delivered).toBe("0");
-    expect(deliverStationContractMutable(station, "origin-contract", "processor", 100n, "terminal", "home").accepted).toBe("100");
-    expect(station.contractBoard.accepted[0].status).toBe("claimable");
+    const accepted = acceptStationContract(game.orbitalStation, "origin-contract");
+    const terminalStation = cloneOrbitalStationState(accepted);
+    expect(deliverStationContractMutable(terminalStation, "origin-contract", "processor", 100n, "terminal", "verdant").reason).toBe("invalid-channel");
+    expect(terminalStation.contractBoard.accepted[0].requirements[0].delivered).toBe("0");
+    expect(deliverStationContractMutable(terminalStation, "origin-contract", "processor", 100n, "terminal", "home").accepted).toBe("100");
+    expect(terminalStation.contractBoard.accepted[0].status).toBe("claimable");
+
+    const quantumStation = cloneOrbitalStationState(accepted);
+    const quantumContract = quantumStation.contractBoard.accepted[0];
+    expect(getStationContractRemaining(quantumContract, "processor", "quantum")).toBe(100n);
+    expect(deliverStationContractMutable(quantumStation, "origin-contract", "processor", 100n, "quantum")).toMatchObject({
+      accepted: "100",
+      reason: "delivered",
+    });
+    expect(quantumContract.status).toBe("claimable");
+  });
+
+  it("does not let a cargo terminal satisfy a quantum-only requirement", () => {
+    const game = contractReadyState();
+    const contract: StationContract = {
+      id: "quantum-only-contract",
+      templateId: "quantum",
+      slot: 3,
+      title: "量子专属订单",
+      summary: "渠道限制测试",
+      taskDay: game.orbitalStation.contractBoard.taskDay,
+      expiresAtTaskDay: game.orbitalStation.contractBoard.taskDay + 1,
+      special: true,
+      difficulty: "P3",
+      status: "accepted",
+      requirements: [{ itemId: "processor", amount: "100", delivered: "0", channel: "quantum", weight: 3 }],
+      rewards: { baseMarks: "10", baseReputation: "10", completionMarks: "5", completionReputation: "5" },
+    };
+    const station = cloneOrbitalStationState(game.orbitalStation);
+    station.contractBoard.accepted = [contract];
+    expect(deliverStationContractMutable(station, contract.id, "processor", 100n, "terminal", "home").reason).toBe("invalid-channel");
+    expect(contract.requirements[0].delivered).toBe("0");
   });
 
   it("settles an abandoned partial contract once and never grants the completion bonus", () => {

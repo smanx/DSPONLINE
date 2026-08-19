@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { getBuilding, getRecipe } from "../../src/game/content";
 import { createInitialState, placeBuilding, setEntityRecipe } from "../../src/game/engine";
+import { validateTimedPeriodicProgress, type TimedPeriodicProgressSample } from "../../src/game/periodicProgressValidation";
 import { serializeEnvelope } from "../../src/game/storage";
 
 const RELEASE_NOTE_ID = "2026-08-17-v1.0.46";
@@ -144,27 +146,54 @@ test("exact-value tooltip and classic progress share one visible value", async (
   await expect(tooltip).toBeHidden();
 
   const cycle = smelter.locator(".work-cycle[role='progressbar']");
-  const samples: Array<{ aria: number; text: number; fill: number }> = [];
-  for (let index = 0; index < 18; index += 1) {
-    await page.waitForTimeout(100);
-    samples.push(await cycle.evaluate((element) => {
+  // Establish a fresh authoritative boundary after startup/offline catch-up.
+  // The test then owns the exact resume point used by its browser timestamps.
+  await page.getByRole("button", { name: "暂停模拟", exact: true }).click();
+  await expect(page.getByRole("button", { name: "继续模拟", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "继续模拟", exact: true }).click();
+  await expect(page.getByRole("button", { name: "暂停模拟", exact: true })).toBeVisible();
+  await expect(cycle).toHaveClass(/work-cycle--active/);
+  const recipe = getRecipe("magnet");
+  if (!recipe) throw new Error("magnet recipe is unavailable");
+  const cyclesPerSecond = getBuilding("arc_smelter").speed / recipe.duration;
+  const samplingDurationMs = Math.ceil(2.2 / cyclesPerSecond * 1_000);
+  const samples = await cycle.evaluate(async (element, durationMs): Promise<TimedPeriodicProgressSample[]> => new Promise((resolve) => {
+    const captured: TimedPeriodicProgressSample[] = [];
+    const startedAt = performance.now();
+    let frame = 0;
+    const capture = () => {
       const aria = Number(element.getAttribute("aria-valuenow"));
       const text = Number(element.querySelector("strong")?.textContent?.match(/\d+/)?.[0] ?? Number.NaN);
       const transform = (element.querySelector("i") as HTMLElement | null)?.style.transform ?? "scaleX(0)";
-      return { aria, text, fill: Number(transform.match(/scaleX\(([^)]+)\)/)?.[1] ?? 0) * 100 };
-    }));
-  }
-  for (const sample of samples) {
-    expect(sample.text).toBe(sample.aria);
-    expect(Math.abs(sample.fill - sample.aria)).toBeLessThanOrEqual(1.1);
-  }
-  const illegalDrops = samples.slice(1).filter((sample, index) => {
-    const previous = samples[index];
-    const drop = previous.aria - sample.aria;
-    const clearCycleWrap = drop >= 50;
-    return drop > 1 && !clearCycleWrap;
+      captured.push({
+        atMs: performance.now(),
+        aria,
+        text,
+        fill: Number(transform.match(/scaleX\(([^)]+)\)/)?.[1] ?? Number.NaN) * 100,
+      });
+    };
+    const observer = new MutationObserver(capture);
+    observer.observe(element, { attributes: true, attributeFilter: ["aria-valuenow", "style"], characterData: true, childList: true, subtree: true });
+    const tick = () => {
+      capture();
+      if (performance.now() - startedAt >= durationMs) {
+        observer.disconnect();
+        resolve(captured);
+        return;
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    void frame;
+  }), samplingDurationMs);
+  const validation = validateTimedPeriodicProgress(samples, {
+    cyclesPerSecond,
+    refreshIntervalMs: 100,
+    authorityPublicationIntervalMs: 1_000,
+    minimumTransitions: 10,
+    minimumWraps: 2,
   });
-  expect(illegalDrops).toHaveLength(0);
+  expect(validation.issues, JSON.stringify({ validation, samples }, null, 2)).toEqual([]);
   await page.screenshot({ path: "artifacts/qa/v101-progress-tooltip-dark-1440x900.png", fullPage: true });
 });
 
