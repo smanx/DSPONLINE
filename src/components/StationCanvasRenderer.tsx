@@ -4,6 +4,7 @@ import {
   Controls,
   MiniMap,
   ReactFlow,
+  ReactFlowProvider,
   type Node,
   type OnNodeDrag,
   type Viewport,
@@ -133,31 +134,38 @@ export function StationCanvasRenderer({
     });
   };
 
-  return <section
-    className={`station-canvas-renderer${readOnly ? " station-canvas-renderer--readonly" : ""}${className ? ` ${className}` : ""}`}
-    style={{ "--station-canvas-background": theme?.background, "--station-canvas-accent": theme?.accent } as CSSProperties}
-    aria-label={readOnly ? "只读空间站展示画布" : "空间站装饰画布"}
-  >
-    <ReactFlow
-      nodes={nodes}
-      edges={[]}
-      defaultViewport={station.viewport}
-      minZoom={0.2}
-      maxZoom={2.5}
-      nodesConnectable={false}
-      elementsSelectable
-      panOnDrag
-      zoomOnDoubleClick={false}
-      onNodeClick={(_event, node) => onSelectPlacement?.(node.id.startsWith("decor:") ? node.id.slice("decor:".length) : null)}
-      onPaneClick={() => onSelectPlacement?.(null)}
-      onNodeDragStop={handleDragStop}
-      onMoveEnd={(_event, viewport) => onViewportChange?.(viewport)}
-      proOptions={{ hideAttribution: true }}
+  // App already lives under the factory ReactFlowProvider. A second ReactFlow
+  // without its own provider would overwrite that store while the station is
+  // open and reset it on unmount, leaving the factory visible but unable to
+  // drag, box-select, connect, or translate placement coordinates.
+  return <ReactFlowProvider>
+    <section
+      className={`station-canvas-renderer${readOnly ? " station-canvas-renderer--readonly" : ""}${className ? ` ${className}` : ""}`}
+      style={{ "--station-canvas-background": theme?.background, "--station-canvas-accent": theme?.accent } as CSSProperties}
+      aria-label={readOnly ? "只读空间站展示画布" : "空间站装饰画布"}
     >
-      <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--station-canvas-accent)" />
-      <Controls showInteractive={!readOnly} />
-      <MiniMap pannable={!readOnly} zoomable={!readOnly} nodeColor={(node) => node.id.startsWith("module:") ? "var(--station-canvas-accent)" : "#c58b51"} />
-    </ReactFlow>
-    <div className="station-canvas-level" aria-label={`空间站等级 ${level.level}`}><strong>Lv.{level.level}</strong><span>{level.title}</span><small>{station.layout.placements.length}/{level.placementLimit} 装饰</small></div>
-  </section>;
+      <ReactFlow
+        id="orbital-station-flow"
+        nodes={nodes}
+        edges={[]}
+        defaultViewport={station.viewport}
+        minZoom={0.2}
+        maxZoom={2.5}
+        nodesConnectable={false}
+        elementsSelectable
+        panOnDrag
+        zoomOnDoubleClick={false}
+        onNodeClick={(_event, node) => onSelectPlacement?.(node.id.startsWith("decor:") ? node.id.slice("decor:".length) : null)}
+        onPaneClick={() => onSelectPlacement?.(null)}
+        onNodeDragStop={handleDragStop}
+        onMoveEnd={(_event, viewport) => onViewportChange?.(viewport)}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--station-canvas-accent)" />
+        <Controls showInteractive={!readOnly} />
+        <MiniMap pannable={!readOnly} zoomable={!readOnly} nodeColor={(node) => node.id.startsWith("module:") ? "var(--station-canvas-accent)" : "#c58b51"} />
+      </ReactFlow>
+      <div className="station-canvas-level" aria-label={`空间站等级 ${level.level}`}><strong>Lv.{level.level}</strong><span>{level.title}</span><small>{station.layout.placements.length}/{level.placementLimit} 装饰</small></div>
+    </section>
+  </ReactFlowProvider>;
 }
