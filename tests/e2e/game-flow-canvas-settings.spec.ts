@@ -1795,9 +1795,12 @@ test("construction cards craft in place and Ctrl-click chains building placement
   const craftButton = page.getByLabel("制造火力发电厂");
   await expect(craftButton).toBeEnabled();
   await expect(craftButton).toHaveAttribute("data-craft-state", "direct");
-  await craftButton.click();
+  const consumedBurst = page.locator(".interaction-burst").filter({ hasText: "已消耗" });
+  await Promise.all([
+    consumedBurst.waitFor({ state: "visible" }),
+    craftButton.click(),
+  ]);
   await expect(page.locator(".construction-item-shell").filter({ hasText: "火力发电厂" })).toContainText("×1");
-  await expect(page.locator(".interaction-burst").filter({ hasText: "已消耗" })).toBeVisible();
   await craftButton.click();
   await expect(craftButton).toBeEnabled();
   await expect(craftButton).toHaveClass(/construction-item-craft--disabled/);

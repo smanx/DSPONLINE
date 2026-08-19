@@ -584,4 +584,144 @@ test.describe("real save canvas density acceptance", () => {
     await expect.poll(() => page.locator(".react-flow__node.selected").count()).toBeGreaterThan(0);
     expect(pageErrors).toEqual([]);
   });
+
+  test("real-save factory stays interactive after an operational station canvas round trip", async ({ page }) => {
+    test.setTimeout(300_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const pageErrors: string[] = [];
+    const runtimeRenderErrors: string[] = [];
+    const reactFlowWarnings: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error" && message.text().includes("DSP runtime render error")) runtimeRenderErrors.push(message.text());
+      if (message.type() === "warning" && message.text().includes("React Flow")) reactFlowWarnings.push(message.text());
+    });
+    await importFixture(page);
+    await setCanvasSettings(page, { detail: "minimal", overlap: "all", interaction: "selected" });
+
+    await page.getByTitle("保存并返回主菜单").click();
+    await expect(page.locator(".start-menu")).toBeVisible({ timeout: 120_000 });
+    const preparedShape = await page.evaluate(async () => {
+      const storage = await import("/src/game/storage.ts");
+      const loaded = storage.loadGame();
+      const state = loaded.state;
+      state.paused = true;
+      state.orbitalStation = {
+        ...state.orbitalStation,
+        status: "operational",
+        construction: {
+          ...state.orbitalStation.construction,
+          stageRequirements: state.orbitalStation.construction.stageRequirements.map((stage) => ({
+            ...stage,
+            delivered: Object.fromEntries(stage.costs.map((cost) => [cost.itemId, cost.amount])),
+            deliveredFleet: { ...stage.fleetCosts },
+          })),
+        },
+      };
+      const result = await storage.saveGameVerified(state);
+      if (!result.success) throw new Error(result.message);
+      return {
+        activePlanetId: state.activePlanetId,
+        entityCount: state.entities.length,
+        beltCount: state.belts.length,
+        activeEntityCount: state.entities.filter((entity) => entity.planetId === state.activePlanetId).length,
+      };
+    });
+    await page.evaluate(() => sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1"));
+    // importFixture intentionally starts at ?menu=1. Navigate to the factory
+    // route instead of reloading that forced-menu URL after preparing the
+    // isolated operational-station copy.
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+
+    const shell = page.locator(".game-shell");
+    const factoryCanvas = page.locator(".factory-canvas");
+    await expect(shell).toBeVisible({ timeout: 120_000 });
+    await expect(shell).toHaveAttribute("data-active-planet-node-count", String(preparedShape.activeEntityCount), { timeout: 60_000 });
+    const persistedShape = await page.evaluate(async () => {
+      const [{ readPersistedLocalSaveValue }, { inspectSave }] = await Promise.all([
+        import("/src/game/localSaveStore.ts"),
+        import("/src/game/storage.ts"),
+      ]);
+      const raw = await readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+      const state = raw ? inspectSave(raw).state : null;
+      return state ? {
+        activePlanetId: state.activePlanetId,
+        entityCount: state.entities.length,
+        beltCount: state.belts.length,
+        stationStatus: state.orbitalStation.status,
+      } : null;
+    });
+    expect(persistedShape).toEqual({
+      activePlanetId: preparedShape.activePlanetId,
+      entityCount: preparedShape.entityCount,
+      beltCount: preparedShape.beltCount,
+      stationStatus: "operational",
+    });
+
+    await factoryCanvas.locator(".react-flow__controls-fitview").click();
+    await expect.poll(() => factoryCanvas.locator(".react-flow__node[data-id]").count(), { timeout: 60_000 }).toBeGreaterThan(0);
+    const factoryViewport = factoryCanvas.locator(".react-flow__viewport");
+    const factoryViewportBeforeStation = await factoryViewport.evaluate((element) => getComputedStyle(element).transform);
+
+    await page.getByRole("button", { name: /打开全星系空间站/ }).click();
+    const station = page.getByRole("dialog", { name: "全星系空间站" });
+    await expect(station.locator(".station-canvas-renderer .react-flow")).toBeVisible({ timeout: 60_000 });
+    await expect(station.locator('.react-flow__node[data-id^="module:"]')).toHaveCount(6);
+    const stationViewport = station.locator(".station-canvas-renderer .react-flow__viewport");
+    const stationViewportBefore = await stationViewport.evaluate((element) => getComputedStyle(element).transform);
+    const stationZoomIn = station.locator(".station-canvas-renderer .react-flow__controls-zoomin");
+    const stationZoomControl = await stationZoomIn.isEnabled()
+      ? stationZoomIn
+      : station.locator(".station-canvas-renderer .react-flow__controls-zoomout");
+    await stationZoomControl.click();
+    await expect.poll(() => stationViewport.evaluate((element) => getComputedStyle(element).transform)).not.toBe(stationViewportBefore);
+    await page.locator(".orbital-station-entry").click();
+    await expect(station).toHaveCount(0);
+    await expect(factoryCanvas).not.toHaveAttribute("inert", "");
+    await expect.poll(() => factoryViewport.evaluate((element) => getComputedStyle(element).transform)).toBe(factoryViewportBeforeStation);
+
+    const pane = factoryCanvas.locator(".react-flow__pane");
+    const paneBox = await pane.boundingBox();
+    if (!paneBox) throw new Error("real-save station return has no factory pane geometry");
+    const beforePan = await factoryViewport.evaluate((element) => getComputedStyle(element).transform);
+    await page.mouse.move(paneBox.x + paneBox.width * 0.72, paneBox.y + paneBox.height * 0.42);
+    await page.mouse.down();
+    await page.mouse.move(paneBox.x + paneBox.width * 0.2, paneBox.y + paneBox.height * 0.42, { steps: 12 });
+    await expect.poll(() => factoryViewport.evaluate((element) => getComputedStyle(element).transform)).not.toBe(beforePan);
+    await page.mouse.up();
+
+    const targetId = await page.evaluate(() => {
+      const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+      if (!flow) return null;
+      const flowBounds = flow.getBoundingClientRect();
+      return [...document.querySelectorAll<HTMLElement>(".factory-canvas .react-flow__node[data-id]")].find((node) => {
+        if (node.dataset.stackHiddenWrapper === "true") return false;
+        const bounds = node.getBoundingClientRect();
+        const x = bounds.left + bounds.width / 2;
+        const y = bounds.top + bounds.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        return x > flowBounds.left + 30 && x < flowBounds.right - 30 &&
+          y > flowBounds.top + 30 && y < flowBounds.bottom - 140 &&
+          Boolean(hit && (hit === node || node.contains(hit)));
+      })?.dataset.id ?? null;
+    });
+    expect(targetId).not.toBeNull();
+    const target = factoryCanvas.locator(`.react-flow__node[data-id="${targetId}"]`);
+    await target.click({ force: true });
+    await expect(target).toHaveClass(/selected/);
+    await expectExpandedNodePainted(target);
+    const dragStopsBefore = Number(await factoryCanvas.getAttribute("data-drag-stop-count") ?? 0);
+    const header = await target.locator(".factory-node__header").boundingBox();
+    if (!header) throw new Error("selected real-save node has no drag geometry after station return");
+    await page.mouse.move(header.x + header.width / 2, header.y + header.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(header.x + header.width / 2 + 42, header.y + header.height / 2 + 22, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(async () => Number(await factoryCanvas.getAttribute("data-drag-stop-count") ?? 0))
+      .toBeGreaterThan(dragStopsBefore);
+
+    expect(pageErrors).toEqual([]);
+    expect(runtimeRenderErrors).toEqual([]);
+    expect(reactFlowWarnings).toEqual([]);
+  });
 });
