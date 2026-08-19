@@ -522,7 +522,7 @@ test("release notes preserve close and acknowledge actions at 360 by 480 and 200
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveAttribute("aria-label", "存档稳定性与手机连续拉线热修");
   await expect(dialog.locator(".release-notes-version strong")).toHaveText("1.0.46");
-  await expect(dialog.locator(".release-notes-scroll li")).toHaveCount(7);
+  await expect(dialog.locator(".release-notes-scroll li")).toHaveCount(10);
   await expect(dialog).toContainText("自动保存保持模拟运行");
   await expect(dialog).toContainText("手机连续拉线不再遮挡地图");
   await expect(dialog).toContainText("画布显示可独立控制");

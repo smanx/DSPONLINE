@@ -633,7 +633,14 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
           {historyOpen ? <nav className="release-notes-history-list" aria-label={uiCopy.releaseList}>
             {pageEntries.map((release) => <button type="button" className={release.id === selectedRelease.id ? "active" : ""} key={release.id} onClick={() => showRelease(release.id)}><span><strong>{release.version} · {release.title}</strong><small>{release.date}</small></span><ChevronRight size={15} /></button>)}
           </nav> : null}
-          <div className="release-notes-scroll" ref={releaseScrollRef} onScroll={(event) => { historyScrollTopRef.current = event.currentTarget.scrollTop; }}>
+          <div
+            className="release-notes-scroll"
+            ref={releaseScrollRef}
+            role="region"
+            aria-label={`${selectedRelease.version} 更新详情`}
+            tabIndex={0}
+            onScroll={(event) => { historyScrollTopRef.current = event.currentTarget.scrollTop; }}
+          >
             <p className="release-notes-summary"><Info size={16} /><span>{selectedRelease.summary}</span></p>
             <ol>
               {selectedRelease.items.map((item, index) => {
