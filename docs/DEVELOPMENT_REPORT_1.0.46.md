@@ -1,4 +1,4 @@
-# DSP极简网络 1.0.46 存档、手机拉线与画布展示本地审计报告
+# DSP极简网络 1.0.46 存档、手机拉线、画布与空间站本地审计报告
 
 审计日期：2026-08-19
 
@@ -18,6 +18,8 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 
 随后“放置/拉线后画布卡死、视角外建筑不显示、小地图不移动、框选和放置坐标失效”又暴露了另一条状态脱节：React Flow 手势中的 `onMove` 已经更新 CSS transform 和线路 Canvas，但虚拟节点矩形、密度展示 zoom 与 CanvasMiniMap 仍等到 `onMoveEnd` 才发布；节点拖动触发的自动平移不保证产生该结束事件。虚拟窗口因此停在旧世界坐标，屏外节点被继续卸载，所有依赖当前 transform 的交互看起来一起失灵。修复后，手势中以 120 CSS px 阈值和 160 px overscan 发布虚拟窗口，zoom/节点发布进入 transition；小地图用单次节点遍历并按 80 ms 节流实时重绘，结束时必定补最终帧。回归在 pointer 尚未松开时检查小地图、跨旧窗口拖动建筑、框选、选中展开和移动后放置坐标。
 
+用户最终给出的“只要切换到空间站再切回来，工厂建筑就无法移动和拉线”还有更直接的独立根因：工厂和空间站曾处于同一个 `ReactFlowProvider` store。空间站挂载时的 StoreUpdater 用空间站节点、边和视口覆盖工厂 store，离开时清理又重置同一 store。修复为给空间站嵌套独立 provider 与固定 flow id，二者不再共享节点仓、手势状态或 viewport。生产预览同时发现直达 `/station/<id>` 时相对 `./assets` 会解析到 `/station/assets/*` 并白屏；Web 资源与 manifest 现使用站点根路径，Desktop/Android 仍保持相对路径。
+
 ## 最终设计边界
 
 1. **默认保存路径回到稳定协调器**：缺失、关闭或错误设置 durable 环境变量时均选择 1.0.43-compatible verified-primary；打开旧玩家档不会隐式启用 durable。空间站 v46 bridge 也强制使用稳定路径。
@@ -28,6 +30,7 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 6. **画布三类决策互不覆盖**：基础卡片只决定普通卡片层级，重叠处理只决定同坐标组如何留下入口，交互展开只决定普通选择/悬停/聚焦；拖动、采矿和连线目标仍可按安全规则强制完整显示。三项均只写本机 localStorage。
 7. **密集保护保持可恢复**：玩家选择“完整 + 全部卡片”时，视口节点超过 480/1,000 会统一改用中等/一行基础卡，并在界面明确显示“密集保护”；单个选中或悬停目标仍完整展开，不更改设置值，也不写入存档。
 8. **视口发布只有一个实时坐标真相**：节点虚拟化、线路端点、放置坐标、框选和小地图都从同一实时 React Flow transform 派生；节流只减少重绘频率，不允许把最终视口留在旧值。
+9. **空间站画布拥有独立 store**：空间站往返、缩放、直达和卸载不能改变工厂节点仓、选择、连接、拖动状态或 viewport；Web history route 的静态资源必须从站点根解析。
 
 ## 两份真实玩家存档的只读验收
 
@@ -64,12 +67,12 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 
 ## 本地验证结果
 
-以下数字均来自固定运行时候选 `c24a0f57efeb83a54202b1ede5ce2b073820dde5`；完整 Chromium、durable、production preview、PWA、跨浏览器、服务端、运维、原生静态和两份真实存档均已在最终画布增量合入后重跑。
+以下数字均来自固定运行时候选 `865f125e862487aedf7d7df08491867881b2b65b`；完整 Chromium、durable、production preview、PWA、跨浏览器、服务端、运维、原生静态和两份真实存档均已在空间站隔离增量合入后重跑。
 
 | 范围 | 结果 |
 | --- | --- |
 | TypeScript | `npm run typecheck` 通过 |
-| 全量 Vitest | 171 files passed / 7 conditional skipped；1,422 passed / 20 skipped / 0 failed |
+| 全量 Vitest | 171 files passed / 7 conditional skipped；1,423 passed / 20 skipped / 0 failed |
 | 服务端与空间站 | server 363 passed / 2 skipped；station 3/3 |
 | 运维与切换模拟 | ops 56 passed / 6 Linux-only skipped；release switch 29/29 |
 | 原生静态安全 | 24/24 |
@@ -78,15 +81,16 @@ durable WAL 没有被删除，但只允许通过显式开发变量启用。它�
 | 默认保存进度 | 2/2；保护模式和实验模式分别验证 |
 | 纯挂机教程与宏 | 20 passed / 1 条真实夹具条件跳过 |
 | 手机连续拉线 | 21/21，含 6/10/50/100 候选、390×844、360×640、844×390 与 80%～200% 字体 |
-| 完整 Chromium | 424 passed / 25 explicit conditional skips / 0 failed（449 总项） |
-| Firefox / WebKit | 2/2 |
-| Production preview | 功能门禁 27/27，PWA 3/3；自动密度性能在独立进程连续 3/3，九次手势 P95 7～20.8 ms、max 27.8 ms、0 个 >50/>100 ms 帧；连接 bounded entry 9.8 ms、P95 13.9 ms、max 34.8 ms |
-| 真实存档专项 | 两份档的自动保存、画布核心、选中/悬停和实时虚拟化平移全部通过；各 19 张设置/横竖屏截图，pageerror 0；前者空白 Fit View 恢复 0→33 并显示 1,000 重叠组，后者 Fit View 后约 31 个可见节点 |
+| 完整 Chromium | 最终固定候选 425 passed / 26 explicit conditional skips / 0 failed（451 总项，10.8 分钟） |
+| 空间站专项 | dev 6/6、production preview 6/6、关联 Chromium 11/11；Firefox + WebKit 12/12；8 次往返、每轮站内缩放后，工厂 viewport、拖动、反向框选、拉线和放置坐标全部通过，pageerror/React Flow warning 0 |
+| Firefox / WebKit 通用夜间项 | 2/2 |
+| Production preview | 功能门禁 27/27，PWA 3/3；自动密度性能在独立进程连续 3/3，九次手势 P95 7.0～20.9 ms、max 27.8 ms、0 个 >50/>100 ms 帧；连接 bounded entry 9.8 ms、P95 13.8 ms、max 27.9 ms |
+| 真实存档专项 | 两份档的自动保存、画布核心、选中/悬停、实时虚拟化平移和空间站往返全部通过；各 19 张设置/横竖屏截图，pageerror 0；空间站各 6 个模块，返回工厂后的 viewport 与实际平移/选择/绘制/拖动均正常 |
 | 匿名 v47 发布夹具 | 12/12 |
 | 许可证与依赖 | 125 个运行时包一致；root/server `npm audit --audit-level=high` 均 0 漏洞 |
-| Web 构建 | 1,961 modules；startup 194,813 B gzip（JS 101,826 B、CSS 92,987 B、最大 JS 58,974 B）；menu 281,356 B gzip；forbidden startup modules 0；Build ID `1.0.46+c24a0f57efeb` |
+| Web 构建 | 1,961 modules；startup 194,820 B gzip（JS 101,833 B、CSS 92,987 B、最大 JS 58,974 B）；menu 281,377 B gzip；forbidden startup modules 0；Build ID `1.0.46+865f125e8624`；生产直达空间站、根 assets 与 manifest 均通过 |
 
-Chromium 的 25 条跳过均由用例内显式条件控制，包括未提供的其他真实夹具、durable-only、production-preview-only 和未显式提供玩家存档路径的 opt-in 场景；它们不是失败。两份用户指定玩家档已由独立 opt-in 用例实际运行，不包含在这些跳过项里。开发 E2E 的 `/api → 127.0.0.1:65534` 拒绝是线上 API 隔离，不是产品故障。
+Chromium 的条件跳过均由用例内显式条件控制，包括未提供的其他真实夹具、durable-only、production-preview-only 和未显式提供玩家存档路径的 opt-in 场景；它们不是失败。两份用户指定玩家档已由独立 opt-in 用例实际运行，不包含在这些跳过项里。开发 E2E 的 `/api → 127.0.0.1:65534` 拒绝是线上 API 隔离，不是产品故障。
 
 ## 审计中额外处理
 
@@ -94,6 +98,7 @@ Chromium 的 25 条跳过均由用例内显式条件控制，包括未提供的�
 - 修正 production Web 构建门禁：`npm run build:web` 强制 Web 平台，release gate 在构建后执行 PWA 生命周期，避免 Android/Desktop 的旧 `dist` 被误当 Web 候选。
 - 更新匿名 v47/空间站发布夹具及服务端持久化原子性回归；根与 server 高危依赖审计均为零。
 - 修正 PWA 离线测试的旧 document listener 竞态：重载前用 context init script 在新 document 安装状态监听，并主动请求 Service Worker 状态；产品缓存逻辑未为测试放宽。
+- 修正空间站 React Flow store 隔离和 Web history-route 资源根路径；生产预览不再因 `/station/assets/*` 404 白屏，空间站卸载也不会清空工厂交互状态。
 - 保留开发服务器偶发的 `ResizeObserver loop completed with undelivered notifications` 为非阻断诊断；候选稳定性专项没有 pageerror、dynamic-import-fatal 或 runtime render error。后续若处理，应先在 production preview 独立采样，不能用吞错掩盖真实异常。
 
 ## 残余风险与优化方向
@@ -107,4 +112,4 @@ Chromium 的 25 条跳过均由用例内显式条件控制，包括未提供的�
 
 ## 发布交接原则
 
-开发侧已从干净固定 SHA `c24a0f57efeb83a54202b1ede5ce2b073820dde5` 生成并复验 Web/API/source、未签名原生诊断制品、10 文件 candidate manifest、SBOM 与 3-subject provenance；完整路径和哈希见发布交接。release agent 仍必须独立复算，并在签名、目标节点、备份 evidence、回滚指针和公开 smoke 齐备后才能发布；本报告本身不授权部署。
+开发侧已从干净固定 SHA `865f125e862487aedf7d7df08491867881b2b65b` 生成并复验 Web/API/source、未签名原生诊断制品、10 文件 candidate manifest、SBOM 与 3-subject provenance；完整路径和哈希见发布交接。运行时分发包未发现玩家本机路径、存档文件名或密钥标记；内部 source archive 的历史文档/脚本仍有 19 个文字引用，因此不作为公开下载制品。release agent 仍必须独立复算，并在签名、目标节点、备份 evidence、回滚指针和公开 smoke 齐备后才能发布；本报告本身不授权部署。

@@ -10,7 +10,7 @@
 
 ## Task ID / title
 
-`DSPIDLE-1046-SAVE-STABILITY-MOBILE-BATCH-CANVAS`：修复自动保存暂停模拟、暂停后 Worker 无法恢复、纯挂机保存状态污染，重构手机连续拉线 UI、重复点击状态机与大候选列表稳定性，并把画布卡片、重叠处理和交互展开拆成独立的本机偏好；最终增量修复密集画布的半透明、悬停消失、拖动卡死和极端完整卡过载。
+`DSPIDLE-1046-SAVE-STABILITY-MOBILE-BATCH-CANVAS-STATION`：修复自动保存暂停模拟、暂停后 Worker 无法恢复、纯挂机保存状态污染，重构手机连续拉线 UI、重复点击状态机与大候选列表稳定性，并把画布卡片、重叠处理和交互展开拆成独立的本机偏好；最终增量修复密集画布的半透明、悬停消失、拖动卡死、极端完整卡过载，以及空间站往返后工厂画布失去拖动、框选、拉线和正确坐标的问题。
 
 ## Priority
 
@@ -25,6 +25,8 @@ P0 存档/模拟稳定性 + P1 手机交互。任何修复都必须保留玩家�
 - 画布二次反馈：检查线路网络后，非网络节点被降到极低透明度；选中或悬停展开仍继承 dim class，LOD 切换又缺少初始几何，表现为“悬停哪个哪个消失”。大量半透明节点同时保留 `draggable/nopan`，还会形成无法从卡片区域平移的画布死区。
 - 画布最终阻断：导入大档并放置/拉线一段时间后，拖动画布或 React Flow 自动平移只更新了变换和线路层，虚拟节点窗口与 CanvasMiniMap 却等待 `onMoveEnd`；自动平移并不保证触发该回调，最终表现为视角外建筑不再挂载、小地图不动、建筑拖动/框选失效以及放置坐标看似错位。
 - 一行卡反馈：密集模式应优先显示配方和产物，而不是大量相同的建筑名称。
+- 空间站切换阻断：工厂位于 `ReactFlowProvider` 下，空间站曾直接挂载第二棵 `ReactFlow` 并复用同一 store；空间站 StoreUpdater 覆盖工厂节点/视口，卸载清理又重置共享 store，因此返回工厂后画布交互整体失效。空间站现使用自己的嵌套 provider 和固定 flow id，与工厂状态完全隔离。
+- 生产预览直达阻断：Web 构建曾使用相对 `./assets`，浏览器直达 `/station/<id>` 时会请求 `/station/assets/*` 并白屏。Web 现固定根路径 `/`，Desktop/Android 继续使用相对路径；manifest 同样通过 `%BASE_URL%` 按平台生成。
 - 两份本地只读玩家存档：
   - `dsp-idle-save-2026-08-14.json`：36,704,109 bytes，SHA-256 `cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1`
   - `dsp-idle-local-backup-2026-08-17 (1).json`：11,723,913 bytes，SHA-256 `f832f7fb909bad1981cd8476f28dcf0f1026c62955d822904218cee270a43d2a`
@@ -85,6 +87,7 @@ P0 存档/模拟稳定性 + P1 手机交互。任何修复都必须保留玩家�
 - 一行生产卡优先显示“配方 · 产物”，例如“金伯利矿提炼 · 金刚石”；没有配方/产物的特殊建筑可靠回退到建筑名称。
 - “完整 + 全部卡片”在视口节点超过 480/1,000 时统一降到中等/一行基础卡并标明“密集保护”；被选中或悬停的单卡仍完整展开，避免数千重卡让页面失去响应。
 - 拖动、滚轮缩放和 React Flow 自动平移期间会实时发布带 overscan 的虚拟视口，并在 pointer 仍按下时更新小地图；手势结束强制发布最终精确视口。拖动建筑穿过旧窗口、框选、选中展开和移动后放置坐标均以同一实时 transform 为准。
+- 空间站与工厂各持有独立 React Flow store。反复切换、空间站缩放或直接打开 `/station/<id>` 后返回工厂，原工厂视口不被覆盖，建筑拖动、反向框选、拉线、放置坐标和小地图仍可用。
 
 ## Compatibility and data-preservation constraints
 
@@ -101,11 +104,11 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 
 ## Required tests and exact results
 
-以下结果均来自保存、连续拉线和最终画布交互增量合并后的固定运行时候选 `c24a0f57efeb83a54202b1ede5ce2b073820dde5`：
+以下结果均来自保存、连续拉线、最终画布交互与空间站隔离增量合并后的固定运行时候选 `865f125e862487aedf7d7df08491867881b2b65b`：
 
 - `npm ci`：456 packages；安装成功。
 - `npm run typecheck`：passed。
-- `npm test -- --maxWorkers=1`：171 files passed / 7 conditional skipped；1,422 passed / 20 skipped / 0 failed。
+- `npm test -- --maxWorkers=1`：171 files passed / 7 conditional skipped；1,423 passed / 20 skipped / 0 failed。
 - `npm run test:server`：server 363 passed / 2 skipped；station 3/3。
 - `npm run test:ops`：56 passed / 6 Linux-only skipped。
 - `npm run release:test-switch`：29/29。
@@ -113,13 +116,13 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 - `npm run licenses:check`：125 runtime packages consistent。
 - root/server `npm audit`：0 vulnerabilities。
 - `npm run test:e2e:durable -- --workers=1`：7/7。
-- `npm run test:e2e -- --project=chromium --workers=4`：424 passed / 25 explicit conditional skips / 0 failed（449 total；约 6.1 分钟）。
-- `npm run test:e2e:nightly -- --workers=1`：Firefox/WebKit 2/2。
-- production preview 功能门禁 27/27；PWA 3/3。自动档性能测试在独立浏览器进程连续 3/3，通过时九次手势 P95 为 7～20.8 ms、max 27.8 ms、0 个 >50 ms 或 >100 ms 帧；连接 bounded entry 9.8 ms、P95 13.9 ms、max 34.8 ms。功能套件后的同进程性能采样不作为通过证据。
-- 两份真实玩家档 autosave + canvas 核心、选中/悬停和实时虚拟化平移专项全部通过；每份各完成 19 张设置/横竖屏截图，pageerror 0，源 bytes、mtime、SHA-256 未变。
+- `npx playwright test --project=chromium --workers=2`：最终固定候选 425 passed / 26 explicit conditional skips / 0 failed（451 total；10.8 分钟）。
+- 空间站专项：开发服务器 6/6、生产预览 6/6；空间站关联 Chromium 合并门禁 11/11；Firefox + WebKit 12/12。8 次往返并在每轮缩放空间站后，工厂 viewport 保持，随后建筑拖动、反向框选两节点、拉线和放置坐标均通过，pageerror 与 React Flow warning 为 0。
+- production preview 功能门禁 27/27；PWA 3/3。自动档性能测试在独立浏览器进程连续 3/3，通过时九次手势 P95 为 7.0～20.9 ms、max 27.8 ms、0 个 >50 ms 或 >100 ms 帧；连接 bounded entry 9.8 ms、P95 13.8 ms、max 27.9 ms。显式展开全部仍测得 max 约 111.4 ms、2 帧 >50 ms，属于已警示 override。
+- 两份真实玩家档 autosave + canvas 核心、选中/悬停、实时虚拟化平移与空间站往返专项全部通过；每份各完成 19 张设置/横竖屏截图。两份空间站档均有 6 个模块，返回工厂后 viewport、平移、选择、绘制和拖动正常，pageerror 0；源 bytes、mtime、SHA-256 未变。
 - 手机矩阵：390×844、360×640、844×390；80/100/125/150/200% 字体；数量标记、连续拉线和三组设置无阻断。
 - 匿名 v47 fixture / release-gate contracts：12/12。
-- `npm run build:web`：1,961 modules；startup 194,813 B gzip（JS 101,826 B、CSS 92,987 B、最大 JS 58,974 B）；menu 281,356 B gzip；forbidden startup modules 0；Build ID `1.0.46+c24a0f57efeb`。
+- `npm run build:web`：1,961 modules；startup 194,820 B gzip（JS 101,833 B、CSS 92,987 B、最大 JS 58,974 B）；menu 281,377 B gzip；forbidden startup modules 0；Build ID `1.0.46+865f125e8624`。生产预览直达空间站及其 `/assets/*`、`/manifest.webmanifest` 均返回 200。
 - API 展开候选：临时 SQLite health 200；cloud schema/layout 8/3；归档 SHA-256 已纳入候选清单。
 - Windows unsigned unpacked：`1.0.46 / 1.0.46.0`，ASAR Build ID 正确，4 个进程 smoke 均 responding，Authenticode `NotSigned`。
 - Android unsigned：APK/AAB、bundle/assemble/lintVital 通过；`1.0.46 / 1000046`。首轮因当前 shell 未设置 SDK 环境停止，发现本机既有 SDK 后仅对重试命令注入 `ANDROID_HOME`/`ANDROID_SDK_ROOT` 并成功；没有创建或提交本机 `local.properties`。
@@ -128,7 +131,7 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 
 ## Release target and version
 
-开发目标已形成可由 release agent 独立复验的 `1.0.46-c24a0f57efeb` 固定源码和候选制品。本交接不授权香港、上海、下载页、Android、Windows 或任何 stable channel 发布。
+开发目标已形成可由 release agent 独立复验的 `1.0.46-865f125e8624` 固定源码和候选制品。旧 `1.0.46-c24a0f57efeb` 包已被本候选取代，不得发布。本交接不授权香港、上海、下载页、Android、Windows 或任何 stable channel 发布。
 
 ## Known risks / rollback
 
@@ -140,7 +143,7 @@ Web/PWA 为本地已验证目标；Chromium、Firefox、WebKit 已跑浏览器�
 
 ## Development handoff
 
-Runtime / candidate Commit SHA: **`c24a0f57efeb83a54202b1ede5ce2b073820dde5`**。Build ID：**`1.0.46+c24a0f57efeb`**。候选来自隔离 checkout，source gate 记录为 clean；之后的交接文档提交不改变运行时候选 SHA。
+Runtime / candidate Commit SHA: **`865f125e862487aedf7d7df08491867881b2b65b`**。Build ID：**`1.0.46+865f125e8624`**。候选来自干净固定 checkout，source gate 记录为 clean；之后的交接文档提交不改变运行时候选 SHA。
 
 Changed files:
 
@@ -150,34 +153,35 @@ Changed files:
 - 手机连续拉线与错误边界：`src/App.tsx`、`src/styles.css`、`src/styles/mobile-factory.css`、`DynamicImportRecovery.tsx`、`dynamicImportRecovery.ts`
 - 画布三组偏好与重叠标记：`canvasDensityPresentation*`、`uiPreferences*`、`FactoryNodes.tsx`、`OperationsWorkspace.tsx`、`src/App.tsx`、`src/styles.css`、`v144-canvas-density-stack.spec.ts`
 - 实时虚拟化与小地图：`src/App.tsx`、`src/components/CanvasMiniMap.tsx` 及视口/拖动/框选/放置/性能/PWA Playwright 回归
+- 空间站隔离与 Web 直达：`src/components/StationCanvasRenderer.tsx`、`vite.config.ts`、`index.html`、`src/versionMetadata.test.ts`、`tests/e2e/orbital-station.spec.ts`、`tests/e2e/v146-real-save-canvas-density.spec.ts`
 - 服务端原子性审计：`server/cloud-payload-store.mjs`、`server/cloud-payload-recovery.mjs`、`server/index.mjs` 及其测试
 - 回归：`tests/e2e/v144-*.spec.ts`、`v146-real-save-autosave.spec.ts`、`v127-selection-batch.spec.ts`、纯挂机/菜单/画布相关 E2E 与 focused Vitest
 - 版本与规范：`package.json`、`src/i18n/releaseNotes.ts`、本报告及 canonical docs
 
 发布 agent 必须从最终提交的 `git diff --name-only <baseline>...<sha>` 取得完整清单，不能把上述分组当作 manifest。
 
-Artifact root：`D:\GameDev\DSPidle2\artifacts\release-bundle\1.0.46-c24a0f57efeb`。其中 10 个文件已经 candidate manifest 独立复验，总计 170,075,444 bytes。辅助元数据位于：
+Artifact root：`D:\GameDev\DSPidle2\artifacts\release-bundle\1.0.46-865f125e8624`。其中 10 个文件已经 candidate manifest 独立复验，总计 170,165,264 bytes。辅助元数据位于：
 
-- `artifacts/release-manifests/1.0.46-c24a0f57efeb.json`：Web `dist` + API source manifest，251/251，aggregate `53d50d3591a122c94cb5ef36c2289c60d55c0fb627d893972841f4dce4102837`。
-- `artifacts/release-manifests/1.0.46-c24a0f57efeb-candidate.json`：bundle 10/10，aggregate `de4b816a2e273f42689f5102d0bebed129d085deb502ae9295d70d08d727029c`。
-- `artifacts/release-manifests/1.0.46-c24a0f57efeb-provenance.json`：3/3 subjects verified against runtime SHA。
-- `artifacts/release-manifests/1.0.46-c24a0f57efeb-SHA256SUMS.txt`：12 个交接文件逐项 SHA-256，已复算 12/12。
-- `artifacts/release-gate/1.0.46-c24a0f57efeb-{source-gate,sbom.cdx,gate-report}.json`：clean source、CycloneDX SBOM 与脱敏门禁报告。
+- `artifacts/release-manifests/1.0.46-865f125e8624.json`：Web `dist` + API source manifest，251/251，aggregate `add763de2864d6a98cf57e417da90bb9aada9d5ba6b682236671d2f003c89f59`。
+- `artifacts/release-manifests/1.0.46-865f125e8624-candidate.json`：bundle 10/10，aggregate `c8a5d5f5e7fc7b806c05f47affbce4d428af6daa1ec714d9bdff89a3ac8f295d`。
+- `artifacts/release-manifests/1.0.46-865f125e8624-provenance.json`：3/3 subjects verified against runtime SHA。
+- `artifacts/release-manifests/1.0.46-865f125e8624-SHA256SUMS.txt`：12 个交接文件逐项 SHA-256，已复算 12/12。
+- `artifacts/release-gate/1.0.46-865f125e8624-{source-gate,sbom.cdx,gate-report}.json`：clean source、CycloneDX SBOM 与含 19 条条件跳过声明的脱敏门禁报告。
 
 | 制品 | 字节 | SHA-256 |
 | --- | ---: | --- |
-| source archive | 6,717,604 | `3ff71365bf80fa02daae62e6a59d6c0335052e3be5c6ec3cf916f031f50de13c` |
-| Web archive | 1,736,981 | `6ce9c7d974da848cb7637218e6e633e59f293455ee313d75847af599dbe64cb6` |
-| API archive | 668,336 | `2e3dddbdeffd90a7d66468c3c6a7b8ef071e257fa97aa4cfcbf983cdc0a7ae4d` |
-| Windows unpacked unsigned diagnostic | 150,430,907 | `6c36c5ce4229d6db6e82966544bfc7b0d8a8129d985cb64fc92f17f82852eac0` |
-| Android unsigned APK | 5,124,465 | `cbcb1dd2cf67ff6de863f5c766389f5752f2df48ed4a23e6835947ea23df4057` |
-| Android unsigned AAB | 4,940,869 | `111d00cd9a43a43b36f381532a38b4f6d1b1bfece47470e5d2ed8d242fcfa481` |
-| source manifest | 42,721 | `160a8436a08ccdab590cd9ecea3328c65494562c312d4712d3a2f067a96589e9` |
-| source gate | 176 | `26fd891e103c74e98d3fb50da0e3079271c76b64e3f41f153cb643271cf5e26c` |
-| SBOM | 407,391 | `20fb9796d9e62be70eb3da18a78bf272bd59bfd41d30a8dc42b32b8a0e7470c9` |
-| gate report | 5,994 | `20ae67eb2b01f7e4d6723fe1f1d5ee54fdfdc02347175eb0c18d149840ff76f6` |
+| source archive | 6,722,785 | `3c6367b7f33c6462f07df11df19cc6e63457b72cabd4e7b27c950d9070888360` |
+| Web archive | 1,736,926 | `fb3f5274b7b684432a6249b353e882c3964e3a2240dd358d790c29a9a6b475d6` |
+| API archive | 668,728 | `8ead606d88ed38c1b9a4beb9356dfef134deb921668132e046be73326262e1df` |
+| Windows unpacked unsigned diagnostic | 150,515,152 | `1dac812327ef51fc3cc692c75ad54e4762ff356c049c0537a76b90e16719026a` |
+| Android unsigned APK | 5,124,493 | `847a0ac5c92874d30dc28cfb1d0e00f90ea02c8abb6d682ce746d11812a9e044` |
+| Android unsigned AAB | 4,940,898 | `3a02c68f000db0abe0ee997c0856b94fe69d215b02801027e60ac14e22bc853f` |
+| source manifest | 42,721 | `783032ff110dd02d2cab970ae8f89398905d471add25352f2e18589194718025` |
+| source gate | 176 | `82b52305ae8c218dbdeedf399b52e645bd18e133f864cc43a99ffa643c46026d` |
+| SBOM | 407,391 | `592dbe6be5558c26a5662dcc4c8a1ebbd406051f9a6f03d2026800679ae9bbaf` |
+| gate report | 5,994 | `135ed37f76b0b5e082032f6f141cc437248b8a8e95f7629105024ea2c5364b54` |
 
-source/Web/API/Windows/APK/AAB 六种归档共列举 2,729 个条目，未发现真实 `.env`、数据库、私钥、证书、玩家存档名、本机下载路径或 AppData 路径；source 中仅保留无凭据的 `.env.example` 模板。两份真实存档最终只读复核仍分别为 36,704,109 / 11,723,913 bytes，mtime UTC `2026-08-14T07:42:32.9900309Z` / `2026-08-17T09:03:45.1183114Z`，SHA-256 与本交接开头完全一致。
+六种归档及 Windows ASAR 内层共扫描 7,788 个条目，未发现真实 `.env`（无凭据 `.env.example` 除外）、数据库、私钥、证书/签名容器或玩家存档正文。Web/API/Windows/Android 运行时内容扫描也未发现玩家本机路径、存档文件名或密钥标记。source archive 仅作内部交接，19 个历史文档/脚本仍含玩家存档文件名或本机路径的文字引用，但不含存档正文、数据库或密钥/证书，因此不得作为公开下载制品。两份真实存档最终只读复核的 bytes、mtime 与 SHA-256 均与测试前完全一致。
 
 Unverified gaps：正式 Windows/Android 签名与证书连续性、Android 实体设备、真实 Linux/systemd/Nginx、生产备份和切换、公开 PWA/API/download smoke、下载页更新与观察窗口。Windows/Android 诊断制品明确不可进入 stable feed。
 
@@ -185,7 +189,7 @@ Unverified gaps：正式 Windows/Android 签名与证书连续性、Android 实�
 
 只有用户明确批准发布后才能继续：
 
-1. 从 runtime SHA `c24a0f57efeb83a54202b1ede5ce2b073820dde5` 建立新的隔离 checkout，并复核本交接的版本、默认环境与完整测试结果；不得把后续 docs-only commit 当成运行时制品 SHA。
+1. 从 runtime SHA `865f125e862487aedf7d7df08491867881b2b65b` 建立新的隔离 checkout，并复核本交接的版本、默认环境与完整测试结果；不得把后续 docs-only commit 当成运行时制品 SHA。
 2. 先按 `SHA256SUMS`、candidate manifest 和 provenance 独立复算当前候选，再执行 `npm ci`、`npm run build:web`、production-preview PWA 与完整 release gate；不得复用 Android/Desktop 覆盖后的 `dist/`。
 3. 使用批准证书重建并验证 Windows/Android 正式制品；检查证书连续性、时间戳、APK/AAB 签名和 Android 实体设备。当前 unsigned 诊断制品只能用于比对，禁止发布。
 4. 若包含 API，先在临时 SQLite 和展开后的发布目录启动验证；生产写入前取得并验证备份 evidence。
