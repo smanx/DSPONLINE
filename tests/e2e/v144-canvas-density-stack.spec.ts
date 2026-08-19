@@ -343,6 +343,10 @@ test("network focus keeps interaction cards opaque and permits panning from cont
   await contextual.hover();
   await expect(contextual).toHaveClass(/factory-flow-node--lod-full/);
   await expect(contextual).not.toHaveClass(/factory-flow-node--network-dim/);
+  await expect.poll(() => contextual.evaluate((element) => ({
+    draggable: element.classList.contains("draggable"),
+    noPan: element.classList.contains("nopan"),
+  }))).toEqual({ draggable: false, noPan: false });
   await expectNodePaintedAndHitTestable(contextual);
   const hiddenDuringExpansion = await page.evaluate(async () => {
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -354,10 +358,19 @@ test("network focus keeps interaction cards opaque and permits panning from cont
   });
   expect(hiddenDuringExpansion).toBe(false);
 
+  // Move to a stable target outside React Flow before switching contextual
+  // cards. Expanded neighbours overlap by design, so asking Playwright to
+  // hover the covered wrapper would not model a real pointer transition.
+  await page.getByText("DSP极简网络", { exact: true }).hover();
+  await expect(contextual).toHaveClass(/factory-flow-node--network-dim/);
   const panTarget = page.locator('.react-flow__node[data-id="anonymous-node-3"]');
   await panTarget.hover();
-  await page.mouse.move(5, 5);
-  await expect(panTarget).toHaveClass(/factory-flow-node--network-dim/);
+  await expect(panTarget).toHaveClass(/factory-flow-node--lod-full/);
+  await expect(panTarget).not.toHaveClass(/factory-flow-node--network-dim/);
+  await expect.poll(() => panTarget.evaluate((element) => ({
+    draggable: element.classList.contains("draggable"),
+    noPan: element.classList.contains("nopan"),
+  }))).toEqual({ draggable: false, noPan: false });
   const beforeTransform = await page.locator(".react-flow__viewport").evaluate((element) => getComputedStyle(element).transform);
   const panBox = await panTarget.locator("article.factory-node").boundingBox();
   if (!panBox) throw new Error("contextual focus node has no pan geometry");
@@ -367,9 +380,14 @@ test("network focus keeps interaction cards opaque and permits panning from cont
   await page.mouse.up();
   await expect.poll(() => page.locator(".react-flow__viewport").evaluate((element) => getComputedStyle(element).transform)).not.toBe(beforeTransform);
 
-  await contextual.click({ force: true });
+  await page.getByRole("button", { name: "关闭运输网络聚焦" }).focus();
+  await expect(panTarget).toHaveClass(/factory-flow-node--network-dim/);
+  await contextual.hover();
+  await expectNodePaintedAndHitTestable(contextual);
+  await contextual.click();
   await expect(page.locator(".network-focus-indicator")).toHaveCount(0);
   await expect(contextual).toHaveClass(/selected/);
+  await expect(contextual).toHaveClass(/draggable/);
   await expectNodePaintedAndHitTestable(contextual);
 });
 

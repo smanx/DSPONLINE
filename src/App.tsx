@@ -8492,29 +8492,28 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             Boolean(connectionDraft && connectExpandAll);
           const lineTraceActive = Boolean(lineFindTrace && lineFindTrace.planetId === canvasGame.activePlanetId);
           const preserveInteractionVisibility = selected || interactionProtected;
-          const focusClassName = lineTraceActive
-            ? entity.id === lineFindTrace?.entityId
-              ? "factory-flow-node--line-find-center"
-              : lineFindUpstreamEntityIds.has(entity.id)
-                ? "factory-flow-node--line-find-upstream"
-                : lineFindDownstreamEntityIds.has(entity.id)
-                  ? "factory-flow-node--line-find-downstream"
-                  : preserveInteractionVisibility ? undefined : "factory-flow-node--line-find-dim"
-            : highlightedTaskId
-              ? taskHighlight.entityIds.has(entity.id)
-                ? "factory-flow-node--task-focus"
-                : preserveInteractionVisibility ? undefined : "factory-flow-node--task-dim"
-              : productionLineFocus?.planetId === canvasGame.activePlanetId
-                ? locatedProductionEntityIds.has(entity.id)
-                  ? "factory-flow-node--network-focus"
-                  : preserveInteractionVisibility ? undefined : "factory-flow-node--network-dim"
-                : focusedBeltNetwork
-                  ? focusedNetworkEntityIds.has(entity.id)
-                    ? "factory-flow-node--network-focus"
-                    : preserveInteractionVisibility ? undefined : "factory-flow-node--network-dim"
-                  : undefined;
-          const focusDimmed = focusClassName === "factory-flow-node--line-find-dim" ||
-            focusClassName === "factory-flow-node--task-dim" || focusClassName === "factory-flow-node--network-dim";
+          let focusClassName: string | undefined;
+          let focusContextOnly = false;
+          if (lineTraceActive) {
+            if (entity.id === lineFindTrace?.entityId) focusClassName = "factory-flow-node--line-find-center";
+            else if (lineFindUpstreamEntityIds.has(entity.id)) focusClassName = "factory-flow-node--line-find-upstream";
+            else if (lineFindDownstreamEntityIds.has(entity.id)) focusClassName = "factory-flow-node--line-find-downstream";
+            else focusContextOnly = true;
+          } else if (highlightedTaskId) {
+            if (taskHighlight.entityIds.has(entity.id)) focusClassName = "factory-flow-node--task-focus";
+            else focusContextOnly = true;
+          } else if (productionLineFocus?.planetId === canvasGame.activePlanetId) {
+            if (locatedProductionEntityIds.has(entity.id)) focusClassName = "factory-flow-node--network-focus";
+            else focusContextOnly = true;
+          } else if (focusedBeltNetwork) {
+            if (focusedNetworkEntityIds.has(entity.id)) focusClassName = "factory-flow-node--network-focus";
+            else focusContextOnly = true;
+          }
+          if (focusContextOnly && !preserveInteractionVisibility) {
+            focusClassName = lineTraceActive
+              ? "factory-flow-node--line-find-dim"
+              : highlightedTaskId ? "factory-flow-node--task-dim" : "factory-flow-node--network-dim";
+          }
           // A compact/medium card grows well beyond its old footprint when it
           // is selected, focused or hovered. Keep that interaction target
           // above later siblings for the entire transition; otherwise the
@@ -8527,10 +8526,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               : stackPresentation.halo ? CANVAS_STACK_HALO_Z_INDEX : 0;
           const stackGeometryHandlesRequired = canvasConnectedEntityIds.has(entity.id);
           const nodeHidden = stackHidden && !stackGeometryHandlesRequired;
-          // Context-only nodes remain clickable, but must not create hundreds
-          // of near-transparent `nopan` islands while a focused network is
-          // active. Clicking one exits focus and restores normal node drag.
-          const nodeDraggable = draggable && !stackHidden && !stackMarker && !focusDimmed;
+          // Context-only nodes remain clickable and may expand visually on
+          // hover, but must not become draggable until the temporary focus is
+          // closed. Otherwise pointer-enter races pointer-down and randomly
+          // turns the intended canvas pan into a node drag. Clicking one exits
+          // focus and restores normal node drag on the following render.
+          const nodeDraggable = draggable && !stackHidden && !stackMarker && !focusContextOnly;
           const nodeSelectable = !stackHidden && !stackMarker;
           const nodeFocusable = !stackHidden && !stackMarker;
           const nodeConnectable = !stackHidden && !stackMarker;
