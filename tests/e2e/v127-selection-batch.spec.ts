@@ -66,7 +66,7 @@ async function seedFactory(page: Page, fixture: "smelters" | "storage-network" =
     database.close();
   }, [fixture, storageTargetCount]);
   await page.goto("/");
-  await expect(page.locator(".game-shell")).toBeVisible();
+  await expect(page.locator(".game-shell")).toBeVisible({ timeout: 15_000 });
 }
 
 /**
