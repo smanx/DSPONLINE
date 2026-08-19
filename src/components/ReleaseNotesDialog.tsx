@@ -637,7 +637,7 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
             className="release-notes-scroll"
             ref={releaseScrollRef}
             role="region"
-            aria-label={`${selectedRelease.version} 更新详情`}
+            aria-label={`${selectedRelease.version} ${selectedRelease.title}`}
             tabIndex={0}
             onScroll={(event) => { historyScrollTopRef.current = event.currentTarget.scrollTop; }}
           >
