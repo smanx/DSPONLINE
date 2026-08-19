@@ -22,6 +22,10 @@ const requestedReleaseChannel = process.env.VITE_RELEASE_CHANNEL?.trim().toLower
 const releaseChannel = requestedReleaseChannel === "beta" || requestedReleaseChannel === "nightly" ? requestedReleaseChannel : "stable";
 const apiProxyTarget = process.env.DSP_API_PROXY_TARGET?.trim() || "http://127.0.0.1:4320";
 
+export function resolveAssetBase(platform: string): string {
+  return platform === "web" ? "/" : "./";
+}
+
 export function resolveVersionGeneratedAt(
   sourceDateEpoch = process.env.SOURCE_DATE_EPOCH,
   now = new Date(),
@@ -73,9 +77,10 @@ function emitVersionMetadata(): Plugin {
 }
 
 export default defineConfig({
-  // Relative assets are required by the packaged file:// Electron shell and
-  // remain valid for the root-served web/PWA build.
-  base: "./",
+  // Browser history routes such as /station/:publicId must still resolve the
+  // Web entry chunks from the origin root. Packaged file:// shells continue
+  // to require relative assets, so keep that behavior only for native builds.
+  base: resolveAssetBase(appPlatform),
   plugins: [scaleUiFontSizes(), react(), emitVersionMetadata()],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),

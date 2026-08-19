@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { createInitialState, placeBuilding } from "../../src/game/engine";
 
 const RELEASE_NOTE_ID = "2026-08-14-v1.0.42";
 const PUBLIC_ID = `station_${"a".repeat(32)}`;
@@ -152,66 +153,41 @@ async function openDesktopStation(page: Page, viewport = { width: 1366, height: 
 }
 
 async function installInteractiveFactoryWithOperationalStation(page: Page) {
-  await page.addInitScript(({ releaseNoteId }) => {
+  let state = createInitialState(47_146, false);
+  state.paused = true;
+  state.construction.storage_mk1 = 2;
+  state.construction.conveyor_belt_mk1 = 20;
+  state = placeBuilding(state, "storage_mk1", { x: -180, y: -60 });
+  state = placeBuilding(state, "storage_mk1", { x: 180, y: -60 });
+  const storage = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+  if (storage.length !== 2) throw new Error("interactive station fixture placement failed");
+  storage[0].storedItemId = "iron_ore";
+  storage[0].outputs.iron_ore = 100;
+  storage[1].storedItemId = "iron_ore";
+  state.orbitalStation = {
+    ...state.orbitalStation,
+    status: "operational",
+    construction: {
+      ...state.orbitalStation.construction,
+      stageRequirements: state.orbitalStation.construction.stageRequirements.map((stage) => ({
+        ...stage,
+        delivered: Object.fromEntries(stage.costs.map((cost) => [cost.itemId, cost.amount])),
+        deliveredFleet: { ...stage.fleetCosts },
+      })),
+    },
+    economy: {
+      ...state.orbitalStation.economy,
+      stationReputation: "5000",
+    },
+  };
+  const entityIds = storage.map((entity) => entity.id);
+  const raw = JSON.stringify({ savedAt: Date.now(), state });
+  await page.addInitScript(({ releaseNoteId, save }) => {
     sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     localStorage.setItem("dsp-idle-network.release-notes.seen.v1", releaseNoteId);
     localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
-  }, { releaseNoteId: RELEASE_NOTE_ID });
-  await page.goto("/version.json");
-  const entityIds = await page.evaluate(async () => {
-    const { createInitialState, placeBuilding } = await import("/src/game/engine.ts");
-    let state = createInitialState(47_146, false);
-    state.paused = true;
-    state.construction.storage_mk1 = 2;
-    state.construction.conveyor_belt_mk1 = 20;
-    state = placeBuilding(state, "storage_mk1", { x: -180, y: -60 });
-    state = placeBuilding(state, "storage_mk1", { x: 180, y: -60 });
-    const storage = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
-    if (storage.length !== 2) throw new Error("interactive station fixture placement failed");
-    storage[0].storedItemId = "iron_ore";
-    storage[0].outputs.iron_ore = 100;
-    storage[1].storedItemId = "iron_ore";
-    const completedStages = state.orbitalStation.construction.stageRequirements.map((stage) => ({
-      ...stage,
-      delivered: Object.fromEntries(stage.costs.map((cost) => [cost.itemId, cost.amount])),
-      deliveredFleet: { ...stage.fleetCosts },
-    }));
-    state.orbitalStation = {
-      ...state.orbitalStation,
-      status: "operational",
-      construction: {
-        ...state.orbitalStation.construction,
-        stageRequirements: completedStages,
-      },
-      economy: {
-        ...state.orbitalStation.economy,
-        stationReputation: "5000",
-      },
-    };
-    const raw = JSON.stringify({ savedAt: Date.now(), state });
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("dsp-idle-network.local-saves");
-      request.onupgradeneeded = () => {
-        if (!request.result.objectStoreNames.contains("records")) request.result.createObjectStore("records", { keyPath: "key" });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction("records", "readwrite");
-      transaction.objectStore("records").put({
-        key: "dsp-idle-network.save.v1",
-        value: raw,
-        updatedAt: Date.now(),
-        bytes: new TextEncoder().encode(raw).byteLength,
-      });
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-      transaction.onabort = () => reject(transaction.error);
-    });
-    database.close();
-    return storage.map((entity) => entity.id);
-  });
+    localStorage.setItem("dsp-idle-network.save.v1", save);
+  }, { releaseNoteId: RELEASE_NOTE_ID, save: raw });
   await page.goto("/");
   await expect(page.locator(".game-shell")).toBeVisible();
   await page.locator(".factory-canvas .react-flow__controls-fitview").click();
@@ -366,8 +342,15 @@ test("returning from the station canvas preserves factory drag, selection, and c
 
 test("station workspace stays contained at both required desktop viewports", async ({ page }) => {
   test.setTimeout(90_000);
+  await installOperationalStationSave(page);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/");
+  await expect(page.locator(".game-shell")).toBeVisible();
   for (const viewport of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
-    const workspace = await openDesktopStation(page, viewport);
+    await page.setViewportSize(viewport);
+    await page.getByRole("button", { name: /打开全星系空间站/ }).click();
+    const workspace = page.getByRole("dialog", { name: "全星系空间站" });
+    await expect(workspace).toBeVisible();
     await expectContained(page, ".orbital-station-workspace");
     await page.screenshot({ path: `artifacts/qa/orbital-station-${viewport.width}x${viewport.height}.png`, fullPage: true });
     await workspace.getByRole("button", { name: "返回工厂画布", exact: true }).click();
@@ -439,6 +422,8 @@ test("public station direct link loads only the strict read-only snapshot", asyn
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto(`/station/${PUBLIC_ID}`);
   await expect(page.getByText("公开白糖港", { exact: true })).toBeVisible();
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
+  expect(await page.evaluate(async () => (await fetch(document.querySelector<HTMLLinkElement>('link[rel="manifest"]')!.href)).status)).toBe(200);
   await expect(page.locator(".station-canvas-renderer--readonly")).toBeVisible();
   await expect(page.getByText("安全聚合数据", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /收藏/ })).toBeDisabled();
