@@ -158,17 +158,19 @@ const abnormalVeinMachineCount = Boolean(
 
 ### 求解一组自洽字段（耦合关系）
 
-`galaxy` 是 power/upload/dyson/throughput 的加权和，`white-rate` 又依赖元神档增量，因此 6 榜相互耦合：
+`galaxy` 是 power/upload/dyson/throughput 的加权和，`white-rate` 又依赖相邻两档的增量，因此 6 榜相互耦合。脚本的实际做法（与自动防回滚门兼容）如下：
 
-- **先取当前在榜数值作为基线**（每个 category 调 `/leaderboard` 拿到该账号的 `value`）。这是"硬性规则"的不可下破底线。
-- **随机数只能取不劣于当前的档位**：允许名次集合 = `[2, 6] ∩ [1, 当前名次]`。若当前为第 1 名，则只能保持第 1 名（不调）。
-- 先定 `power(E)`、`upload(U)`、`throughput(T)`、`white(W)` 四个目标值：取所选档位区间中点后，再用 `clampUp = max(中点, 当前值)` 兜底，**绝不低于当前值**。
-- `galaxy = base + dyson/100`，`base = E/1e6 + 12×U + 8×T + const`。`G` 同样 `clampUp`；dyson 由 `D = (G - base) × 100` 反解（因 `G ≥ 当前G` 且 `base ≥ 当前base`，必有 `D ≥ 当前D`，无需单独再取档位）。
-- 白糖：`W = (wmB - wmA) × 60 / Δelapsed`，`wmB = U`，反解 `wmA = wmB − W×Δelapsed/60`，并保证 `wmA ≥ 0`。`W` 已 `clampUp`，速率不低于当前。
-- `E = genKw × elapsedB/1000`，选定 `elapsedB` 后反解 `generationKw`。
+- **A 档 = 当前主档原样（只作窗口基准），B 档 = 目标值**，且 B 相对 A 必须单调（`elapsedSeconds` 与全部 `totalProduced.*` 只增不降，容差 1e-6）。上传 A、B 后，`white-rate` / `throughput` 由服务端用 **rev(N+1)=A → rev(N+2)=B** 的相邻窗口重算，`Δelapsed = elapsedB − elapsedA`。
+- **power**：`E = round2(norm(genKw) × norm(elapsedB/1000))`。先取 `elapsedB = 当前elapsed + 600`（最小窗口，保证 white-rate/throughput 有 ≥60s 的合法增量窗口），再反解 `genKw`（两位小数），使 `E` **严格落在 (第N名值, 第N−1名值) 的区间内**，并尽量贴近区间中点留余量（防止榜单小幅波动导致掉名次）。**只要 `E` 落进区间名次就是 N，不必与整数目标精确相等。**
+- **white-rate**：`wmB = wmA + ceil(W × Δ/60)`（`wmA` = 当前 wm，即 A 档的值），于是实际速率 `(wmB−wmA)×60/Δ ≈ W`，落在目标区间。
+- **upload**：数值就是 `wmB`（由 white-rate 顺带决定，不单独取值）。当当前 upload 已 ≥ 第 N−1 名（只增不降无法下调到 N）时标记为 keep，实际落位随 wmB 自然上移。
+- **throughput**：`总产量增量 = ceil(T × Δ/60)`，其中白矩阵增量已由 wm 变化贡献，剩余缺口用 `iron_ore` 补齐（`ironDelta = 总增量 − wm增量`），实际速率 `总增量×60/Δ ≈ T`。
+- **galaxy**：`G = round(E/1e6 + 12×wm + dyson/100 + 8×T + const)`。galaxy 目标为 **exact** 时反解 `dysonSphere.generationKw`，使 `G` 落在 (第N名值, 第N−1名值) 区间（优先让 dyson 也同时落在其区间）；galaxy 为 **keep**（当前值已 ≥ 第 N−1 名，无法下调）时**保持 dyson 不动**，`G` 随 power/upload/throughput 的变化自然落位（仍 ≥ 当前值，只增不降）。
 - **落库前逐指标断言 `target ≥ 当前值`**，任一不满足则中止（不写入）。
 
-> 小结：本方法的每一步都内置"只增不降"的硬约束，随机名次被限制在"不比当前差"的档位内，数值再做一次 `clampUp` 兜底，并带断言保护。
+> 小结：每一步都内置"只增不降"的硬约束；数值一律按**"落在目标名次的数值区间"**判定，而非"精确命中某个整数"。
+>
+> **精确命中是踩过的坑（2026-08 修复）**：旧版脚本对 power 要求 `genKw × norm(elapsedB/1000) === 整数目标` 的 IEEE-754 精确相等，本质是数值巧合——一旦榜单值变化（例如 power 原来被榜首并列群挡住、脚本走 keep 分支，如今并列群散开、power 变成独立名次需要反解），搜索必然空手而归，报 `未找到满足浮点精确的 (elapsedB, genKw) 组合`。改区间命中后对任意榜单形状都能稳健反解。
 
 ### Node 实现骨架
 

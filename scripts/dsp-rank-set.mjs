@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // DSP Online 排行榜名次一键修改脚本
 // 用法: node dsp-rank-set.mjs <用户名> <密码> <目标名次> [--verbose]
-// 流程: 登录 -> 拉取6榜+主档 -> 计算各榜目标档位(含并列群检测/只增不降/浮点精确反解)
+// 流程: 登录 -> 拉取6榜+主档 -> 计算各榜目标档位(含并列群检测/只增不降/区间反解)
 //       -> 退出排行榜 -> 上传基准档A -> 上传目标档B -> 重新加入 -> 验证名次
 "use strict";
 const BASE = "https://dsponline.cn";
@@ -74,16 +74,6 @@ function serverE(genKw, elapsed) {
   const g = normMetric(genKw);
   const e = normMetric(elapsed / 1000);
   return g === 0 || e === 0 ? 0 : g * e;
-}
-function galaxyScore(metrics) {
-  return Math.round(
-    metrics.energyGeneratedMj / 1_000_000 +
-    metrics.uploadedWhiteMatrix * 12 +
-    metrics.peakDysonPowerKw / 100 +
-    metrics.peakThroughputPerMinute * 8 +
-    metrics.exploredSystems * 10_000 +
-    metrics.colonizedPlanets * 2_000,
-  );
 }
 
 // ---------- 目标档位计算 ----------
@@ -181,24 +171,47 @@ async function main() {
   const curWm = Math.floor(Number(state0.totalProduced?.universe_matrix ?? 0));
   const curIron = Number(state0.totalProduced?.iron_ore ?? 0);
   const E_target = targets.power.value;
-  const U_target = targets.upload.value;          // wmB
   const W_target = targets["white-rate"].value;
   const T_target = targets.throughput.value;
   const G_target = targets.galaxy.value;
 
-  // 4a. 搜索 (elapsedB, genKw): genKw 整数, norm(elapsedB/1000) 两位小数, genKw*e === E_target 精确
+  // 4a. 反解 (elapsedB, genKw): 让服务端重算出的 power = round2(norm(genKw) x norm(elapsedB/1000))
+  //     严格落在区间 (第N名值, 第N-1名值) 内即可, 并尽量贴近目标中点留出余量。
+  //     注意: 不再要求与整数目标"浮点精确相等"——那依赖 IEEE754 巧合, 榜单值一变就无解。
   const curElapsed = state0.elapsedSeconds;
+  const curGenKw = state0.metrics?.generationKw ?? 0;
+  const curE = normMetric(serverE(curGenKw, curElapsed));
+  const powValues = boards.power.map((e) => e.value);
+  const pN = powValues[N - 1];
+  const pNm = N >= 2 ? powValues[N - 2] : Infinity;
   let hit = null;
-  for (let step = 0; step < 300000; step++) {
-    const elapsedB = curElapsed + WINDOW_START + step * 0.01;
-    const eNorm = normMetric(elapsedB / 1000);
-    const g = E_target / eNorm;
-    if (Number.isInteger(g) && normMetric(g) === g && g * eNorm === E_target) { hit = { elapsedB, g }; break; }
+  if (targets.power.strategy === "exact") {
+    for (let step = 0; step < 300000 && !hit; step++) {
+      const elapsedB = curElapsed + WINDOW_START + step * 0.01;
+      const eNorm = normMetric(elapsedB / 1000);
+      if (!(eNorm > 0)) continue;
+      const gMid = Math.max(1, Math.round((E_target / eNorm) * 100) / 100);
+      let best = null;
+      for (let i = -6; i <= 6; i++) {
+        const gg = Math.round((gMid + i * 0.01) * 100) / 100;
+        const E = normMetric(gg * eNorm);
+        if (E > pN && E < pNm && E >= curE - 1e-9) {
+          if (!best || Math.abs(E - E_target) < Math.abs(best.E - E_target)) best = { elapsedB, g: gg, E };
+        }
+      }
+      if (best) hit = best;
+    }
+    if (!hit) {
+      await fail(`power 目标区间 (${pN}, ${pNm}) 在 ${(300000 * 0.01).toFixed(0)}s 窗口内找不到可达值(区间过窄或目标已不可达), 请检查榜单或稍后重试`);
+    }
+  } else {
+    // keep / join-group: 保持 power 数值不变, elapsed 只走最小窗口供 white-rate/throughput 增量
+    hit = { elapsedB: curElapsed + WINDOW_START, g: curGenKw, E: null };
   }
-  if (!hit) { await fail("未找到满足浮点精确的 (elapsedB, genKw) 组合,请检查目标值或稍后重试"); }
   const { elapsedB, g: genKwB } = hit;
   const deltaElapsed = elapsedB - curElapsed;
-  dbg(`elapsedB=${elapsedB} genKw=${genKwB} delta=${deltaElapsed} E=${serverE(genKwB, elapsedB)}`);
+  const E_b = normMetric(serverE(genKwB, elapsedB));
+  dbg(`elapsedB=${elapsedB} genKw=${genKwB} delta=${deltaElapsed} power=${E_b} 区间=(${pN}, ${pNm})`);
 
   // 4b. white-rate: wmB = wmA + W*Δ/60 (wmA = 当前wm)
   const wmA = curWm;
@@ -207,16 +220,16 @@ async function main() {
 
   // 4c. throughput: 总增量(含wm增量) = T*Δ/60 -> ironDelta 补齐
   const totalDelta = Math.ceil((T_target * deltaElapsed) / 60);
-  const ironDelta = totalDelta - (wmB - wmA);
+  const ironDelta = Math.max(1, totalDelta - (wmB - wmA));   // 保证总产量增量不<0,守住"只增不降"
   const T_actual = ((wmB - wmA) + ironDelta) * 60 / deltaElapsed;
 
-  // 4d. galaxy 反解 dyson: 精确模拟服务端计算链
-  //  服务端: saturatingMetricAdd(E/1e6, 12U, D/100, 8T, 8*1e4, 16*2e3) -> round
-  //  D = dysonSwarm.generationKw + dysonSphere.generationKw,其中 sphereB 经 normMetric 大数舍入
+  // 4d. galaxy/dyson 反解: 精确模拟服务端 galaxy 计算链
+  //  服务端: terms=[E/1e6, 12*wm, D/100, 8*T, systems*1e4, planets*2e3] -> 逐项 norm->saturatingAdd -> round
+  //  D = dysonSwarm.generationKw + dysonSphere.generationKw (sphereB 经 normMetric 两位小数舍入)
   function serverGalaxy(sphereB) {
     const D_eff = normMetric(sphereB) + normMetric(swarmKw);
     const terms = [
-      E_target / 1e6,
+      E_b / 1e6,
       normMetric(wmB) * 12,
       D_eff / 100,
       normMetric(T_actual) * 8,
@@ -227,18 +240,46 @@ async function main() {
     for (const t of terms) total = normMetric(total) + normMetric(t);
     return Math.round(total);
   }
-  const D_est = (G_target - Math.round(E_target / 1e6 + 12 * wmB + 8 * T_actual + exploredSystems * 10000 + colonizedPlanets * 2000)) * 100 - swarmKw;
+  const curSphereKw = state0.dysonSphere?.generationKw ?? 0;
+  const curDys = normMetric(curSphereKw) + normMetric(swarmKw); // 当前 dyson 值(只增不降底线)
+  const galValues = boards.galaxy.map((e) => e.value);
+  const dysValues = boards.dyson.map((e) => e.value);
+  const gN = galValues[N - 1];
+  const gNm = N >= 2 ? galValues[N - 2] : Infinity;
+  const dN = dysValues[N - 1];
+  const dNm = N >= 2 ? dysValues[N - 2] : Infinity;
   let sphereB = null;
-  for (let off = -20000; off <= 20000; off++) {
-    const s = D_est + off;
-    if (serverGalaxy(s) === G_target) { sphereB = s; break; }
+  let D_B = null;
+  if (targets.galaxy.strategy === "exact") {
+    // 反解: 优先让 galaxy 与 dyson 同时落在目标区间, 退而求其次只保证 galaxy
+    const base = Math.round(E_b / 1e6 + 12 * wmB + 8 * T_actual + exploredSystems * 10000 + colonizedPlanets * 2000);
+    const D_est = (G_target - base) * 100 - swarmKw;
+    for (const needDysonRank of [true, false]) {
+      for (let off = -200000; off <= 200000 && sphereB === null; off++) {
+        const s = D_est + off;
+        if (s < 0) continue;
+        const gal = serverGalaxy(s);
+        const D = normMetric(s) + normMetric(swarmKw);
+        const galOk = gal > gN && gal < gNm;
+        const dysOk = dNm === Infinity || (D > dN && D < dNm);
+        if (galOk && (!needDysonRank || dysOk)) { sphereB = s; D_B = D; break; }
+      }
+    }
+    if (sphereB === null) {
+      await fail(`galaxy 目标区间 (${gN}, ${gNm}) 无法在 ±200000 内反解出 dyson, 请检查榜单或稍后重试`);
+    }
+  } else {
+    // keep / join-group: 保持 dyson 不变, galaxy 自然落位(不强行反解, 避免大幅改动 dyson 类别)
+    sphereB = curSphereKw;
+    D_B = curDys;
   }
-  if (sphereB === null) { await fail(`galaxy=${G_target} 无法反解出 dyson(±20000内无精确解,可调参重试)`); }
-  const D_B = normMetric(sphereB) + normMetric(swarmKw);
+  if (D_B < curDys - 1e-6) {
+    await fail(`dyson 反解结果 ${D_B} 低于当前值 ${curDys}, 违反只增不降, 已中止`);
+  }
   log(`  elapsedB=${elapsedB}  genKw=${genKwB}`);
   log(`  wmA=${wmA} wmB=${wmB}  white-rate实际=${W_actual} 目标=${W_target}`);
   log(`  ironDelta=${ironDelta}  throughput实际=${T_actual} 目标=${T_target}`);
-  log(`  dyson反解=${D_B}  galaxy校验=${serverGalaxy(sphereB)} (目标${G_target})`);
+  log(`  galaxy=${targets.galaxy.strategy}  dyson=${D_B}  galaxy校验=${serverGalaxy(sphereB)} (目标${G_target})`);
 
   // 5. 构建 A/B 档
   log(`[5/7] 构建并上传存档 ...`);
@@ -247,7 +288,7 @@ async function main() {
   stateB.elapsedSeconds = elapsedB;
   stateB.metrics.generationKw = genKwB;
   stateB.totalProduced.universe_matrix = wmB;
-  stateB.totalProduced.iron_ore = curIron + ironDelta;
+  stateB.totalProduced.iron_ore = Math.floor(curIron) + ironDelta;
   stateB.dysonSphere.generationKw = sphereB;
   // A档 = 原档不动(窗口基准);校验单调
   const bad = [];
