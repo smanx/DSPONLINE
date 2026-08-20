@@ -57,20 +57,32 @@ import type { AutomaticPerformanceReport } from "../game/benchmark";
 import { NativeUpdateCard } from "./NativeUpdateCard";
 import type { AutosaveIntervalSeconds, CargoStackSize, DefaultBeltRouteMode, DifficultyMode, FontScale, GameSettings, GameState, SimulationSpeed } from "../game/types";
 import { canSetBeltStackSize } from "../game/engine";
-import { validateBuildingBufferLimitInput, validateProliferatorBufferLimitInput, type BuildingBufferLimitValidation } from "../game/settings";
+import { validateBuildingBufferLimitInput, validateDefaultBeltLanesInput, validateProliferatorBufferLimitInput, type BuildingBufferLimitValidation } from "../game/settings";
 import { PRODUCTION_REFRESH_PROFILES, type ProductionRefreshPreference } from "../game/productionRefresh";
 import { getPerformancePeaks, getPerformancePhaseShares, type PerformanceMonitorSnapshot } from "../game/performanceMonitor";
+import type { LargeSaveAutosavePolicy } from "../game/largeSaveAutosavePolicy";
 import { clearClientErrors, collectClientDiagnostics, downloadDiagnostics, getClientErrors } from "../game/diagnostics";
 import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type CloudPublicStatus } from "../game/cloud";
 import { resetOnboarding } from "../game/onboarding";
 import { applyPwaUpdate, getPwaRuntimeState, requestPwaInstall, subscribePwaRuntime, type PwaRuntimeState } from "../pwa";
-import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
+import { pwaUpdateStatusCopy } from "../pwaStatusCopy";
+import { getCurrentReleaseNotes } from "../i18n/releaseNotes";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useAppLocale } from "../i18n/locale";
 import { useGameDialog } from "./GameDialogProvider";
 import { LogisticsManagementPanel, type LogisticsManagementPanelProps } from "./LogisticsManagementPanel";
+import { WorkspaceFrame } from "./WorkspaceFrame";
+import { StableTextArea, clearStableTextDraft } from "./CompositionSafeInput";
 import type { CanvasPerformanceFeatureId, CanvasPerformanceFeatures } from "../game/endgamePerformance";
-import { readSettingsCategoryPreference, writeSettingsCategoryPreference, type ConnectionPointSize, type SettingsCategory } from "../game/uiPreferences";
+import type {
+  CanvasDetailPreference,
+  CanvasDetailStage,
+  CanvasInteractionDetailPreference,
+  CanvasOverlapPreference,
+} from "../game/canvasDensityPresentation";
+import { CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE } from "../game/canvasDensityPresentation";
+import { readSettingsCategoryPreference, writeSettingsCategoryPreference, type ConnectionHitArea, type ConnectionPointSize, type SettingsCategory } from "../game/uiPreferences";
+import { deleteLocalSaveManagedEntries, dismissLocalSaveRecoveryPrompt, requestLocalSavePersistentStorage, subscribeLocalSaveStorageStatus } from "../game/localSaveStore";
 
 export type OperationsTab = "alerts" | "achievements" | "logistics" | "settings" | "performance" | "saves" | "packs" | "support";
 
@@ -79,6 +91,7 @@ interface OperationsWorkspaceProps {
   tab: OperationsTab;
   game: GameState;
   alerts: FactoryAlert[];
+  alertCount: number;
   slots: SaveSlotSummary[];
   snapshots: SaveSnapshotSummary[];
   importPreview: SaveInspection | null;
@@ -89,14 +102,41 @@ interface OperationsWorkspaceProps {
   productionRefreshIntervalMs: number;
   endgameExtremeMode: boolean;
   onEndgameExtremeModeChange: (enabled: boolean) => void;
+  connectExpandAll: boolean;
+  onConnectExpandAllChange: (enabled: boolean) => void;
+  fullRealtimeSimulation: boolean;
+  onFullRealtimeSimulationChange: (enabled: boolean) => void;
+  factoryAlertsEnabled: boolean;
+  onFactoryAlertsEnabledChange: (enabled: boolean) => void;
+  largeSaveAutosaveProtection: boolean;
+  largeSaveAutosavePolicy: LargeSaveAutosavePolicy;
+  onLargeSaveAutosaveProtectionChange: (enabled: boolean) => void;
+  allowEditsDuringSave: boolean;
+  onAllowEditsDuringSaveChange: (enabled: boolean) => void;
+  blueprintAllowOverlap: boolean;
+  onBlueprintAllowOverlapChange: (enabled: boolean) => void;
+  canvasDetailPreference: CanvasDetailPreference;
+  canvasOverlapPreference: CanvasOverlapPreference;
+  canvasInteractionDetailPreference: CanvasInteractionDetailPreference;
+  canvasDetailStage: CanvasDetailStage;
+  canvasVisibleNodeCount: number;
+  canvasStackGroupCount: number;
+  canvasStackHiddenCount: number;
+  onCanvasDetailPreferenceChange: (preference: CanvasDetailPreference) => void;
+  onCanvasOverlapPreferenceChange: (preference: CanvasOverlapPreference) => void;
+  onCanvasInteractionDetailPreferenceChange: (preference: CanvasInteractionDetailPreference) => void;
   canvasPerformanceFeatures: CanvasPerformanceFeatures;
   onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void;
   lineFindMode: boolean;
   connectionPointSize: ConnectionPointSize;
+  connectionHitArea: ConnectionHitArea;
+  defaultBeltLanes: number;
   showRunLog: boolean;
   showItemHover: boolean;
   onLineFindModeChange: (enabled: boolean) => void;
   onConnectionPointSizeChange: (size: ConnectionPointSize) => void;
+  onConnectionHitAreaChange: (size: ConnectionHitArea) => void;
+  onDefaultBeltLanesChange: (lanes: number) => void;
   onRunLogChange: (enabled: boolean) => void;
   onItemHoverChange: (enabled: boolean) => void;
   performanceMonitor: PerformanceMonitorSnapshot;
@@ -120,6 +160,8 @@ interface OperationsWorkspaceProps {
   onLoadSlot: (slotId: SaveSlotId) => void;
   onDeleteSlot: (slotId: SaveSlotId) => void;
   onCreateSnapshot: () => void;
+  onAddSecondUnipolarVein: () => void;
+  unipolarExpansionBusy: boolean;
   onLoadSnapshot: (snapshotId: string) => void;
   onDeleteSnapshot: (snapshotId: string) => void;
   onDeleteSnapshots: (snapshotIds: string[]) => void;
@@ -153,7 +195,7 @@ function formatRuntime(seconds: number): string {
   return hours > 0 ? `${hours} 小时 ${minutes} 分` : `${minutes} 分钟`;
 }
 
-function AlertsPanel({ alerts, onSelect, onOpenTutorial }: { alerts: FactoryAlert[]; onSelect: (alert: FactoryAlert) => void; onOpenTutorial: (sectionId?: string) => void }) {
+function AlertsPanel({ alerts, enabled, onSelect, onOpenTutorial }: { alerts: FactoryAlert[]; enabled: boolean; onSelect: (alert: FactoryAlert) => void; onOpenTutorial: (sectionId?: string) => void }) {
   const criticalCount = alerts.filter((alert) => alert.severity === "critical").length;
   return (
     <div className="operations-panel operations-alerts">
@@ -164,7 +206,13 @@ function AlertsPanel({ alerts, onSelect, onOpenTutorial }: { alerts: FactoryAler
           <span><Bell size={13} />全部 <strong>{alerts.length}</strong></span>
         </div>
       </header>
-      {alerts.length === 0 ? (
+      {!enabled ? (
+        <div className="operations-empty">
+          <Bell size={28} />
+          <strong>工厂运行警报已关闭</strong>
+          <span>可在“设置 → 性能”重新开启；关闭时不会扫描全星区设备状态</span>
+        </div>
+      ) : alerts.length === 0 ? (
         <div className="operations-empty">
           <CheckCircle2 size={28} />
           <strong>生产网络运行正常</strong>
@@ -280,9 +328,45 @@ function BufferLimitSetting({ label, value, onChange, presets = BUFFER_LIMIT_PRE
   </section>;
 }
 
-function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, canvasPerformanceFeatures, onEndgameExtremeModeChange, onCanvasPerformanceFeatureChange, lineFindMode, onLineFindModeChange, connectionPointSize, onConnectionPointSizeChange, showRunLog, onRunLogChange, showItemHover, onItemHoverChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; canvasPerformanceFeatures: CanvasPerformanceFeatures; onEndgameExtremeModeChange: (enabled: boolean) => void; onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void; lineFindMode: boolean; onLineFindModeChange: (enabled: boolean) => void; connectionPointSize: ConnectionPointSize; onConnectionPointSizeChange: (size: ConnectionPointSize) => void; showRunLog: boolean; onRunLogChange: (enabled: boolean) => void; showItemHover: boolean; onItemHoverChange: (enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
+function DefaultBeltLanesSetting({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const presets = [1, 2, 4] as const;
+  const preset = presets.includes(value as (typeof presets)[number]);
+  const [customEditing, setCustomEditing] = useState(!preset);
+  const [draft, setDraft] = useState(String(value));
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setDraft(String(value));
+    setCustomEditing(!presets.includes(value as (typeof presets)[number]));
+    setError(null);
+  }, [value]);
+  const submit = () => {
+    const result = validateDefaultBeltLanesInput(draft);
+    if (!result.ok) {
+      setError(result.reason);
+      return;
+    }
+    setError(null);
+    onChange(result.value);
+  };
+  return <div className="settings-belt-lanes">
+    <label><span>默认并联数量</span><strong>{value.toLocaleString("zh-CN")} / 4,096</strong></label>
+    <div className="settings-segmented" aria-label="新建传送带默认并联数量">
+      {presets.map((lanes) => <button className={!customEditing && value === lanes ? "active" : ""} type="button" aria-pressed={!customEditing && value === lanes} key={lanes} onClick={() => { setCustomEditing(false); setError(null); onChange(lanes); }}>×{lanes}</button>)}
+      <button className={customEditing || !preset ? "active" : ""} type="button" aria-pressed={customEditing || !preset} onClick={() => { setCustomEditing(true); setDraft(String(value)); setError(null); }}>自定义</button>
+    </div>
+    {customEditing || !preset ? <div className="settings-buffer-custom">
+      <label><span>1～4,096</span><input type="text" inputMode="numeric" pattern="[0-9]*" value={draft} onChange={(event) => { setDraft(event.target.value); setError(null); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submit(); } }} aria-invalid={Boolean(error)} aria-label="新建传送带默认并联数量自定义值" /></label>
+      <button type="button" onClick={submit}>应用</button>
+    </div> : null}
+    <button className="settings-reset-inline" type="button" disabled={value === 1} onClick={() => onChange(1)}><RotateCcw size={13} />恢复默认 ×1</button>
+    {error ? <p className="settings-buffer-error" role="alert">{error}</p> : null}
+  </div>;
+}
+
+function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, connectExpandAll, fullRealtimeSimulation, factoryAlertsEnabled, largeSaveAutosaveProtection, largeSaveAutosavePolicy, blueprintAllowOverlap, canvasDetailPreference, canvasOverlapPreference, canvasInteractionDetailPreference, canvasDetailStage, canvasVisibleNodeCount, canvasStackGroupCount, canvasStackHiddenCount, canvasPerformanceFeatures, onEndgameExtremeModeChange, onConnectExpandAllChange, onFullRealtimeSimulationChange, onFactoryAlertsEnabledChange, onLargeSaveAutosaveProtectionChange, allowEditsDuringSave, onAllowEditsDuringSaveChange, onBlueprintAllowOverlapChange, onCanvasDetailPreferenceChange, onCanvasOverlapPreferenceChange, onCanvasInteractionDetailPreferenceChange, onCanvasPerformanceFeatureChange, lineFindMode, onLineFindModeChange, connectionPointSize, onConnectionPointSizeChange, connectionHitArea, onConnectionHitAreaChange, defaultBeltLanes, onDefaultBeltLanesChange, showRunLog, onRunLogChange, showItemHover, onItemHoverChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; connectExpandAll: boolean; fullRealtimeSimulation: boolean; factoryAlertsEnabled: boolean; largeSaveAutosaveProtection: boolean; largeSaveAutosavePolicy: LargeSaveAutosavePolicy; blueprintAllowOverlap: boolean; canvasDetailPreference: CanvasDetailPreference; canvasOverlapPreference: CanvasOverlapPreference; canvasInteractionDetailPreference: CanvasInteractionDetailPreference; canvasDetailStage: CanvasDetailStage; canvasVisibleNodeCount: number; canvasStackGroupCount: number; canvasStackHiddenCount: number; canvasPerformanceFeatures: CanvasPerformanceFeatures; onEndgameExtremeModeChange: (enabled: boolean) => void; onConnectExpandAllChange: (enabled: boolean) => void; onFullRealtimeSimulationChange: (enabled: boolean) => void; onFactoryAlertsEnabledChange: (enabled: boolean) => void; onLargeSaveAutosaveProtectionChange: (enabled: boolean) => void; allowEditsDuringSave: boolean; onAllowEditsDuringSaveChange: (enabled: boolean) => void; onBlueprintAllowOverlapChange: (enabled: boolean) => void; onCanvasDetailPreferenceChange: (preference: CanvasDetailPreference) => void; onCanvasOverlapPreferenceChange: (preference: CanvasOverlapPreference) => void; onCanvasInteractionDetailPreferenceChange: (preference: CanvasInteractionDetailPreference) => void; onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void; lineFindMode: boolean; onLineFindModeChange: (enabled: boolean) => void; connectionPointSize: ConnectionPointSize; onConnectionPointSizeChange: (size: ConnectionPointSize) => void; connectionHitArea: ConnectionHitArea; onConnectionHitAreaChange: (size: ConnectionHitArea) => void; defaultBeltLanes: number; onDefaultBeltLanesChange: (lanes: number) => void; showRunLog: boolean; onRunLogChange: (enabled: boolean) => void; showItemHover: boolean; onItemHoverChange: (enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
   const { settings } = game;
   const { locale, setLocale } = useAppLocale();
+  const currentReleaseNotes = getCurrentReleaseNotes(locale);
   const gameDialog = useGameDialog();
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>(readSettingsCategoryPreference);
   useEffect(() => { writeSettingsCategoryPreference(settingsCategory); }, [settingsCategory]);
@@ -301,7 +385,7 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         ] as Array<[CanvasPerformanceFeatureId, string, string]>,
         help: "Each switch can be disabled independently; disabled features fall back to the current React Flow path. Visual reductions are inactive while extreme mode is off.",
       }
-    : {
+      : {
         ariaLabel: "画布优化独立回退开关",
         items: [
           ["renderProjection", "当前星球轻量快照", "安全优化"],
@@ -315,6 +399,14 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         ] as Array<[CanvasPerformanceFeatureId, string, string]>,
         help: "每项开关都可独立关闭；关闭后回退到当前 React Flow 路径。视觉降级项在极限模式关闭时不会生效。",
       };
+  const formatAutosaveInterval = (seconds: number) => seconds === 0
+    ? (locale === "en" ? "Off" : "关闭")
+    : seconds >= 60
+      ? `${seconds / 60} ${locale === "en" ? "min" : "分钟"}`
+      : `${seconds} ${locale === "en" ? "s" : "秒"}`;
+  const autosaveSizeLabel = largeSaveAutosavePolicy.persistedByteLength === null
+    ? (locale === "en" ? "size unknown" : "大小未知")
+    : `${(largeSaveAutosavePolicy.persistedByteLength / (1024 * 1024)).toFixed(1)} MiB`;
   return (
     <div className="operations-panel operations-settings" data-settings-category={settingsCategory}>
       <header className="operations-section-header">
@@ -390,12 +482,13 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
       </section>
       <section className="settings-group settings-belt-defaults" data-settings-category="visual interaction">
         <header><Settings2 size={14} /><span>新建传送带默认参数</span><small>仅影响新线路</small></header>
+        <DefaultBeltLanesSetting value={defaultBeltLanes} onChange={onDefaultBeltLanesChange} />
         <label><span>货物堆叠</span><div className="settings-segmented" aria-label="新建传送带默认货物堆叠">{([1, 2, 4] as CargoStackSize[]).map((stackSize) => <button className={settings.defaultBeltStackSize === stackSize ? "active" : ""} type="button" disabled={!canSetBeltStackSize(game, stackSize)} key={stackSize} onClick={() => onChange({ defaultBeltStackSize: stackSize })}>×{stackSize}</button>)}</div></label>
         <label><span>线路形状</span><div className="settings-segmented" aria-label="新建传送带默认线路形状">{(["auto", "bezier", "upper", "lower"] as DefaultBeltRouteMode[]).map((mode) => <button className={settings.defaultBeltRouteMode === mode ? "active" : ""} type="button" key={mode} onClick={() => onChange({ defaultBeltRouteMode: mode })}>{{ auto: "自动避让", bezier: "曲线", upper: "上绕", lower: "下绕" }[mode]}</button>)}</div></label>
-        <p className="settings-help">蓝图保留自身参数，并行线沿用原线路；未解锁的堆叠等级不可选择。</p>
+        <p className="settings-help">新线路会一次性消耗对应数量的同级传送带；材料不足时整条线路不会建立。蓝图保留高于默认值的并联数量，未解锁的货物堆叠等级不可选择。</p>
       </section>
       <section className="settings-group" data-settings-category="interaction">
-        <header><MousePointer2 size={14} /><span>建筑连接点与连线圆圈</span><small>视觉尺寸与点击范围同步</small></header>
+        <header><MousePointer2 size={14} /><span>建筑连接点与连线圆圈</span><small>视觉大小</small></header>
         <div className="settings-segmented" role="radiogroup" aria-label="建筑连接点尺寸">
           {(["default", "large25", "large50"] as const).map((size) => <button
             type="button"
@@ -405,7 +498,26 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
             onClick={() => onConnectionPointSizeChange(size)}
           >{size === "default" ? "默认" : size === "large25" ? "放大 25%" : "放大 50%"}</button>)}
         </div>
-        <p className="settings-help">端口、传送带端点和连接预览会一起放大；仅保存在本机，不进入存档。</p>
+        <p className="settings-help">只调整可见端口和连接预览大小；仅保存在本机，不进入存档。</p>
+        <header><MousePointer2 size={14} /><span>接口真实命中范围</span><small>{connectionHitArea === "auto" ? "自动适配（推荐）" : connectionHitArea === "standard" ? "标准" : connectionHitArea === "large" ? "放大" : "超大"}</small></header>
+        <div className="settings-segmented" role="radiogroup" aria-label="建筑接口真实命中范围">
+          {(["auto", "standard", "large", "huge"] as const).map((size) => <button type="button" key={size} className={connectionHitArea === size ? "active" : ""} aria-pressed={connectionHitArea === size} onClick={() => onConnectionHitAreaChange(size)}>{{ auto: "自动适配", standard: "标准", large: "放大", huge: "超大" }[size]}</button>)}
+        </div>
+        <p className="settings-help">透明命中区域不会遮挡建筑文字。自动档随缩放扩大；触控设备始终保证至少 56px 命中直径。</p>
+      </section>
+      <section className="settings-group settings-toggle-list" data-settings-category="interaction">
+        <ToggleSetting
+          checked={blueprintAllowOverlap}
+          label={locale === "en" ? "Allow overlapping placement" : "允许重叠放置"}
+          value={blueprintAllowOverlap
+            ? locale === "en" ? "Blueprints and dragging may share the same snapped position" : "蓝图与拖动均可使用同一吸附坐标"
+            : locale === "en" ? "Blueprints and dragging both reject exact overlaps" : "蓝图与拖动均拒绝精确重叠"}
+          icon={<MousePointer2 size={16} />}
+          onChange={onBlueprintAllowOverlapChange}
+        />
+        <p className={blueprintAllowOverlap ? "settings-warning" : "settings-help"} role={blueprintAllowOverlap ? "alert" : undefined}>{locale === "en"
+          ? "Device-only and off by default. Overlapping buildings remain separate entities and may appear as a canvas stack; saves and machine counts are never merged."
+          : "仅保存在当前设备且默认关闭。重叠建筑仍是独立实体，画布可能将其显示为堆叠；不会合并存档或机器数量。"}</p>
       </section>
       <div data-settings-category="performance">
       <BufferLimitSetting label="生产建筑缓存上限" value={settings.productionBufferLimit} onChange={(productionBufferLimit) => onChange({ productionBufferLimit })} />
@@ -415,9 +527,9 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         label="增产剂缓存上限"
         value={settings.proliferatorBufferLimit}
         onChange={(proliferatorBufferLimit) => onChange({ proliferatorBufferLimit })}
-        presets={[120, 600, 3_000]}
-        labels={{ 120: "120", 600: "600", 3_000: "3,000" }}
-        rangeLabel="1～100,000"
+        presets={[120, 600, 3_000, 1_000_000]}
+        labels={{ 120: "120", 600: "600", 3_000: "3,000", 1_000_000: "100万" }}
+        rangeLabel="1～100,000,000"
         validate={validateProliferatorBufferLimitInput}
         help="只限制已安装喷涂机当前等级的增产剂物品；内部喷涂点和既有超额库存不会被删除。"
       />
@@ -430,6 +542,74 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
           </button>)}
         </div>
         <p className="settings-help">只调整生产画面与状态发布节奏，不改变模拟时间、产量、物流、科研或戴森工程。固定档位不会被自动调节覆盖。</p>
+      </section>
+      <section className="settings-group settings-canvas-detail" data-settings-category="performance visual">
+        <header><Gauge size={14} /><span>{locale === "en" ? "Canvas detail" : "画布细节"}</span><small>{canvasDetailStage === "full" ? locale === "en" ? "Full" : "完整" : canvasDetailStage === "medium" ? locale === "en" ? "Medium" : "中等" : locale === "en" ? "Compact" : "紧凑"}</small></header>
+        <div className="canvas-detail-control">
+          <strong>{locale === "en" ? "Base cards" : "基础卡片"}</strong>
+          <div className="settings-segmented" role="radiogroup" aria-label={locale === "en" ? "Canvas base cards" : "画布基础卡片"}>
+            {(["auto", "full", "medium", "minimal"] as CanvasDetailPreference[]).map((preference) => <button
+              type="button"
+              role="radio"
+              aria-checked={canvasDetailPreference === preference}
+              className={canvasDetailPreference === preference ? "active" : ""}
+              onClick={() => onCanvasDetailPreferenceChange(preference)}
+              key={preference}
+            >{preference === "auto" ? locale === "en" ? "Auto" : "自动" : preference === "full" ? locale === "en" ? "Full" : "完整" : preference === "medium" ? locale === "en" ? "Medium" : "中等" : locale === "en" ? "One line" : "一行"}</button>)}
+          </div>
+          <small>{locale === "en"
+            ? "Auto is recommended. Fixed levels stay exact except for the uniform Full + All cards emergency guard above 480 visible nodes."
+            : `推荐自动档；固定档通常保持原样，仅“完整 + 全部卡片”超过 ${CANVAS_FULL_ALL_MEDIUM_SAFETY_VISIBLE} 个视口节点时启用统一安全级别。`}</small>
+        </div>
+        <div className="canvas-detail-control">
+          <strong>{locale === "en" ? "Overlapping buildings" : "重叠建筑显示"}</strong>
+          <div className="settings-segmented" role="radiogroup" aria-label={locale === "en" ? "Overlapping building presentation" : "重叠建筑显示方式"}>
+            {(["marker", "representative", "all"] as CanvasOverlapPreference[]).map((preference) => <button
+              type="button"
+              role="radio"
+              aria-checked={canvasOverlapPreference === preference}
+              className={canvasOverlapPreference === preference ? "active" : ""}
+              onClick={() => onCanvasOverlapPreferenceChange(preference)}
+              key={preference}
+            >{preference === "marker" ? locale === "en" ? "Count marker" : "数量标记" : preference === "representative" ? locale === "en" ? "Lead card" : "代表卡片" : locale === "en" ? "All cards" : "全部卡片"}</button>)}
+          </div>
+          <small>{canvasOverlapPreference === "marker"
+            ? locale === "en" ? "Recommended: one always-visible “Stack N” marker; members remain independent and selectable." : "推荐：每组始终显示一个“叠放 N”标记；成员仍是独立实体，可点击展开代表建筑。"
+            : canvasOverlapPreference === "representative"
+              ? locale === "en" ? "Shows one normal card with an explicit stack count." : "显示一张普通代表卡，并明确标注组内独立实体数量。"
+              : locale === "en" ? "Keeps every card in the render tree; identical coordinates can still cover one another." : "所有卡片都保留在渲染树中；完全相同坐标仍可能互相覆盖。"}</small>
+        </div>
+        <div className="canvas-detail-control">
+          <strong>{locale === "en" ? "Interaction expansion" : "交互展开"}</strong>
+          <div className="settings-segmented" role="radiogroup" aria-label={locale === "en" ? "Interaction card expansion" : "交互卡片展开方式"}>
+            {(["selected", "hover", "base"] as CanvasInteractionDetailPreference[]).map((preference) => <button
+              type="button"
+              role="radio"
+              aria-checked={canvasInteractionDetailPreference === preference}
+              className={canvasInteractionDetailPreference === preference ? "active" : ""}
+              onClick={() => onCanvasInteractionDetailPreferenceChange(preference)}
+              key={preference}
+            >{preference === "selected" ? locale === "en" ? "Selected only" : "仅选中" : preference === "hover" ? locale === "en" ? "Hover too" : "悬停也展开" : locale === "en" ? "Keep base" : "保持基础"}</button>)}
+          </div>
+          <small>{locale === "en" ? "Dragging, mining and connection source/targets stay expanded when required for safe interaction." : "拖动、采矿及连线源/目标在安全交互需要时仍会展开，不受此选项关闭。"}</small>
+        </div>
+        <dl className="canvas-detail-diagnostics" aria-label={locale === "en" ? "Canvas detail diagnostics" : "画布细节诊断"}>
+          <div><dt>{locale === "en" ? "Visible nodes" : "视口可见"}</dt><dd>{canvasVisibleNodeCount.toLocaleString(locale)}</dd></div>
+          <div><dt>{locale === "en" ? "Current stage" : "当前阶段"}</dt><dd>{canvasDetailStage}</dd></div>
+          <div><dt>{locale === "en" ? "Planet overlap" : "活动行星重叠"}</dt><dd>{locale === "en" ? `${canvasStackGroupCount} groups / ${canvasStackHiddenCount} hidden` : `${canvasStackGroupCount} 组 / ${canvasStackHiddenCount} 隐藏`}</dd></div>
+        </dl>
+        <p className="settings-help">{locale === "en"
+          ? "Auto uses viewport-visible logical nodes with hysteresis. These three preferences are device-only and never enter local saves, cloud saves or deterministic simulation."
+          : "自动档按视口内原始逻辑节点数并带迟滞切换。以上三项仅保存在本机，不进入本地存档、云存档或确定性模拟。"}</p>
+        {canvasDetailPreference === "full" && canvasOverlapPreference === "all" && canvasDetailStage !== "full" ? <p className="settings-warning" role="status">{locale === "en"
+          ? `Dense safety is active: ${canvasVisibleNodeCount.toLocaleString(locale)} visible cards use one uniform ${canvasDetailStage} base. Selection and hover expansion still use Full.`
+          : `密集保护已启用：当前 ${canvasVisibleNodeCount.toLocaleString(locale)} 个视口节点统一使用${canvasDetailStage === "medium" ? "中等" : "一行"}基础卡；选中和悬停展开仍使用完整卡片。`}</p> : null}
+        {canvasDetailPreference === "full" ? <p className="settings-warning" role="alert">{locale === "en"
+          ? "Warning: Full detail keeps ordinary cards and live progress eligible for heavier rendering. Dense factories can stutter."
+          : "警告：完整档会让普通节点保留重卡片与实时进度资格，密集工厂可能卡顿。"}</p> : null}
+        {canvasOverlapPreference === "all" ? <p className="settings-warning" role="alert">{locale === "en"
+          ? "All cards can be expensive for large exact stacks. The explicit stack badge remains available for cycling covered members."
+          : "全部卡片对大型精确重叠组开销很高；画面仍保留明确堆叠徽标，供循环选择被覆盖成员。"}</p> : null}
       </section>
       <section className="settings-group settings-toggle-list settings-endgame-extreme" data-settings-category="performance">
         <ToggleSetting
@@ -444,6 +624,42 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <p className="settings-help">{locale === "en"
           ? "Device-only setting; reduces belt animation, decoration, and routine readings for large factories or long idle runs."
           : "只保存在当前设备；开启后线路动画、装饰和普通读数刷新会减少，适合大型工厂或长时间挂机。"}</p>
+        <ToggleSetting
+          checked={connectExpandAll}
+          label={locale === "en" ? "Expand every building while connecting" : "连线时展开全星球建筑"}
+          value={connectExpandAll
+            ? locale === "en" ? "All buildings on the active planet use full cards" : "活动行星全部使用完整建筑卡片"
+            : locale === "en" ? "Viewport and interaction targets only" : "仅视口与当前交互目标"}
+          icon={<MousePointer2 size={16} />}
+          onChange={onConnectExpandAllChange}
+        />
+        {connectExpandAll ? <p className="settings-warning" role="alert">{locale === "en"
+          ? "Warning: very large factories may pause or stutter while connecting. This device-only preference affects only the active planet and never enters saves or cloud sync."
+          : "警告：超大工厂连线时可能短暂停顿或卡顿。此偏好只保存在当前设备、仅影响活动行星，不会写入存档或云同步。"}</p> : null}
+        <ToggleSetting
+          checked={fullRealtimeSimulation}
+          label={locale === "en" ? "Full realtime refresh" : "完整实时刷新"}
+          value={fullRealtimeSimulation
+            ? locale === "en" ? "Live history and Dyson planning payloads" : "实时同步完整历史与戴森规划"
+            : locale === "en" ? "Compact active-planet projection" : "仅同步活动行星紧凑投影"}
+          icon={<Activity size={16} />}
+          onChange={onFullRealtimeSimulationChange}
+        />
+        <p className={fullRealtimeSimulation ? "settings-warning" : "settings-help"}>{locale === "en"
+          ? "Device-only setting. Every simulation tick includes complete production history and Dyson plans; very large saves use substantially more memory and may stutter. Entity telemetry remains active-planet scoped. Off by default."
+          : "只保存在当前设备；每个模拟切片都会同步完整生产历史与戴森规划，超大存档会明显增加内存与卡顿；建筑遥测仍只同步活动行星。默认关闭。"}</p>
+        <ToggleSetting
+          checked={factoryAlertsEnabled}
+          label={locale === "en" ? "Factory runtime alerts" : "工厂运行警报"}
+          value={factoryAlertsEnabled
+            ? locale === "en" ? "Scan factory status in the simulation Worker" : "在模拟 Worker 中扫描全星区设备状态"
+            : locale === "en" ? "Off; no alert scan, badge, or list" : "关闭；不扫描、不显示红点与警报列表"}
+          icon={<Bell size={16} />}
+          onChange={onFactoryAlertsEnabledChange}
+        />
+        <p className="settings-help">{locale === "en"
+          ? "Device-only. Turning this off can improve resume and long-idle responsiveness for very large factories without changing simulation or save data."
+          : "仅保存在当前设备。超大工厂关闭后可改善继续模拟与长时间挂机的响应；不会改变模拟结果或存档数据。"}</p>
         <div className="canvas-performance-feature-list" aria-label={canvasPerformanceCopy.ariaLabel}>
           {canvasPerformanceCopy.items.map(([id, label, scope]) => <ToggleSetting
             checked={canvasPerformanceFeatures[id]}
@@ -467,13 +683,37 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <ToggleSetting checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={onRunLogChange} />
       </section>
       <section className="settings-group" data-settings-category="storage">
-        <header><Clock3 size={14} /><span>自动保存间隔</span></header>
+        <header><Clock3 size={14} /><span>自动保存间隔</span><small>{locale === "en" ? `configured ${formatAutosaveInterval(largeSaveAutosavePolicy.configuredIntervalSeconds)} · effective ${formatAutosaveInterval(largeSaveAutosavePolicy.effectiveIntervalSeconds)}` : `设置 ${formatAutosaveInterval(largeSaveAutosavePolicy.configuredIntervalSeconds)} · 实际 ${formatAutosaveInterval(largeSaveAutosavePolicy.effectiveIntervalSeconds)}`}</small></header>
         <div className="settings-segmented" aria-label="自动保存间隔">
           {([30, 60, 120, 600, 1800, 0] as AutosaveIntervalSeconds[]).map((seconds) => (
             <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => onChange({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds >= 600 ? `${seconds / 60} 分钟` : `${seconds} 秒`}</button>
           ))}
         </div>
         {settings.autosaveIntervalSeconds === 0 ? <p className="settings-warning">关闭后，刷新、崩溃或异常退出可能丢失未保存进度；手动保存和云同步保持独立。</p> : null}
+        <ToggleSetting
+          checked={largeSaveAutosaveProtection}
+          label={locale === "en" ? "Large-save autosave protection (recommended)" : "超大存档自动保存保护（推荐）"}
+          value={largeSaveAutosaveProtection
+            ? locale === "en" ? `Device-only; ${autosaveSizeLabel}${largeSaveAutosavePolicy.throttled ? " · minimum 10 min" : ""}` : `仅本机；${autosaveSizeLabel}${largeSaveAutosavePolicy.throttled ? " · 最短 10 分钟" : ""}`
+            : locale === "en" ? "Off; use the configured interval" : "关闭；按存档设置频率执行"}
+          icon={<ShieldCheck size={16} />}
+          onChange={onLargeSaveAutosaveProtectionChange}
+        />
+        <p className={largeSaveAutosavePolicy.largeSave && !largeSaveAutosaveProtection ? "settings-warning" : "settings-help"} role={largeSaveAutosavePolicy.largeSave && !largeSaveAutosaveProtection ? "alert" : undefined}>{largeSaveAutosavePolicy.largeSave && !largeSaveAutosaveProtection
+          ? locale === "en" ? "Protection is off; frequent writes on this large save may cause stutter. Manual save, return-to-menu and export are unchanged." : "保护已关闭；当前超大存档将按配置频率写入，可能出现卡顿。手动保存、返回主页和导出不受影响。"
+          : locale === "en" ? "Device-only. At or above 24 MiB, background autosave uses at least 10 minutes; manual save, return-to-menu and export are unchanged." : "仅保存在当前设备。存档达到 24 MiB 后，后台自动保存最短间隔为 10 分钟；手动保存、返回主页和导出不受影响。"}</p>
+        <ToggleSetting
+          checked={allowEditsDuringSave}
+          label={locale === "en" ? "Allow editing while saving (experimental)" : "保存期间允许继续操作（实验性）"}
+          value={allowEditsDuringSave
+            ? locale === "en" ? "Device-only; saves no longer reject or undo your edits; recovery head catches up on the next save." : "仅本机；保存不再拒绝或撤销你的操作，recovery 会在下次保存时追赶。"
+            : locale === "en" ? "Off; edits are rejected while a save is in progress (fail-safe default)." : "关闭；保存进行中的操作会被拒绝（默认保护模式）。"}
+          icon={<ShieldCheck size={16} />}
+          onChange={onAllowEditsDuringSaveChange}
+        />
+        <p className="settings-help">{locale === "en"
+          ? "When enabled, edits made during a save are kept in the durable queue. If a save fails, your current progress is preserved for export instead of being rolled back."
+          : "开启后，保存期间的操作会保留在 durable 队列，不会因为保存而被拒绝或回滚；保存失败时当前进度也保留，可立即导出。"}</p>
       </section>
       <section className="settings-group" data-settings-category="storage">
         <header><MapPin size={14} /><span>星区与资源</span><small>种子 #{game.galaxy.seed}</small></header>
@@ -531,8 +771,8 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <button type="button" onClick={onOpenTutorial} aria-label="打开新手教程"><GraduationCap size={15} /><span><strong>打开完整自然语言教程</strong><small>从采集、传送带到物流、戴森和存档</small></span><ChevronRight size={15} /></button>
       </section>
       <section className="settings-group settings-release-notes" data-settings-category="other">
-        <header><History size={14} /><span>版本更新记录</span><small>{CURRENT_RELEASE_NOTES.date}</small></header>
-        <button type="button" onClick={onOpenReleaseNotes} aria-label="查看版本更新记录"><History size={15} /><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span></button>
+        <header><History size={14} /><span>版本更新记录</span><small>{currentReleaseNotes.date}</small></header>
+        <button type="button" onClick={onOpenReleaseNotes} aria-label="查看版本更新记录"><History size={15} /><span><strong>{currentReleaseNotes.title}</strong><small>{currentReleaseNotes.items.length} 项体验更新</small></span></button>
       </section>
       <section className="settings-group settings-community" data-settings-category="other">
         <header><MessageSquare size={14} /><span>QQ 交流群</span><small>意见、建议与问题反馈</small></header>
@@ -632,28 +872,57 @@ function SavesPanel({
   onLoadSlot,
   onDeleteSlot,
   onCreateSnapshot,
+  onAddSecondUnipolarVein,
+  unipolarExpansionBusy,
   onLoadSnapshot,
   onDeleteSnapshot,
   onDeleteSnapshots,
   onValidateMod,
   onExportModTemplate,
 }: Pick<OperationsWorkspaceProps,
-  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onConfirmImportRescue" | "importRescueArmed" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onDeleteSnapshots" | "onValidateMod" | "onExportModTemplate">) {
+  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onConfirmImportRescue" | "importRescueArmed" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onAddSecondUnipolarVein" | "unipolarExpansionBusy" | "onLoadSnapshot" | "onDeleteSnapshot" | "onDeleteSnapshots" | "onValidateMod" | "onExportModTemplate">) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modInputRef = useRef<HTMLInputElement>(null);
-  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string } | { kind: "snapshots"; snapshotIds: string[] })) | null>(null);
+  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string } | { kind: "snapshots"; snapshotIds: string[] } | { kind: "managed-storage"; keys: string[] })) | null>(null);
   const [selectedSnapshotIds, setSelectedSnapshotIds] = useState<string[]>([]);
+  const [selectedStorageKeys, setSelectedStorageKeys] = useState<string[]>([]);
   const [storageEstimate, setStorageEstimate] = useState<LocalSaveStorageEstimate | null>(null);
+  const [persistenceRequestPending, setPersistenceRequestPending] = useState(false);
   const summaryBySlot = new Map(slots.map((slot) => [slot.slotId, slot]));
   const automaticSnapshotCount = snapshots.filter((snapshot) => snapshot.reason === "自动快照").length;
   const manualSnapshotCount = snapshots.length - automaticSnapshotCount;
+  const protectedSnapshotIds = new Set((storageEstimate?.entries ?? []).flatMap((entry) => {
+    if (!entry.protected || !entry.key.includes(".snapshot.")) return [];
+    const prefix = entry.mode === "speedrun" ? "dsp-idle-network.save.v1.snapshot.speedrun." : "dsp-idle-network.save.v1.snapshot.";
+    return entry.key.startsWith(prefix) ? [entry.key.slice(prefix.length)] : [];
+  }));
+  const unipolarCount = game.entities.filter((entity) => entity.kind === "vein" && entity.resourceId === "unipolar_magnet").length;
+  const unipolarEligible = game.mode !== "speedrun" && game.speedrun?.enabled !== true && unipolarCount === 1 && game.paused;
+  const unipolarStatus = game.mode === "speedrun" || game.speedrun?.enabled === true
+    ? "速通存档禁止扩容"
+    : unipolarCount >= 2 ? `当前 ${unipolarCount} 个，硬上限 2`
+      : !game.paused ? "请先暂停模拟"
+        : unipolarCount === 1 ? "符合一次性扩容条件" : `当前 ${unipolarCount} 个，需先通过资源审计`;
   useEffect(() => {
     let active = true;
-    void getLocalSaveStorageEstimate().then((estimate) => { if (active) setStorageEstimate(estimate); });
-    return () => { active = false; };
+    const refresh = () => void getLocalSaveStorageEstimate().then((estimate) => { if (active) setStorageEstimate(estimate); });
+    refresh();
+    const unsubscribe = subscribeLocalSaveStorageStatus(refresh);
+    return () => { active = false; unsubscribe(); };
   }, [slots, snapshots]);
   useEffect(() => setSelectedSnapshotIds((current) => current.filter((id) => snapshots.some((snapshot) => snapshot.id === id))), [snapshots]);
+  useEffect(() => setSelectedStorageKeys((current) => current.filter((key) => storageEstimate?.entries.some((entry) => entry.key === key) ?? false)), [storageEstimate]);
   const formatBytes = (bytes: number | null) => bytes === null ? "不可用" : bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MiB` : `${Math.max(0, Math.round(bytes / 1024))} KiB`;
+  const persistenceLabel = storageEstimate?.persistenceStatus === "granted" ? "已受持久保护"
+    : storageEstimate?.persistenceStatus === "denied" ? "浏览器未授予"
+      : storageEstimate?.persistenceStatus === "unsupported" ? "当前环境不支持"
+        : "尚未请求";
+  const requestPersistence = async () => {
+    setPersistenceRequestPending(true);
+    await requestLocalSavePersistentStorage();
+    setStorageEstimate(await getLocalSaveStorageEstimate());
+    setPersistenceRequestPending(false);
+  };
   return (
     <div className="operations-panel operations-saves">
       <header className="operations-section-header">
@@ -676,6 +945,14 @@ function SavesPanel({
             event.target.value = "";
           }}
         />
+      </section>
+      <section className="save-resource-integrity-tool" aria-label="单极磁石矿脉扩容工具">
+        <header><div><ShieldCheck size={14} /><strong>单极磁石矿脉扩容</strong></div><small>{unipolarStatus}</small></header>
+        <p>仅为恰好拥有 1 个规范矿脉的普通存档新增 1 个矿脉；总数硬上限为 2。操作会先创建恢复快照，不会写入矿物缓存、托盘、累计产量或排行榜。</p>
+        <div><span>当前数量 <strong>{unipolarCount}</strong></span><span>目标数量 <strong>2</strong></span><span>模式 <strong>{game.mode === "speedrun" ? "速通" : "普通"}</strong></span></div>
+        <button type="button" className="danger" disabled={!unipolarEligible || unipolarExpansionBusy} onClick={onAddSecondUnipolarVein}>
+          <MapPin size={14} />{unipolarExpansionBusy ? "正在备份并校验…" : "备份后增加 1 个矿脉"}
+        </button>
       </section>
       {importPreview ? <section className="save-import-preview" aria-label="存档导入预览">
         <header><div><FileCheck2 size={15} /><strong>导入预览</strong></div><span className={`save-integrity save-integrity--${importPreview.integrity}`}>{integrityLabel(importPreview.integrity)}</span></header>
@@ -712,10 +989,10 @@ function SavesPanel({
       <section className="save-snapshot-section">
         <header><div><History size={14} /><strong>恢复快照</strong><small>自动 {automaticSnapshotCount}/2 · 手动 {manualSnapshotCount}</small></div>{selectedSnapshotIds.length > 0 ? <button className="save-batch-delete" type="button" onClick={() => setDeleteRequest({ kind: "snapshots", snapshotIds: selectedSnapshotIds, label: `${selectedSnapshotIds.length} 份所选快照`, details: "只删除明确勾选的恢复快照；主存档和三个手动槽位不会受影响" })}><Trash2 size={13} />删除所选</button> : <span>可回滚</span>}</header>
         {snapshots.length === 0 ? <p className="save-empty-note">模拟运行后会自动保留最近快照</p> : <div className="save-snapshot-list">
-          {snapshots.map((snapshot) => <article className={`save-snapshot-row${snapshot.valid ? "" : " save-snapshot-row--invalid"}`} key={snapshot.id}>
+          {snapshots.map((snapshot) => <article className={`save-snapshot-row${snapshot.valid ? "" : " save-snapshot-row--invalid"}${protectedSnapshotIds.has(snapshot.id) ? " save-snapshot-row--protected" : ""}`} key={snapshot.id}>
             <input type="checkbox" checked={selectedSnapshotIds.includes(snapshot.id)} onChange={(event) => setSelectedSnapshotIds((current) => event.target.checked ? [...current, snapshot.id] : current.filter((id) => id !== snapshot.id))} aria-label={`选择快照 ${snapshot.reason}`} />
             <i>{snapshot.valid ? <ShieldCheck size={14} /> : <FileCheck2 size={14} />}</i>
-            <div><strong>{snapshot.reason}</strong><span>{new Date(snapshot.savedAt).toLocaleTimeString("zh-CN")} · {formatRuntime(snapshot.elapsedSeconds)} · 科技 {snapshot.completedTechCount}</span></div>
+            <div><strong>{snapshot.reason}{protectedSnapshotIds.has(snapshot.id) ? <em>保护</em> : null}</strong><span>{new Date(snapshot.savedAt).toLocaleTimeString("zh-CN")} · {formatRuntime(snapshot.elapsedSeconds)} · 科技 {snapshot.completedTechCount}</span></div>
             <button type="button" disabled={!snapshot.valid} onClick={() => onLoadSnapshot(snapshot.id)} title="回滚到此快照" aria-label={`回滚到快照 ${snapshot.id}`}><RotateCcw size={13} /></button>
             <button type="button" onClick={() => setDeleteRequest({ kind: "snapshot", snapshotId: snapshot.id, label: `快照：${snapshot.reason}`, details: `${new Date(snapshot.savedAt).toLocaleString("zh-CN")} · 运行 ${formatRuntime(snapshot.elapsedSeconds)} · 科技 ${snapshot.completedTechCount}` })} title="删除快照" aria-label={`删除快照 ${snapshot.id}`}><Trash2 size={13} /></button>
           </article>)}
@@ -724,7 +1001,31 @@ function SavesPanel({
       {storageEstimate ? <section className="save-storage-usage" aria-label="本地存储占用">
         <header><div><Database size={14} /><strong>存储占用</strong></div><small>{storageEstimate.backend === "indexeddb" ? "IndexedDB" : storageEstimate.backend === "local-storage" ? "兼容存储" : "临时内存"}</small></header>
         <div className="save-storage-kpis"><span><small>存档数据</small><strong>{formatBytes(storageEstimate.payloadBytes)}</strong></span><span><small>浏览器总占用</small><strong>{formatBytes(storageEstimate.browserUsageBytes)}</strong></span><span><small>可用配额</small><strong>{storageEstimate.browserQuotaBytes === null || storageEstimate.browserUsageBytes === null ? "不可用" : formatBytes(Math.max(0, storageEstimate.browserQuotaBytes - storageEstimate.browserUsageBytes))}</strong></span></div>
-        <div className="save-storage-entries">{storageEstimate.entries.map((entry) => <div key={entry.key}><span>{entry.label}</span><strong>{formatBytes(entry.bytes)}</strong></div>)}</div>
+        <div className={`save-persistence-state save-persistence-state--${storageEstimate.persistenceStatus}`} role="status">
+          <ShieldCheck size={15} />
+          <span><strong>浏览器持久存储：{persistenceLabel}</strong><small>{storageEstimate.persistenceStatus === "granted" ? "浏览器会尽量避免在空间回收时移除本地存档。" : "拒绝或不支持不会影响游玩；仍建议定期导出重要存档。"}</small></span>
+          {storageEstimate.persistenceStatus !== "granted" && storageEstimate.persistenceRequestSupported ? <button type="button" disabled={persistenceRequestPending} onClick={() => void requestPersistence()}>{persistenceRequestPending ? "请求中" : storageEstimate.persistenceStatus === "denied" ? "重新请求" : "请求保护"}</button> : null}
+        </div>
+        <div className="save-storage-mode-grid" aria-label="按模式存储占用">
+          {storageEstimate.modes.map((usage) => <article key={usage.mode} data-mode={usage.mode}>
+            <header><strong>{usage.mode === "speedrun" ? "速通模式" : "普通模式"}</strong><em>{formatBytes(usage.totalBytes)}</em></header>
+            <dl>
+              <div><dt>主档 / 备份</dt><dd>{formatBytes(usage.primaryBytes + usage.backupBytes)}</dd></div>
+              <div><dt>手动槽位</dt><dd>{usage.slotCount} · {formatBytes(usage.slotBytes)}</dd></div>
+              <div><dt>自动快照</dt><dd>{usage.automaticSnapshotCount}/2 · {formatBytes(usage.automaticSnapshotBytes)}</dd></div>
+              <div><dt>手动快照</dt><dd>{usage.manualSnapshotCount} · {formatBytes(usage.manualSnapshotBytes)}</dd></div>
+              <div><dt>保护快照</dt><dd>{usage.protectedCount} · {formatBytes(usage.protectedBytes)}</dd></div>
+              <div><dt>导入缓存</dt><dd>{usage.importCacheCount} · {formatBytes(usage.importCacheBytes)}</dd></div>
+            </dl>
+          </article>)}
+        </div>
+        {storageEstimate.recoveryPrompt ? <div className="save-storage-recovery" role="alert"><AlertTriangle size={16} /><span><strong>{storageEstimate.recoveryPrompt.preservedChecksummedMain ? "旧主档已保留" : "需要立即恢复"}</strong><small>{storageEstimate.recoveryPrompt.message}</small></span><div><button type="button" onClick={onExport}>立即导出</button><button type="button" onClick={() => { dismissLocalSaveRecoveryPrompt(); setStorageEstimate((current) => current ? { ...current, recoveryPrompt: null } : current); }}>知道了</button></div></div> : null}
+        {storageEstimate.warnings.length > 0 ? <div className="save-storage-warnings">{storageEstimate.warnings.map((warning) => <p key={warning}><AlertTriangle size={13} />{warning}</p>)}</div> : null}
+        <div className="save-storage-list-header"><span>清理只作用于明确勾选的手动/保护快照或导入缓存，保护项默认不勾选。</span>{selectedStorageKeys.length > 0 ? <button type="button" className="save-batch-delete" onClick={() => setDeleteRequest({ kind: "managed-storage", keys: selectedStorageKeys, label: `${selectedStorageKeys.length} 份本地恢复数据`, details: "只删除当前容量清单中明确勾选的数据；主档、备份、手动槽位和自动快照不会受影响" })}><Trash2 size={13} />删除所选</button> : null}</div>
+        <div className="save-storage-entries">{storageEstimate.entries.map((entry) => {
+          const selectable = entry.category === "manual-snapshot" || entry.category === "import-cache" || entry.category === "protected" && entry.key.includes(".snapshot.");
+          return <div className={entry.protected ? "protected" : ""} key={entry.key}>{selectable ? <input type="checkbox" checked={selectedStorageKeys.includes(entry.key)} onChange={(event) => setSelectedStorageKeys((current) => event.target.checked ? [...current, entry.key] : current.filter((key) => key !== entry.key))} aria-label={`选择清理 ${entry.label}`} /> : <i aria-hidden="true" />}<span><strong>{entry.label}</strong><small>{entry.source}{entry.savedAt > 0 ? ` · ${new Date(entry.savedAt).toLocaleString("zh-CN")}` : ""}</small></span><em>{entry.protected ? "保护" : entry.automatic ? "自动" : "玩家管理"}</em><b>{formatBytes(entry.bytes)}</b></div>;
+        })}</div>
       </section> : null}
       <section className="content-pack-section">
         <header><div><FileCheck2 size={14} /><strong>内容包校验</strong></div><small>只读检查，不会修改核心目录</small></header>
@@ -736,7 +1037,8 @@ function SavesPanel({
         if (!deleteRequest) return;
         if (deleteRequest.kind === "slot") onDeleteSlot(deleteRequest.slotId);
         else if (deleteRequest.kind === "snapshot") onDeleteSnapshot(deleteRequest.snapshotId);
-        else { onDeleteSnapshots(deleteRequest.snapshotIds); setSelectedSnapshotIds([]); }
+        else if (deleteRequest.kind === "snapshots") { onDeleteSnapshots(deleteRequest.snapshotIds); setSelectedSnapshotIds([]); }
+        else { void deleteLocalSaveManagedEntries(deleteRequest.keys).then(() => getLocalSaveStorageEstimate()).then(setStorageEstimate); setSelectedStorageKeys([]); }
         setDeleteRequest(null);
       }} />
     </div>
@@ -825,6 +1127,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [errorRevision, setErrorRevision] = useState(0);
   const errors = getClientErrors();
+  const pwaUpdateCopy = pwaUpdateStatusCopy(pwa.updateStatus);
   void errorRevision;
 
   useEffect(() => subscribePwaRuntime(setPwa), []);
@@ -853,6 +1156,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
     setFeedbackMessage(null);
     try {
       const id = await sendCloudFeedback(feedbackKind, feedback.trim(), diagnostics());
+      clearStableTextDraft("operations-feedback");
       setFeedback("");
       setFeedbackState("sent");
       setFeedbackMessage(`反馈已提交 · ${id.slice(0, 8)}`);
@@ -874,7 +1178,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
         <article><Users size={18} /><span><small>累计游玩玩家</small><strong>{cloudStatus?.players.total.toLocaleString("zh-CN") ?? "--"}</strong></span><em>匿名标识去重</em></article>
         <article className="support-player-online"><Radio size={18} /><span><small>当前在线游玩</small><strong>{cloudStatus?.players.online.toLocaleString("zh-CN") ?? "--"}</strong></span><em>{cloudStatus ? `${cloudStatus.players.onlineWindowSeconds} 秒内活跃` : "等待云节点"}</em></article>
         <article><Smartphone size={18} /><span><small>PWA 状态</small><strong>{pwa.installed ? "已安装" : pwa.supported ? "浏览器运行" : "不可用"}</strong></span>{pwa.installAvailable ? <button type="button" onClick={() => void requestPwaInstall()}>安装</button> : null}</article>
-        <article><RotateCcw size={18} /><span><small>网页版本</small><strong>v{__APP_VERSION__}</strong></span>{pwa.updateAvailable ? <button className="ready" type="button" onClick={applyPwaUpdate}>立即更新</button> : <em>已是最新</em>}</article>
+        <article data-pwa-update-status={pwa.updateStatus}><RotateCcw size={18} /><span><small>网页版本</small><strong>v{__APP_VERSION__}</strong></span>{pwa.updateStatus === "downloaded-await-restart" && pwa.updateAvailable ? <button className="ready" type="button" onClick={applyPwaUpdate}>重启并更新</button> : <em className={`settings-state settings-state--${pwaUpdateCopy.tone}`} role="status" data-copy-key={pwaUpdateCopy.key}>{pwaUpdateCopy.text}</em>}</article>
       </section>
       <section className="support-diagnostics-export">
         <div><ShieldCheck size={16} /><span><strong>匿名诊断包</strong><small>环境、工厂规模、性能结果和最近错误，不包含密码与完整存档。</small></span></div>
@@ -888,7 +1192,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
       <section className="support-feedback-form">
         <header><MessageSquare size={15} /><span><strong>提交反馈</strong><small>会附带同一份匿名诊断摘要</small></span></header>
         <div className="support-feedback-kind" role="group" aria-label="反馈类型">{[["experience", "体验"], ["bug", "故障"], ["balance", "数值"], ["mobile", "手机端"]].map(([id, label]) => <button className={feedbackKind === id ? "active" : ""} type="button" onClick={() => setFeedbackKind(id)} key={id}>{label}</button>)}</div>
-        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} maxLength={4000} placeholder="描述出现的问题或建议" aria-label="反馈内容" />
+        <StableTextArea draftId="operations-feedback" value={feedback} onValueChange={setFeedback} maxLength={4000} placeholder="描述出现的问题或建议" aria-label="反馈内容" />
         <footer><span className={feedbackState === "failed" ? "warning" : feedbackState === "sent" ? "ready" : ""}>{feedbackMessage ?? `${feedback.length}/4000`}</span><button className="primary" type="button" disabled={!feedback.trim() || feedbackState === "sending" || cloudState === "offline"} onClick={() => void submitFeedback()}>{feedbackState === "sending" ? <Activity size={14} /> : <Upload size={14} />}{feedbackState === "sending" ? "提交中" : "提交反馈"}</button></footer>
       </section>
       <section className="support-onboarding-reset"><GraduationCap size={16} /><span><strong>渐进教学</strong><small>重新打开 5 步基础操作和从手动采矿到白糖、跨星物流与戴森云的 13 步进阶教学。</small></span><button type="button" onClick={() => { resetOnboarding(); window.location.reload(); }}>重新开始教学</button></section>
@@ -900,14 +1204,14 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
   if (!props.open) return null;
   const unlockedCount = props.game.achievements.unlockedIds.length;
   return (
-    <section className="operations-workspace" role="dialog" aria-modal="true" aria-label="运营中心">
+    <WorkspaceFrame className="operations-workspace" ariaLabel="运营中心" onRequestClose={props.onClose}>
       <header className="operations-header">
         <div className="operations-title">
           <i><Gauge size={20} /></i>
           <div><span>星系运行协议</span><strong>运营中心</strong></div>
         </div>
         <div className="operations-summary">
-          <span className={props.alerts.length > 0 ? "warning" : "positive"}><Bell size={13} />警报 <strong>{props.alerts.length}</strong></span>
+          <span className={props.alertCount > 0 ? "warning" : "positive"}><Bell size={13} />警报 <strong>{props.alertCount}</strong></span>
           <span><Trophy size={13} />成就 <strong>{unlockedCount}/{ACHIEVEMENTS.length}</strong></span>
         </div>
         <button className="operations-close" type="button" onClick={props.onClose} title="关闭运营中心" aria-label="关闭运营中心"><X size={18} /></button>
@@ -915,7 +1219,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
       <nav className="operations-tabs" role="tablist" aria-label="运营中心视图">
         {TABS.map((tab) => {
           const Icon = tab.icon;
-          const count = tab.id === "alerts" ? props.alerts.length : tab.id === "achievements" ? unlockedCount : null;
+          const count = tab.id === "alerts" ? props.alertCount : tab.id === "achievements" ? unlockedCount : null;
           return (
             <button className={props.tab === tab.id ? "active" : ""} type="button" role="tab" aria-selected={props.tab === tab.id} key={tab.id} onClick={() => props.onTabChange(tab.id)}>
               <Icon size={15} /><span>{tab.label}</span>{count != null ? <strong>{count}</strong> : null}
@@ -924,15 +1228,15 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
         })}
       </nav>
       <div className="operations-body">
-        {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} onOpenTutorial={props.onOpenTutorial} /> : null}
+        {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} enabled={props.factoryAlertsEnabled} onSelect={props.onAlertSelect} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
         {props.tab === "logistics" ? <LogisticsManagementPanel game={props.game} {...props.logisticsActions} /> : null}
-        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} canvasPerformanceFeatures={props.canvasPerformanceFeatures} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onCanvasPerformanceFeatureChange={props.onCanvasPerformanceFeatureChange} lineFindMode={props.lineFindMode} onLineFindModeChange={props.onLineFindModeChange} connectionPointSize={props.connectionPointSize} onConnectionPointSizeChange={props.onConnectionPointSizeChange} showRunLog={props.showRunLog} onRunLogChange={props.onRunLogChange} showItemHover={props.showItemHover} onItemHoverChange={props.onItemHoverChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} connectExpandAll={props.connectExpandAll} fullRealtimeSimulation={props.fullRealtimeSimulation} factoryAlertsEnabled={props.factoryAlertsEnabled} largeSaveAutosaveProtection={props.largeSaveAutosaveProtection} largeSaveAutosavePolicy={props.largeSaveAutosavePolicy} blueprintAllowOverlap={props.blueprintAllowOverlap} canvasDetailPreference={props.canvasDetailPreference} canvasOverlapPreference={props.canvasOverlapPreference} canvasInteractionDetailPreference={props.canvasInteractionDetailPreference} canvasDetailStage={props.canvasDetailStage} canvasVisibleNodeCount={props.canvasVisibleNodeCount} canvasStackGroupCount={props.canvasStackGroupCount} canvasStackHiddenCount={props.canvasStackHiddenCount} canvasPerformanceFeatures={props.canvasPerformanceFeatures} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onConnectExpandAllChange={props.onConnectExpandAllChange} onFullRealtimeSimulationChange={props.onFullRealtimeSimulationChange} onFactoryAlertsEnabledChange={props.onFactoryAlertsEnabledChange} onLargeSaveAutosaveProtectionChange={props.onLargeSaveAutosaveProtectionChange} allowEditsDuringSave={props.allowEditsDuringSave} onAllowEditsDuringSaveChange={props.onAllowEditsDuringSaveChange} onBlueprintAllowOverlapChange={props.onBlueprintAllowOverlapChange} onCanvasDetailPreferenceChange={props.onCanvasDetailPreferenceChange} onCanvasOverlapPreferenceChange={props.onCanvasOverlapPreferenceChange} onCanvasInteractionDetailPreferenceChange={props.onCanvasInteractionDetailPreferenceChange} onCanvasPerformanceFeatureChange={props.onCanvasPerformanceFeatureChange} lineFindMode={props.lineFindMode} onLineFindModeChange={props.onLineFindModeChange} connectionPointSize={props.connectionPointSize} onConnectionPointSizeChange={props.onConnectionPointSizeChange} connectionHitArea={props.connectionHitArea} onConnectionHitAreaChange={props.onConnectionHitAreaChange} defaultBeltLanes={props.defaultBeltLanes} onDefaultBeltLanesChange={props.onDefaultBeltLanesChange} showRunLog={props.showRunLog} onRunLogChange={props.onRunLogChange} showItemHover={props.showItemHover} onItemHoverChange={props.onItemHoverChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "performance" ? <PerformancePanel game={props.game} snapshot={props.performanceMonitor} onStart={props.onStartPerformanceMonitor} onStop={props.onStopPerformanceMonitor} onClear={props.onClearPerformanceMonitor} onExport={props.onExportPerformanceMonitor} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}
         {props.tab === "support" ? <SupportPanel game={props.game} report={props.performanceReport} /> : null}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

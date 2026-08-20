@@ -5,6 +5,7 @@ import { getPlanetDisplayName, getPlanetOrbitalYields, getStarSystemDisplayName 
 import { getStationSlots } from "../game/engine";
 import type { FactoryEntity, GameState, ItemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "../game/types";
 import { formatQuantityCompact } from "../game/quantityFormat";
+import { StableTextInput } from "./CompositionSafeInput";
 
 const LOGISTICS_VIEW_KEY = "dsp-idle-network.logistics-management-view.v1";
 
@@ -130,7 +131,7 @@ export function LogisticsManagementPanel(props: LogisticsManagementPanelProps) {
       <span className="settings-state"><Route size={14} />物流节点 {visible.length}/{stations.length}</span>
     </header>
     <section className="logistics-management-filters" aria-label="物流筛选">
-      <label><Search size={15} /><input value={query} onChange={(event) => updateFilter({ query: event.target.value.slice(0, 120) })} placeholder="搜索星系、星球、塔或物品" aria-label="搜索物流塔" /></label>
+      <label><Search size={15} /><StableTextInput draftId="logistics-management-search" value={query} onValueChange={(value) => updateFilter({ query: value.slice(0, 120) })} maxLength={120} placeholder="搜索星系、星球、塔或物品" aria-label="搜索物流塔" /></label>
       <select value={typeFilter} onChange={(event) => updateFilter({ typeFilter: event.target.value as StationFilter })} aria-label="物流塔类型筛选">
         <option value="all">全部类型</option><option value="planetary">行星物流站</option><option value="interstellar">星际物流站</option><option value="collector">轨道采集器</option><option value="quantum">量子接入</option>
       </select>

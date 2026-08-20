@@ -127,6 +127,11 @@ export type PureIdleRecoveryClaim =
   | { ok: true; record: PureIdleRecoveryRecord }
   | { ok: false; reason: "unavailable" | "missing" | "owned" | "invalid"; message: string };
 
+export type PureIdleRecoveryInspection =
+  | { status: "valid"; record: PureIdleRecoveryRecord; message: string }
+  | { status: "committed"; record: PureIdleRecoveryRecord; message: string }
+  | { status: "missing" | "invalid" | "unavailable"; record: null; message: string };
+
 let databasePromise: Promise<IDBDatabase> | null = null;
 let heldBrowserLease: { ownerToken: string; release: () => void } | null = null;
 
@@ -204,6 +209,36 @@ function checkpointFingerprint(state: GameState): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return `checkpoint-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function isRecoveryHistorySample(value: unknown): value is GameState["productionHistory"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const sample = value as Record<string, unknown>;
+  return typeof sample.elapsedSeconds === "number" && Number.isFinite(sample.elapsedSeconds) &&
+    sample.elapsedSeconds >= 0 &&
+    Boolean(sample.productionPerMinute && typeof sample.productionPerMinute === "object" && !Array.isArray(sample.productionPerMinute)) &&
+    Boolean(sample.consumptionPerMinute && typeof sample.consumptionPerMinute === "object" && !Array.isArray(sample.consumptionPerMinute)) &&
+    Boolean(sample.inventory && typeof sample.inventory === "object" && !Array.isArray(sample.inventory));
+}
+
+/**
+ * Production history is display telemetry and never participates in macro
+ * settlement. Older runtime journals can contain JSON nulls from sparse array
+ * slots, so keep their gameplay checkpoint usable by dropping only invalid
+ * telemetry before the macro Worker receives it.
+ */
+function sanitizePureIdleRecoveryState(state: GameState): GameState {
+  const originalHistory = state.productionHistory;
+  if (!Array.isArray(originalHistory)) return { ...state, productionHistory: [] };
+  const productionHistory = originalHistory.filter(isRecoveryHistorySample);
+  return productionHistory.length === originalHistory.length ? state : { ...state, productionHistory };
+}
+
+export function matchesPureIdleRecoveryCheckpoint(
+  record: Pick<PureIdleRecoveryRecord, "checkpointHash">,
+  state: GameState,
+): boolean {
+  return record.checkpointHash === checkpointFingerprint(state);
 }
 
 export function getPureIdleOwnerToken(): string {
@@ -304,13 +339,14 @@ function validHeartbeat(value: unknown): value is PureIdleHeartbeatRecord {
 
 function combine(checkpoint: PureIdleCheckpointRecord, heartbeat: PureIdleHeartbeatRecord): PureIdleRecoveryRecord | null {
   if (checkpoint.sessionId !== heartbeat.sessionId) return null;
+  const state = sanitizePureIdleRecoveryState(checkpoint.state);
   return {
     sessionId: checkpoint.sessionId,
     createdAtMs: checkpoint.createdAtMs,
     startedAtMs: checkpoint.startedAtMs,
     startedPaused: checkpoint.startedPaused === true,
     mode: checkpoint.mode,
-    state: checkpoint.state,
+    state,
     ownerToken: heartbeat.ownerToken,
     heartbeatAtMs: heartbeat.heartbeatAtMs,
     leaseExpiresAtMs: heartbeat.leaseExpiresAtMs,
@@ -321,7 +357,7 @@ function combine(checkpoint: PureIdleCheckpointRecord, heartbeat: PureIdleHeartb
     ...(heartbeat.lastError ? { lastError: heartbeat.lastError } : {}),
     workerRestartCount: Math.max(0, Math.floor(heartbeat.workerRestartCount ?? 0)),
     settlementId: heartbeat.settlementId ?? checkpoint.sessionId,
-    checkpointHash: heartbeat.checkpointHash ?? checkpointFingerprint(checkpoint.state),
+    checkpointHash: heartbeat.checkpointHash ?? checkpointFingerprint(state),
     ...(heartbeat.stopReason ? { stopReason: heartbeat.stopReason } : {}),
     ...(heartbeat.stopRequestedAtMs !== undefined ? { stopRequestedAtMs: heartbeat.stopRequestedAtMs } : {}),
     ...(heartbeat.targetWallSeconds !== undefined ? { targetWallSeconds: heartbeat.targetWallSeconds } : {}),
@@ -363,7 +399,7 @@ export function getPureIdleBackgroundPlan(
   };
 }
 
-async function readPair(): Promise<{ checkpoint?: PureIdleCheckpointRecord; heartbeat?: PureIdleHeartbeatRecord }> {
+async function readRawPair(): Promise<{ checkpoint: unknown; heartbeat: unknown }> {
   const db = await openDatabase();
   const transaction = db.transaction(STORE_NAME, "readonly");
   const done = transactionDone(transaction);
@@ -373,16 +409,46 @@ async function readPair(): Promise<{ checkpoint?: PureIdleCheckpointRecord; hear
     requestResult(store.get(HEARTBEAT_KEY)),
   ]);
   await done;
-  return {
-    ...(validCheckpoint(checkpoint) ? { checkpoint } : {}),
-    ...(validHeartbeat(heartbeat) ? { heartbeat } : {}),
-  };
+  return { checkpoint, heartbeat };
 }
 
 export async function readPureIdleRecovery(): Promise<PureIdleRecoveryRecord | null> {
   if (!canUsePureIdleRecovery()) return null;
-  const { checkpoint, heartbeat } = await readPair();
-  return checkpoint && heartbeat ? combine(checkpoint, heartbeat) : null;
+  const { checkpoint, heartbeat } = await readRawPair();
+  return validCheckpoint(checkpoint) && validHeartbeat(heartbeat) ? combine(checkpoint, heartbeat) : null;
+}
+
+/**
+ * Distinguish an absent or malformed recovery journal from a browser/storage
+ * failure. The menu uses this before touching pending time-warp debt: a valid
+ * uncommitted journal keeps owning its timeline, while an unavailable journal
+ * requires an explicit player decision instead of silently discarding it.
+ */
+export async function inspectPureIdleRecovery(): Promise<PureIdleRecoveryInspection> {
+  if (!canUsePureIdleRecovery()) {
+    return { status: "unavailable", record: null, message: "当前环境不支持读取纯挂机恢复日志" };
+  }
+  try {
+    const { checkpoint, heartbeat } = await readRawPair();
+    if (checkpoint === undefined && heartbeat === undefined) {
+      return { status: "missing", record: null, message: "没有仍然有效的纯挂机恢复会话" };
+    }
+    if (!validCheckpoint(checkpoint) || !validHeartbeat(heartbeat)) {
+      return { status: "invalid", record: null, message: "纯挂机恢复日志不完整或格式无效" };
+    }
+    const record = combine(checkpoint, heartbeat);
+    if (!record) return { status: "invalid", record: null, message: "纯挂机检查点与事务日志不属于同一会话" };
+    if (record.committed) {
+      return { status: "committed", record, message: "纯挂机恢复事务已经提交，不会再次结算" };
+    }
+    return { status: "valid", record, message: "检测到仍可恢复的纯挂机会话" };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      record: null,
+      message: error instanceof Error && error.message ? `无法读取纯挂机恢复日志：${error.message}` : "无法读取纯挂机恢复日志",
+    };
+  }
 }
 
 export async function createPureIdleRecovery(
@@ -404,11 +470,12 @@ export async function createPureIdleRecovery(
   const transaction = db.transaction(STORE_NAME, "readwrite");
   const store = transaction.objectStore(STORE_NAME);
   const existing = await requestResult(store.get(HEARTBEAT_KEY));
-  if (validHeartbeat(existing) && existing.ownerToken !== ownerToken && existing.leaseExpiresAtMs > nowMs) {
+  if (validHeartbeat(existing) && existing.committed !== true && existing.ownerToken !== ownerToken && existing.leaseExpiresAtMs > nowMs) {
     transaction.abort();
     releaseBrowserLease(ownerToken);
     return { ok: false, reason: "owned", message: "另一个标签页正在运行纯挂机，请先在原标签页停止" };
   }
+  const checkpointState = sanitizePureIdleRecoveryState(state);
   const checkpoint: PureIdleCheckpointRecord = {
     key: CHECKPOINT_KEY,
     schemaVersion: RECOVERY_SCHEMA_VERSION,
@@ -417,7 +484,7 @@ export async function createPureIdleRecovery(
     startedAtMs,
     startedPaused,
     mode,
-    state,
+    state: checkpointState,
   };
   const heartbeat: PureIdleHeartbeatRecord = {
     key: HEARTBEAT_KEY,
@@ -430,7 +497,7 @@ export async function createPureIdleRecovery(
     phase: "calibrating",
     workerRestartCount: 0,
     settlementId: randomToken("settlement"),
-    checkpointHash: checkpointFingerprint(state),
+    checkpointHash: checkpointFingerprint(checkpointState),
     committed: false,
     lastTransitionAtMs: nowMs,
   };

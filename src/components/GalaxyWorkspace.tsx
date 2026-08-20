@@ -24,6 +24,7 @@ import {
   RotateCcw,
   Send,
   Save,
+  Satellite,
   ShieldCheck,
   Trophy,
   Trash2,
@@ -33,10 +34,10 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ACCOUNT_AVATARS, getActiveAccount, getGalacticThroughputSnapshot, type AccountProfileChanges, type AccountState } from "../game/account";
-import { CloudApiError, clearCloudSyncMarker, compareCloudSave, deleteCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, fetchSpeedrunLeaderboard, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, refreshCloudSaveMetadata, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, submitSpeedrunResult, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState, type CloudUploadStage, type SpeedrunLeaderboardEntry } from "../game/cloud";
-import { exportGame, exportGameSlot, getSaveSlotSummaries, inspectSave, saveGameSlotVerified, type SaveSlotId } from "../game/storage";
+import { CloudApiError, clearCloudSyncMarker, compareCloudSave, deleteCloudSave, describeCloudUploadError, downloadCloudSave, fetchCloudLeaderboard, fetchCloudLeaderboardMe, fetchCloudSaveHistory, fetchSpeedrunLeaderboard, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, refreshCloudSaveMetadata, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, submitSpeedrunResult, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudLeaderboardMe, type CloudLeaderboardMetricWindow, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState, type CloudUploadDiagnostics, type CloudUploadStage, type SpeedrunLeaderboardEntry } from "../game/cloud";
+import { exportGame, exportGameSlotFromPersistence, getSaveSlotSummaries, inspectSave, saveGameSlotVerified, type SaveSlotId } from "../game/storage";
 import {
   LEADERBOARD_CATEGORIES,
   LEADERBOARD_SEASONS,
@@ -56,6 +57,13 @@ import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import { PowerValue } from "./PowerValue";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
+import { CloudSaveStatusCenter } from "./CloudSaveStatusCenter";
+import { WorkspaceFrame } from "./WorkspaceFrame";
+import { cloudSaveCapacityDetails, type CloudSaveCapacityDetails } from "../game/cloudSaveCapacity";
+import { cloudSyncStatusFromUpload, writeCloudSyncStatus } from "../game/cloudSyncStatus";
+import { exportTextFile } from "../game/fileExport";
+import { getPrimaryLocalSaveRevision } from "../game/localSaveStore";
 
 type GalaxyTab = "ranking" | "speedrun" | "cloud" | "account";
 
@@ -106,7 +114,31 @@ function cloudSyncLabel(state: CloudSyncState): string {
 function cloudUploadStageLabel(stage: CloudUploadStage): string {
   if (stage === "compressing") return "压缩存档";
   if (stage === "sending") return "发送云端";
+  if (stage === "confirming") return "正在核对云端是否已保存";
   return "等待服务器确认";
+}
+
+function leaderboardWindowMessage(window: CloudLeaderboardMetricWindow | null, category: LeaderboardCategoryId, hasHistoricalPeak: boolean): string | null {
+  if (!window) return null;
+  const metric = category === "white-rate" ? "白糖产量" : "实际结算吞吐";
+  const retained = hasHistoricalPeak ? "；已验证的历史峰值仍会保留" : "";
+  const observed = Math.max(0, Math.floor(window.observedSeconds));
+  if (window.status === "missing_adjacent_revision") return `缺少相邻普通主云修订，当前已观察 ${observed} 个模拟秒；完成第二次有效同步后再统计${retained}`;
+  if (window.status === "interval_too_short") return `统计窗口已观察 ${observed} 个模拟秒，还需 ${Math.ceil(window.remainingSeconds)} 秒才能统计${metric}${retained}`;
+  if (window.status === "elapsed_not_increasing") return `相邻修订的模拟时间没有增加（已观察 ${observed} 秒），本次不计入${metric}排名${retained}`;
+  if (window.status === "valid_zero_production") return `有效窗口，当前无产出（已观察 ${observed} 个模拟秒）`;
+  if (window.status === "ranked") return `服务器已采用主云修订 ${window.fromRevision ?? "?"} → ${window.toRevision ?? "?"} 的 ${observed} 秒窗口认证${metric}`;
+  return `相邻主云窗口暂不可用（已观察 ${observed} 个模拟秒），本次不更新${metric}成绩${retained}`;
+}
+
+function leaderboardStatusMessage(me: CloudLeaderboardMe | null): string | null {
+  if (!me) return null;
+  if (me.status === "missing_main_save") return "尚未上传普通模式主云存档；速通主档和手动槽位不会参与银河排行";
+  if (me.status === "revalidation_required") return `排行榜正在等待新的普通模式主云修订完成复核${me.reviewResumeAfterRevision ? `（需高于修订 ${me.reviewResumeAfterRevision}）` : ""}`;
+  if (me.status === "restricted") return "当前账号受到排行榜限制；本地与云存档仍保持正常，不会因此被修改";
+  if (me.status === "hidden") return "当前账号已退出公开排行榜；云存档仍正常同步";
+  if (me.status === "unavailable") return "服务器暂时无法生成当前账号成绩；玩家存档、云存档和生产数据不会因此被修改";
+  return null;
 }
 
 export function GalaxyWorkspace({
@@ -138,8 +170,14 @@ export function GalaxyWorkspace({
   const [cloudPassword, setCloudPassword] = useState("");
   const [cloudDisplayName, setCloudDisplayName] = useState("");
   const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudUploadActive, setCloudUploadActive] = useState(false);
+  const cloudUploadAbortRef = useRef<AbortController | null>(null);
+  const [cloudUploadCapacity, setCloudUploadCapacity] = useState<CloudSaveCapacityDetails | null>(null);
+  const [cloudUploadErrorCode, setCloudUploadErrorCode] = useState<string | null>(null);
   const [cloudMessage, setCloudMessage] = useState<string | null>(null);
   const [cloudEntries, setCloudEntries] = useState<CloudLeaderboardEntry[]>([]);
+  const [cloudLeaderboardMe, setCloudLeaderboardMe] = useState<CloudLeaderboardMe | null>(null);
+  const [leaderboardMeError, setLeaderboardMeError] = useState<string | null>(null);
   const [leaderboardStatus, setLeaderboardStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
   const [leaderboardVisibilityBusy, setLeaderboardVisibilityBusy] = useState(false);
@@ -152,6 +190,7 @@ export function GalaxyWorkspace({
   const [localSaveSlots, setLocalSaveSlots] = useState(() => getSaveSlotSummaries(game.mode));
   const account = getActiveAccount(accountState);
   const speedrunSummary = useMemo(() => getSpeedrunSummary(game), [game]);
+  const ownSpeedrunPublicId = cloudSession.user?.speedrunPublicId ?? cloudSession.user?.id;
   const metrics = useMemo(() => getLeaderboardMetrics(account.ledger), [account.ledger]);
   const localNominalThroughput = useMemo(() => getGalacticThroughputSnapshot(game), [game]);
   const snapshot = useMemo(
@@ -164,28 +203,100 @@ export function GalaxyWorkspace({
   const displayEntries = useMemo<LeaderboardEntry[]>(() => {
     if (leaderboardStatus === "error") return snapshot.entries;
     if (leaderboardStatus !== "ready") return [];
-    return cloudEntries.map((entry) => ({
+    const currentUserId = cloudLeaderboardMe?.entry?.userId;
+    const entries = cloudEntries.map((entry) => ({
       ...entry,
-      isLocal: cloudSession.status === "authenticated" && entry.userId === cloudSession.user?.id,
+      isLocal: cloudSession.status === "authenticated" && Boolean(currentUserId) && entry.userId === currentUserId,
       submitted: true,
     } satisfies LeaderboardEntry));
-  }, [cloudEntries, cloudSession.status, cloudSession.user?.id, leaderboardStatus, snapshot.entries]);
+    if (cloudSession.status === "authenticated" && cloudLeaderboardMe?.entry && !entries.some((entry) => entry.isLocal)) {
+      entries.push({ ...cloudLeaderboardMe.entry, isLocal: true, submitted: true });
+    }
+    return entries;
+  }, [cloudEntries, cloudLeaderboardMe, cloudSession.status, leaderboardStatus, snapshot.entries]);
   const displayedLocalEntry = displayEntries.find((entry) => entry.isLocal);
-  const actualThroughputMetrics = displayedLocalEntry?.metrics ?? metrics;
-  const activePlanetThroughput = displayedLocalEntry?.metrics.activePlanetThroughputPerMinute
+  const serverLocalEntry = leaderboardStatus === "ready" ? cloudLeaderboardMe?.entry ?? undefined : undefined;
+  const serverMetrics = leaderboardStatus === "ready" ? cloudLeaderboardMe?.serverMetrics ?? null : null;
+  const activePlanetThroughput = serverMetrics?.activePlanetThroughputPerMinute
     ?? localNominalThroughput.activePlanetValue;
-  const galacticThroughput = displayedLocalEntry?.metrics.galacticThroughputPerMinute
+  const galacticThroughput = serverMetrics?.galacticThroughputPerMinute
     ?? localNominalThroughput.galacticValue;
-  const nominalThroughputMetricVersion = displayedLocalEntry?.metrics.nominalThroughputMetricVersion
+  const nominalThroughputMetricVersion = serverMetrics?.nominalThroughputMetricVersion
     ?? localNominalThroughput.metricVersion;
   const leaderboardVisible = cloudSession.status === "authenticated"
     ? cloudSession.user?.leaderboardVisible !== false
     : account.profile.privacy === "public";
   const cloudLeaderboardEligible = game.mode === "normal" && cloudSession.status === "authenticated" && Boolean(cloudSession.cloudSave) && leaderboardVisible;
+  const selectedMetricWindow = cloudLeaderboardMe?.latestWindowState ?? null;
+  const rawServerWhiteValue = serverMetrics?.peakWhiteMatrixPerMinute ?? null;
+  const rawServerThroughputValue = serverMetrics?.peakThroughputPerMinute ?? null;
+  const serverWhiteValue = rawServerWhiteValue !== null && (rawServerWhiteValue > 0 || category === "white-rate" && selectedMetricWindow?.valid)
+    ? rawServerWhiteValue
+    : null;
+  const serverThroughputValue = rawServerThroughputValue !== null && (rawServerThroughputValue > 0 || category === "throughput" && selectedMetricWindow?.valid)
+    ? rawServerThroughputValue
+    : null;
+  const serverCategoryValue = category === "white-rate"
+    ? serverWhiteValue
+    : category === "throughput"
+      ? serverThroughputValue
+      : serverMetrics ? getLeaderboardValue(serverMetrics, category) : null;
+  const localCategoryValue = getLeaderboardValue(metrics, category);
+  const categoryValueForDisplay = cloudSession.status === "authenticated" ? serverCategoryValue : localCategoryValue;
+  const categoryValueLabel = categoryValueForDisplay === null ? "--" : formatLeaderboardValue(categoryValueForDisplay, category);
+  const hasHistoricalPeak = (serverCategoryValue ?? 0) > 0;
+  const metricWindowMessage = leaderboardWindowMessage(selectedMetricWindow, category, hasHistoricalPeak);
+  const statusMessage = leaderboardStatusMessage(cloudLeaderboardMe);
+  const serverMetricPending = cloudSession.status === "authenticated" && (category === "white-rate" || category === "throughput") && serverCategoryValue === null;
+  const localServerMetricMessage = cloudSession.status === "authenticated" && category === "throughput"
+    ? serverCategoryValue === null && localCategoryValue > 0
+      ? `本地 60 秒最佳为 ${formatLeaderboardValue(localCategoryValue, category)}/min；服务器尚无有效窗口，本地值不会计入服务器排行榜。`
+      : serverCategoryValue !== null && Math.abs(serverCategoryValue - localCategoryValue) > Math.max(1, Math.abs(serverCategoryValue) * 0.000001)
+        ? `本地 60 秒最佳为 ${formatLeaderboardValue(localCategoryValue, category)}/min，服务器认证峰值为 ${formatLeaderboardValue(serverCategoryValue, category)}/min；服务器排行榜只采用普通模式主云存档。`
+        : null
+    : null;
+  const rankLabel = cloudSession.status !== "authenticated"
+    ? "未登录"
+    : leaderboardStatus === "loading"
+      ? "读取中"
+      : leaderboardStatus === "error"
+        ? "本地预览"
+        : leaderboardMeError
+          ? "认证状态不可用"
+          : cloudLeaderboardMe?.rank
+            ? `#${cloudLeaderboardMe.rank}${cloudLeaderboardMe.rank > 100 ? " · Top 100 外" : ""}`
+            : cloudLeaderboardMe?.status === "hidden" || !leaderboardVisible
+              ? "已退出"
+              : cloudLeaderboardMe?.status === "restricted"
+                ? "已限制"
+                : cloudLeaderboardMe?.status === "revalidation_required"
+                  ? "等待复核"
+                  : cloudLeaderboardMe?.status === "missing_main_save"
+                    ? "待同步"
+                    : ["missing_adjacent_revision", "interval_too_short", "elapsed_not_increasing"].includes(cloudLeaderboardMe?.status ?? "")
+                      ? "等待统计"
+                      : cloudLeaderboardMe?.status === "valid_zero_production"
+                        ? "有效零产出"
+                        : "未生成";
+  const rankDetail = leaderboardStatus === "loading"
+    ? "正在读取当前账户的服务器认证排名"
+    : leaderboardStatus === "error"
+      ? "排行榜暂时不可达，当前只显示本地预览数据"
+      : leaderboardMeError
+        ? leaderboardMeError
+        : statusMessage
+    ?? metricWindowMessage
+    ?? (serverLocalEntry
+      ? cloudLeaderboardMe && cloudLeaderboardMe.rank !== null && cloudLeaderboardMe.rank > 100
+        ? `服务器认证成绩已计入；完整榜共 ${cloudLeaderboardMe.totalEntries} 条`
+        : "服务器认证成绩已计入"
+      : cloudSession.status === "authenticated" ? "上传主云存档后自动加入" : "访客可查看真实排名");
+  const leaderboardSourceLabel = `${cloudLeaderboardMe?.mode === "normal" ? "普通模式" : "普通模式"} · ${cloudLeaderboardMe?.slot === "main" ? "主存档" : "主存档"}${cloudLeaderboardMe?.latestCloudRevision ? ` · 修订 ${cloudLeaderboardMe.latestCloudRevision}` : ""}`;
 
   useEffect(() => {
     if (open && focusTab) setTab(focusTab);
   }, [focusTab, open]);
+  useEffect(() => () => cloudUploadAbortRef.current?.abort(), []);
   useEffect(() => {
     if (!open || tab !== "speedrun") return;
     let cancelled = false;
@@ -218,6 +329,8 @@ export function GalaxyWorkspace({
   useEffect(() => {
     if (!open || cloudSession.status === "checking") return;
     if (cloudSession.status === "offline") {
+      setCloudLeaderboardMe(null);
+      setLeaderboardMeError(null);
       setLeaderboardStatus("error");
       setLeaderboardError(cloudSession.message ?? "排行榜节点暂时不可达，当前显示本地回退数据");
       return;
@@ -225,20 +338,37 @@ export function GalaxyWorkspace({
     let active = true;
     setLeaderboardStatus("loading");
     setLeaderboardError(null);
-    void fetchCloudLeaderboard(category, seasonId)
-      .then((entries) => {
+    setLeaderboardMeError(null);
+    setCloudLeaderboardMe(null);
+    void (async () => {
+      try {
+        const entries = await fetchCloudLeaderboard(category, seasonId);
+        let me: CloudLeaderboardMe | null = null;
+        let meError: string | null = null;
+        if (cloudSession.status === "authenticated") {
+          try {
+            me = await fetchCloudLeaderboardMe(category, seasonId);
+          } catch (error) {
+            meError = error instanceof Error ? error.message : "当前账户认证排名读取失败";
+          }
+        }
         if (!active) return;
         setCloudEntries(entries);
+        setCloudLeaderboardMe(me);
+        setLeaderboardMeError(meError);
+        setLeaderboardError(meError);
         setLeaderboardStatus("ready");
-      })
-      .catch((error) => {
+      } catch (error) {
         if (!active) return;
         setCloudEntries([]);
+        setCloudLeaderboardMe(null);
+        setLeaderboardMeError(null);
         setLeaderboardStatus("error");
         setLeaderboardError(error instanceof Error ? error.message : "排行榜读取失败");
-      });
+      }
+    })();
     return () => { active = false; };
-  }, [category, cloudSession.status, open, seasonId, uploadRevision]);
+  }, [category, cloudSession.status, cloudSession.user?.id, open, seasonId, uploadRevision]);
   useEffect(() => {
     if (!open || cloudSession.status !== "authenticated") {
       setCloudHistory([]);
@@ -269,8 +399,13 @@ export function GalaxyWorkspace({
     }
     try {
       await submitCloudLeaderboard(seasonId);
-      const entries = await fetchCloudLeaderboard(category, seasonId);
+      const [entries, me] = await Promise.all([
+        fetchCloudLeaderboard(category, seasonId),
+        fetchCloudLeaderboardMe(category, seasonId),
+      ]);
       setCloudEntries(entries);
+      setCloudLeaderboardMe(me);
+      setLeaderboardMeError(null);
       setLeaderboardStatus("ready");
       setLeaderboardError(null);
     } catch (error) {
@@ -313,6 +448,8 @@ export function GalaxyWorkspace({
         : await loginCloudAccount(cloudIdentifier, cloudPassword);
       setCloudSession(session);
       setCloudPassword("");
+      clearStableTextDraft("galaxy-cloud-identifier");
+      clearStableTextDraft("galaxy-cloud-display-name");
       setCloudMessage(cloudMode === "register" ? "云账户已创建，云存档与自动同步已开放" : "云账户已登录，本地存档保持不变");
     } catch (error) {
       setCloudMessage(error instanceof Error ? error.message : "云账户操作失败");
@@ -325,8 +462,15 @@ export function GalaxyWorkspace({
     if (cloudSession.status !== "authenticated" || !cloudSession.user) return;
     const userId = cloudSession.user.id;
     const localPayload = exportGame(game);
+    const initialCapacity = cloudSaveCapacityDetails(new TextEncoder().encode(localPayload).byteLength);
+    setCloudUploadCapacity(initialCapacity);
+    setCloudUploadErrorCode(null);
+    writeCloudSyncStatus(cloudSyncStatusFromUpload(game.mode, "main", "preparing", { comparison: cloudComparison?.state ?? null, cloud: cloudSession.cloudSave, message: "正在生成和校验当前主存档", sizes: initialCapacity }));
+    setCloudUploadActive(true);
     setCloudBusy(true);
     setCloudMessage(null);
+    const controller = new AbortController();
+    cloudUploadAbortRef.current = controller;
     try {
       const comparison = compareCloudSave(userId, localPayload, cloudSession.cloudSave, "main", game.mode);
       if (cloudSession.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
@@ -335,19 +479,38 @@ export function GalaxyWorkspace({
         return;
       }
       const uploaded = await uploadCloudSave(localPayload, cloudSession.cloudSave?.revision ?? 0, "main", { mode: game.mode,
-        onStage: (stage) => setCloudMessage(cloudUploadStageLabel(stage)),
+        signal: controller.signal,
+        onStage: (stage) => {
+          const message = cloudUploadStageLabel(stage);
+          setCloudMessage(message);
+          writeCloudSyncStatus(cloudSyncStatusFromUpload(game.mode, "main", stage === "compressing" ? "compressing" : stage === "confirming" ? "confirming" : "uploading", { comparison: cloudComparison?.state ?? null, cloud: cloudSession.cloudSave, message, sizes: initialCapacity }));
+        },
+        onDiagnostics: (diagnostics: CloudUploadDiagnostics) => setCloudUploadCapacity(diagnostics.capacity),
       });
       const metadata = await refreshCloudSaveMetadata("main", undefined, game.mode).catch(() => uploaded) ?? uploaded;
       markCloudSaveSynchronized(userId, metadata, localPayload, "main", game.mode);
       setCloudSession((current) => ({ ...current, cloudSave: metadata, cloudSaves: { "1": null, "2": null, "3": null, ...current.cloudSaves, main: metadata } }));
       setUploadRevision((revision) => revision + 1);
       setCloudMessage(`云存档已更新到修订 ${metadata.revision}，排行榜已自动更新`);
+      writeCloudSyncStatus(cloudSyncStatusFromUpload(game.mode, "main", "success", { comparison: "synced", cloud: metadata, lastSuccessfulSyncAt: Date.now(), message: `已提交并确认修订 ${metadata.revision}`, sizes: cloudUploadCapacity ?? initialCapacity }));
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setCloudUploadErrorCode("ABORTED");
+        setCloudMessage("云存档上传已取消；本地存档与云端旧修订均保持不变");
+        writeCloudSyncStatus(cloudSyncStatusFromUpload(game.mode, "main", "cancelled", { comparison: cloudComparison?.state ?? null, cloud: cloudSession.cloudSave, message: "玩家取消上传；本地存档与云端旧修订保持不变", errorCode: "ABORTED", sizes: cloudUploadCapacity ?? initialCapacity }));
+        return;
+      }
       if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
         setCloudConflict({ slot: "main", localPayload, remote: error.payload.cloudSave as CloudSaveMetadata });
       }
-      setCloudMessage(error instanceof Error ? error.message : "云存档上传失败");
+      const described = describeCloudUploadError(error, initialCapacity.originalBytes, cloudUploadCapacity?.compressedBytes ?? null);
+      setCloudUploadCapacity(described.capacity ?? cloudUploadCapacity);
+      setCloudUploadErrorCode(described.code);
+      setCloudMessage(described.message);
+      writeCloudSyncStatus(cloudSyncStatusFromUpload(game.mode, "main", error instanceof CloudApiError && error.status === 409 ? "conflict" : "failed", { comparison: error instanceof CloudApiError && error.status === 409 ? "conflict" : cloudComparison?.state ?? null, cloud: cloudSession.cloudSave, message: described.message, errorCode: described.code, sizes: described.capacity ?? cloudUploadCapacity ?? initialCapacity }));
     } finally {
+      if (cloudUploadAbortRef.current === controller) cloudUploadAbortRef.current = null;
+      setCloudUploadActive(false);
       setCloudBusy(false);
     }
   };
@@ -387,7 +550,7 @@ export function GalaxyWorkspace({
 
   const uploadManualCloudSlot = async (slot: Exclude<CloudSaveSlot, "main">) => {
     if (cloudSession.status !== "authenticated" || !cloudSession.user) return;
-    const localPayload = exportGameSlot(Number(slot) as SaveSlotId, game.mode);
+    const localPayload = await exportGameSlotFromPersistence(Number(slot) as SaveSlotId, game.mode);
     if (!localPayload) {
       setCloudMessage(`本地槽位 ${slot} 为空或校验失败`);
       return;
@@ -423,7 +586,7 @@ export function GalaxyWorkspace({
     if (cloudSession.status !== "authenticated" || !cloudSession.user) return;
     const remote = cloudSession.cloudSaves?.[slot] ?? null;
     if (!remote) return;
-    const localPayload = exportGameSlot(Number(slot) as SaveSlotId, game.mode);
+    const localPayload = await exportGameSlotFromPersistence(Number(slot) as SaveSlotId, game.mode);
     const comparison = compareCloudSave(cloudSession.user.id, localPayload, remote, slot, game.mode);
     if (localPayload && comparison.state !== "synced") {
       setCloudConflict({ slot, localPayload, remote });
@@ -485,6 +648,11 @@ export function GalaxyWorkspace({
       const metadata = await restoreCloudSaveRevision(revision, cloudSession.cloudSave?.revision ?? 0, "main", game.mode);
       updateCloudSlot("main", metadata);
       setCloudMessage(`修订 ${revision} 已恢复为新的修订 ${metadata.revision}`);
+      writeCloudSyncStatus(cloudSyncStatusFromUpload(game.mode, "main", "restored", {
+        comparison: "cloud-newer",
+        cloud: metadata,
+        message: `云端修订 ${revision} 已恢复为新修订 ${metadata.revision}；本地存档尚未替换`,
+      }));
     } catch (error) {
       if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
         const remote = error.payload.cloudSave as CloudSaveMetadata;
@@ -502,6 +670,12 @@ export function GalaxyWorkspace({
     setCloudMessage(result.message);
     if (result.success) {
       if (cloudSession.status === "authenticated" && cloudSession.user) markCloudSaveSynchronized(cloudSession.user.id, pendingCloudSave, pendingCloudSave.payload, "main", game.mode);
+      writeCloudSyncStatus(cloudSyncStatusFromUpload(game.mode, "main", "restored", {
+        comparison: "synced",
+        cloud: pendingCloudSave,
+        lastSuccessfulSyncAt: Date.now(),
+        message: `已恢复并校验云端修订 ${pendingCloudSave.revision}，恢复前本地快照已保留`,
+      }));
       setPendingCloudSave(null);
     }
   };
@@ -591,7 +765,7 @@ export function GalaxyWorkspace({
   };
 
   return (
-    <section className="galaxy-workspace" role="dialog" aria-modal="true" aria-label="银河网络">
+    <WorkspaceFrame className="galaxy-workspace" ariaLabel="银河网络" onRequestClose={onClose}>
       <header className="galaxy-header">
         <div className="galaxy-title">
           <i><Globe2 size={20} /></i>
@@ -634,8 +808,8 @@ export function GalaxyWorkspace({
           </section>
 
           <section className="galaxy-summary-band">
-            <div><span>我的排名</span><strong>{cloudSession.status !== "authenticated" ? "未登录" : displayedLocalEntry?.rank ? `#${displayedLocalEntry.rank}` : !leaderboardVisible ? "已退出" : "未上榜"}</strong><small>{displayedLocalEntry?.submitted ? "主云存档已计入" : cloudSession.status === "authenticated" ? "上传主云存档后自动加入" : "访客可查看真实排名"}</small></div>
-            <div><span>{snapshot.category.label}</span><strong>{formatLeaderboardValue(displayedLocalEntry?.value ?? getLeaderboardValue(metrics, category), category)}<small>{snapshot.category.unit}</small></strong><small>{snapshot.category.description}</small></div>
+            <div><span>我的排名</span><strong>{rankLabel}</strong><small title={rankDetail}>{rankDetail}</small></div>
+            <div><span>{snapshot.category.label}</span><strong>{categoryValueLabel}{categoryValueForDisplay === null ? null : <small>{snapshot.category.unit}</small>}</strong><small>{serverMetricPending ? "服务器尚无有效指标" : serverCategoryValue !== null ? "服务器认证指标" : snapshot.category.description}</small></div>
             <div><span>银河规模</span><strong>{metrics.exploredSystems}<small>星系</small></strong><small>{metrics.colonizedPlanets} 颗殖民行星</small></div>
             <div><span>节点状态</span><strong className={leaderboardStatus === "ready" ? "positive" : "preview"}>{leaderboardStatus === "ready" ? "真实排行" : leaderboardStatus === "loading" ? "读取中" : "本地回退"}</strong><small>{displayedLocalEntry ? formatTimestamp(displayedLocalEntry.submittedAt) : "--"}</small></div>
           </section>
@@ -651,7 +825,7 @@ export function GalaxyWorkspace({
                     <div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.isLocal ? "当前账户" : leaderboardStatus === "ready" ? "真实玩家" : "本地模拟样本"}</small></span></div>
                     <span className="galaxy-rank-footprint"><strong>{entry.metrics.exploredSystems} 星系 · {entry.metrics.colonizedPlanets} 行星</strong><small>峰值发电 <PowerValue valueKw={entry.metrics.peakGenerationKw} /></small></span>
                     <strong className="galaxy-rank-value" title={`${formatQuantityExact(Math.floor(entry.value))}${snapshot.category.unit ? ` ${snapshot.category.unit}` : category === "dyson" ? " kW" : ""}`}>{formatLeaderboardValue(entry.value, category)}<small>{snapshot.category.unit}</small></strong>
-                    <span className={`galaxy-rank-status${entry.isLocal && !entry.submitted ? " galaxy-rank-status--preview" : ""}`}>{entry.verified ? <ShieldCheck size={13} /> : <Activity size={13} />}{leaderboardStatus === "ready" ? "主云存档计算" : entry.accountId.startsWith("npc_") ? "模拟基准" : "本地记录"}</span>
+                    <span className="galaxy-rank-actions"><span className={`galaxy-rank-status${entry.isLocal && !entry.submitted ? " galaxy-rank-status--preview" : ""}`}>{entry.verified ? <ShieldCheck size={13} /> : <Activity size={13} />}{leaderboardStatus === "ready" ? "主云存档计算" : entry.accountId.startsWith("npc_") ? "模拟基准" : "本地记录"}</span>{entry.stationPublicId ? <a href={`/station/${entry.stationPublicId}`} target="_blank" rel="noreferrer" title={`访问${entry.displayName}的空间站`}><Satellite size={13} />访问空间站</a> : null}</span>
                   </article>
                 ))}
               </div>
@@ -662,12 +836,14 @@ export function GalaxyWorkspace({
               <dl>
                 <div><dt>累计发电</dt><dd>{formatMetric(metrics.energyGeneratedMj, 1)} <small>MJ</small></dd></div>
                 <div><dt>白矩阵上传</dt><dd>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></dd></div>
-                <div><dt>白糖产量峰值</dt><dd>{formatMetric(displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0, 1)} <small>/min</small></dd></div>
+                <div><dt>服务器白糖产量峰值</dt><dd>{serverWhiteValue === null ? "--" : formatMetric(serverWhiteValue, 1)} {serverWhiteValue === null ? null : <small>/min</small>}</dd></div>
+                <div><dt>本地 60 秒白糖最佳</dt><dd>-- <small>本地尚未记录</small></dd></div>
                 <div><dt>戴森峰值</dt><dd><PowerValue valueKw={metrics.peakDysonPowerKw} /></dd></div>
-                <div><dt>实际结算吞吐</dt><dd>{formatMetric(actualThroughputMetrics.peakThroughputPerMinute, 1)} <small>/min</small></dd></div>
+                <div><dt>服务器实际结算吞吐</dt><dd>{serverThroughputValue === null ? "--" : formatMetric(serverThroughputValue, 1)} {serverThroughputValue === null ? null : <small>/min</small>}</dd></div>
+                <div><dt>本地 60 秒实际结算吞吐最佳</dt><dd>{formatMetric(metrics.peakThroughputPerMinute, 1)} <small>/min</small></dd></div>
                 <div><dt>当前星球理论速率</dt><dd>{formatMetric(activePlanetThroughput, 1)} <small>/min</small></dd></div>
                 <div><dt>全星区理论速率</dt><dd>{formatMetric(galacticThroughput, 1)} <small>/min</small></dd></div>
-                <div><dt>全星区理论峰值</dt><dd>{formatMetric(displayedLocalEntry?.metrics.theoreticalPeakThroughputPerMinute ?? metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></dd></div>
+                <div><dt>全星区理论峰值</dt><dd>{formatMetric(serverMetrics?.theoreticalPeakThroughputPerMinute ?? metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></dd></div>
               </dl>
               <button
                 className={`galaxy-upload-command galaxy-upload-command--${uploadState}`}
@@ -678,11 +854,14 @@ export function GalaxyWorkspace({
                 {uploadState === "success" ? <Check size={15} /> : !leaderboardVisible ? <LockKeyhole size={15} /> : <Send size={15} />}
                 {uploadState === "success" ? "排名已刷新" : !leaderboardVisible ? "已退出公开排行榜" : snapshot.season.status === "ended" ? "历史赛季已封存" : cloudSession.status !== "authenticated" ? "登录后刷新排名" : !cloudSession.cloudSave ? "先上传主云存档" : "立即刷新排名"}
               </button>
+              {cloudSession.status === "authenticated" && game.mode === "normal" ? <button className="galaxy-upload-command" type="button" disabled={cloudBusy} onClick={() => void saveCurrentFactoryToCloud()}><Cloud size={15} />立即同步普通主存档</button> : null}
               {cloudSession.status === "authenticated" ? <label className="galaxy-leaderboard-visibility"><span><strong>{leaderboardVisible ? "参与公开排行榜" : "已退出排行榜"}</strong><small>{leaderboardVisible ? "主云存档同步成功后自动更新排名" : "后续同步不会重新加入，可随时恢复"}</small></span><input type="checkbox" checked={leaderboardVisible} disabled={leaderboardVisibilityBusy} onChange={(event) => void updateLeaderboardVisibility(event.target.checked)} aria-label="参与公开排行榜" /></label> : null}
               {leaderboardError ? <p className="galaxy-leaderboard-error" role="alert"><CloudOff size={13} /><span>{leaderboardError}</span></p> : null}
-              {category === "white-rate" && (displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0) <= 0 ? <p><Gauge size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成白糖产量区间。</span></p> : null}
-              {category === "throughput" && (displayedLocalEntry?.metrics.peakThroughputPerMinute ?? 0) <= 0 ? <p><Factory size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成实际结算吞吐窗口；旧理论峰值不会与新口径混排。</span></p> : null}
+              {statusMessage ? <p><LockKeyhole size={13} /><span>{statusMessage}</span></p> : null}
+              {metricWindowMessage ? <p>{category === "white-rate" ? <Gauge size={13} /> : <Factory size={13} />}<span>{metricWindowMessage}</span></p> : null}
+              {localServerMetricMessage ? <p><History size={13} /><span>{localServerMetricMessage}</span></p> : null}
               {nominalThroughputMetricVersion === "legacy-active-planet-v1" ? <p><History size={13} /><span>该记录缺少完整行星指标，理论速率暂按旧存档的当前星球口径显示；实际结算吞吐不受此回退影响。</span></p> : null}
+              <p><Database size={13} /><span>当前认证数据源：{leaderboardSourceLabel}。速通主槽和手动槽不会更新银河榜。</span></p>
               <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? cloudSession.cloudSave ? "主云存档上传和十分钟自动同步成功后，服务端会自动更新排名。" : "请先上传当前主云存档；手动槽位不会加入排行榜。" : "访客可查看真实玩家排名；登录并上传主云存档后自动参与。"}</span></p>
             </aside>
           </div>
@@ -701,7 +880,7 @@ export function GalaxyWorkspace({
           <section className="galaxy-summary-band">
             <div><span>当前工厂</span><strong>{speedrunSummary ? formatSpeedrunDuration(speedrunSummary.elapsedActiveSeconds) : "普通工厂"}</strong><small>{speedrunSummary?.eligible ? "可提交服务端校验" : "普通工厂不具备速通资格"}</small></div>
             <div><span>目标进度</span><strong>{speedrunSummary ? `${speedrunSummary.progress[speedrunTarget].current.toLocaleString("zh-CN")}/${speedrunSummary.progress[speedrunTarget].target.toLocaleString("zh-CN")}` : "--"}</strong><small>{SPEEDRUN_TARGETS[speedrunTarget].label}</small></div>
-            <div><span>我的最好成绩</span><strong>{speedrunEntries.find((entry) => entry.userId === cloudSession.user?.id)?.elapsedSeconds ? formatSpeedrunDuration(speedrunEntries.find((entry) => entry.userId === cloudSession.user?.id)!.elapsedSeconds) : "未上榜"}</strong><small>仅显示已验证成绩</small></div>
+            <div><span>我的最好成绩</span><strong>{speedrunEntries.find((entry) => entry.userId === ownSpeedrunPublicId)?.elapsedSeconds ? formatSpeedrunDuration(speedrunEntries.find((entry) => entry.userId === ownSpeedrunPublicId)!.elapsedSeconds) : "未上榜"}</strong><small>仅显示已验证成绩</small></div>
             <div><span>资格</span><strong className={speedrunSummary?.eligible ? "positive" : "preview"}>{speedrunSummary?.eligible ? "已具备" : "未验证"}</strong><small>{speedrunSummary?.invalidReason ?? "服务端提交后才会进入正式排名"}</small></div>
           </section>
           <div className="galaxy-ranking-layout">
@@ -710,7 +889,7 @@ export function GalaxyWorkspace({
               <div className="galaxy-leaderboard-rows">
                 {speedrunStatus === "loading" ? <p className="galaxy-leaderboard-empty">正在读取速通排行榜…</p> : null}
                 {speedrunStatus === "ready" && speedrunEntries.length === 0 ? <p className="galaxy-leaderboard-empty">本赛季还没有已验证成绩</p> : null}
-                {speedrunEntries.map((entry) => <article className={entry.userId === cloudSession.user?.id ? "galaxy-rank-row--local" : ""} key={entry.submissionId}><strong className="galaxy-rank-number">{entry.rank}</strong><div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.userId === cloudSession.user?.id ? "当前账户" : "已验证玩家"}</small></span></div><strong className="galaxy-rank-value">{formatSpeedrunDuration(entry.elapsedSeconds)}</strong><span>{new Date(entry.completedAt).toLocaleDateString("zh-CN")}</span><span className="galaxy-rank-status"><ShieldCheck size={13} />已验证</span></article>)}
+                {speedrunEntries.map((entry) => <article className={entry.userId === ownSpeedrunPublicId ? "galaxy-rank-row--local" : ""} key={entry.submissionId}><strong className="galaxy-rank-number">{entry.rank}</strong><div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.userId === ownSpeedrunPublicId ? "当前账户" : "已验证玩家"}</small></span></div><strong className="galaxy-rank-value">{formatSpeedrunDuration(entry.elapsedSeconds)}</strong><span>{new Date(entry.completedAt).toLocaleDateString("zh-CN")}</span><span className="galaxy-rank-status"><ShieldCheck size={13} />已验证{entry.resourceMode === "infinite" ? " · 无限矿物" : ""}</span></article>)}
               </div>
             </section>
             <aside className="galaxy-upload-panel">
@@ -733,9 +912,9 @@ export function GalaxyWorkspace({
             {cloudSession.status === "anonymous" ? <form className="galaxy-cloud-auth" onSubmit={(event) => { event.preventDefault(); void authenticateCloud(); }}>
               <div className="galaxy-cloud-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}>登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" onClick={() => setCloudMode("register")}>注册</button></div>
               {!cloudMailAvailable ? <p className="galaxy-cloud-development"><CloudOff size={14} /><span>邮件系统尚未开放。用户名注册、全部云存档、自动同步和排行榜均可使用；找回密码暂不可用。</span></p> : null}
-              {cloudMode === "register" ? <label><span>显示名称</span><input value={cloudDisplayName} onChange={(event) => setCloudDisplayName(event.target.value)} maxLength={24} placeholder={account.profile.displayName} autoComplete="nickname" /></label> : null}
-              <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><input type="text" value={cloudIdentifier} onChange={(event) => setCloudIdentifier(event.target.value)} minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} required autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
-              <label><span>密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} minLength={8} maxLength={128} required autoComplete={cloudMode === "register" ? "new-password" : "current-password"} placeholder="至少 8 位" /></label>
+              {cloudMode === "register" ? <label><span>显示名称</span><StableTextInput draftId="galaxy-cloud-display-name" value={cloudDisplayName} onValueChange={setCloudDisplayName} maxLength={24} placeholder={account.profile.displayName} autoComplete="nickname" /></label> : null}
+              <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><StableTextInput draftId="galaxy-cloud-identifier" type="text" value={cloudIdentifier} onValueChange={setCloudIdentifier} minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} required autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
+              <label><span>密码</span><StableTextInput draftId="galaxy-cloud-password" sensitive type="password" value={cloudPassword} onValueChange={setCloudPassword} minLength={8} maxLength={128} required autoComplete={cloudMode === "register" ? "new-password" : "current-password"} placeholder="至少 8 位" /></label>
               <button className="primary" type="submit" disabled={cloudBusy}>{cloudBusy ? <Activity size={15} /> : <LogIn size={15} />}{cloudMode === "register" ? "创建并登录" : "登录云账户"}</button>
             </form> : null}
             {cloudSession.status === "authenticated" && cloudSession.user ? <div className="galaxy-cloud-account">
@@ -745,6 +924,7 @@ export function GalaxyWorkspace({
                 {cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}
                 <dl><div><dt>更新时间</dt><dd>{cloudSession.cloudSave ? new Date(cloudSession.cloudSave.updatedAt).toLocaleString("zh-CN") : "--"}</dd></div><div><dt>校验摘要</dt><dd>{cloudSession.cloudSave?.checksum.slice(0, 12) ?? "--"}</dd></div><div><dt>本地进度</dt><dd>{cloudComparison?.local ? `${Math.floor(cloudComparison.local.elapsedSeconds / 3600)}h · 科技 ${cloudComparison.local.completedTechCount}` : "--"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${Math.floor(cloudSession.cloudSave.summary.elapsedSeconds / 3600)}h · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : "--"}</dd></div></dl>
                 <div><button type="button" disabled={cloudBusy} onClick={() => void prepareCloudRestore()}><Download size={14} />下载到本机</button><button className="primary" type="button" disabled={cloudBusy} onClick={() => void saveCurrentFactoryToCloud()}><Save size={14} />上传当前存档</button><button className="danger" type="button" disabled={cloudBusy || !cloudSession.cloudSave} onClick={() => cloudSession.cloudSave && setCloudDeleteRequest({ slot: "main", mode: game.mode, metadata: cloudSession.cloudSave, scope: "cloud", label: `${game.mode === "speedrun" ? "速通模式" : "普通模式"}云端主存档`, details: `修订 ${cloudSession.cloudSave.revision} · ${new Date(cloudSession.cloudSave.updatedAt).toLocaleString("zh-CN")}` })}><Trash2 size={14} />删除云存档</button></div>
+                <CloudSaveStatusCenter userId={cloudSession.user.id} mode={game.mode} slot="main" localRevision={getPrimaryLocalSaveRevision(game.mode)} cloud={cloudSession.cloudSave} comparison={cloudComparison?.state ?? null} active={cloudUploadActive} message={cloudMessage} errorCode={cloudUploadErrorCode} capacity={cloudUploadCapacity} onRetry={() => void saveCurrentFactoryToCloud()} onCancel={cloudUploadActive ? () => cloudUploadAbortRef.current?.abort() : undefined} onExportLocal={() => void exportTextFile({ contents: localCloudPayload ?? exportGame(game), fileName: `dsp-idle-${game.mode}-local-${new Date().toISOString().slice(0, 10)}.json`, title: "导出本地主存档副本" })} onExportCloud={cloudSession.cloudSave ? () => void downloadCloudSave(undefined, "main", game.mode).then((save) => save && exportTextFile({ contents: save.payload, fileName: `dsp-idle-${game.mode}-cloud-r${save.revision}.json`, title: "导出云端主存档副本" })).catch((error) => setCloudMessage(error instanceof Error ? error.message : "云端副本导出失败")) : undefined} />
               </div>
               <CloudSaveSlotsPanel mode={game.mode} cloudSaves={cloudSession.cloudSaves} localSlots={localSaveSlots} busySlot={cloudBusy ? "main" : null} uploadDisabled={false} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} onDelete={(slot, metadata) => setCloudDeleteRequest({ slot, mode: game.mode, metadata, scope: "cloud", label: `${game.mode === "speedrun" ? "速通模式" : "普通模式"}云端槽位 ${slot}`, details: `修订 ${metadata.revision} · ${new Date(metadata.updatedAt).toLocaleString("zh-CN")}` })} />
               {cloudHistory.length > 0 ? <section className="galaxy-cloud-history" aria-label="云存档历史修订">
@@ -762,7 +942,7 @@ export function GalaxyWorkspace({
           </section>
           <aside className="galaxy-cloud-policy"><ShieldCheck size={20} /><span><strong>冲突与校验</strong><small>每次上传都携带云端修订号；另一台设备先更新后，本机不会静默覆盖。恢复云存档前会保留当前工厂快照。</small></span></aside>
           {pendingCloudSave ? <div className="galaxy-cloud-confirm"><section role="alertdialog" aria-modal="true" aria-label="确认恢复云存档"><header><Download size={18} /><span><strong>恢复{game.mode === "speedrun" ? "速通模式" : "普通模式"}云存档修订 {pendingCloudSave.revision}</strong><small>{new Date(pendingCloudSave.updatedAt).toLocaleString("zh-CN")}</small></span></header><p>只会替换当前模式工厂，并先创建同模式本地回滚快照；另一模式不会受到影响。</p><footer><button type="button" onClick={() => setPendingCloudSave(null)}>取消</button><button className="primary" type="button" onClick={restorePendingCloudSave}>确认恢复</button></footer></section></div> : null}
-          {cloudConflict ? <CloudSaveConflictDialog local={summarizeCloudPayload(cloudConflict.localPayload)} cloud={cloudConflict.remote} busy={cloudBusy} onUseCloud={() => void useCloudConflictVersion()} onKeepLocal={() => void keepLocalConflictVersion()} onCancel={() => setCloudConflict(null)} /> : null}
+          {cloudConflict ? <CloudSaveConflictDialog local={summarizeCloudPayload(cloudConflict.localPayload)} cloud={cloudConflict.remote} slot={cloudConflict.slot} busy={cloudBusy} onUseCloud={() => void useCloudConflictVersion()} onKeepLocal={() => void keepLocalConflictVersion()} onExportLocal={() => void exportTextFile({ contents: cloudConflict.localPayload, fileName: `dsp-idle-${game.mode}-${cloudConflict.slot}-local-conflict.json`, title: "导出冲突本地副本" })} onExportCloud={() => void downloadCloudSave(cloudConflict.remote.revision, cloudConflict.slot, game.mode).then((save) => save && exportTextFile({ contents: save.payload, fileName: `dsp-idle-${game.mode}-${cloudConflict.slot}-cloud-r${save.revision}.json`, title: "导出冲突云端副本" })).catch((error) => setCloudMessage(error instanceof Error ? error.message : "冲突云端副本导出失败"))} onCancel={() => setCloudConflict(null)} /> : null}
           <SaveDeleteDialog target={cloudDeleteRequest} onCancel={() => setCloudDeleteRequest(null)} onDelete={() => void deleteSelectedCloudSave()} />
         </div>
       ) : (
@@ -770,8 +950,8 @@ export function GalaxyWorkspace({
           <aside className="galaxy-account-list">
             <header><span><Users size={15} />本地账户</span><strong>{Object.keys(accountState.accounts).length}</strong></header>
             <div>{Object.values(accountState.accounts).map((record) => <button type="button" className={record.profile.id === account.profile.id ? "active" : ""} onClick={() => onSwitchAccount(record.profile.id)} key={record.profile.id}><span className="galaxy-avatar">{record.profile.avatar}</span><span><strong>{record.profile.displayName}</strong><small>{record.profile.privacy === "public" ? "公开" : "隐私"} · 综合 {formatMetric(getLeaderboardMetrics(record.ledger).galaxyScore)}</small></span>{record.profile.id === account.profile.id ? <Check size={14} /> : null}</button>)}</div>
-            <form onSubmit={(event) => { event.preventDefault(); const name = newAccountName.trim(); onCreateAccount(name || `星际工程师 ${Object.keys(accountState.accounts).length + 1}`); setNewAccountName(""); }}>
-              <input value={newAccountName} onChange={(event) => setNewAccountName(event.target.value)} maxLength={24} placeholder="新账户名称" aria-label="新账户名称" />
+            <form onSubmit={(event) => { event.preventDefault(); const name = newAccountName.trim(); onCreateAccount(name || `星际工程师 ${Object.keys(accountState.accounts).length + 1}`); setNewAccountName(""); clearStableTextDraft("galaxy-new-local-account"); }}>
+              <StableTextInput draftId="galaxy-new-local-account" value={newAccountName} onValueChange={setNewAccountName} maxLength={24} placeholder="新账户名称" aria-label="新账户名称" />
               <button type="submit" title="创建本地账户" aria-label="创建本地账户"><Plus size={15} /></button>
             </form>
           </aside>
@@ -779,7 +959,7 @@ export function GalaxyWorkspace({
           <section className="galaxy-profile-editor">
             <header><div><UserRound size={18} /><span><small>账户设置</small><strong>星际工程师档案</strong></span></div><span><RadioTower size={13} />{account.profile.cloudUserId ? `已绑定 ${account.profile.cloudEmail ?? "云账号"}` : "本地身份 · 尚未绑定云账号"}</span></header>
             <form onSubmit={(event) => { event.preventDefault(); onUpdateProfile({ displayName: nameDraft }); }}>
-              <label className="galaxy-name-field"><span>显示名称</span><div><input value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} maxLength={24} aria-label="账户显示名称" /><button type="submit">保存名称</button></div><small>公开账户上传后会以此名称出现在银河排行。</small></label>
+              <label className="galaxy-name-field"><span>显示名称</span><div><StableTextInput draftId={`galaxy-profile-${account.profile.id}`} value={nameDraft} onValueChange={setNameDraft} maxLength={24} aria-label="账户显示名称" /><button type="submit" onClick={() => clearStableTextDraft(`galaxy-profile-${account.profile.id}`)}>保存名称</button></div><small>公开账户上传后会以此名称出现在银河排行。</small></label>
               <fieldset className="galaxy-avatar-picker"><legend>账户识别标记</legend><div>{ACCOUNT_AVATARS.map((avatar, index) => <button type="button" aria-pressed={account.profile.avatar === avatar} className={account.profile.avatar === avatar ? "active" : ""} style={{ "--avatar-index": index } as CSSProperties} onClick={() => onUpdateProfile({ avatar })} key={avatar}><span>{avatar}</span></button>)}</div></fieldset>
               <label className="galaxy-privacy-setting"><span className="galaxy-privacy-icon">{leaderboardVisible ? <Eye size={18} /> : <EyeOff size={18} />}</span><span><strong>{leaderboardVisible ? "参与公开排行榜" : "已退出排行榜"}</strong><small>{cloudSession.status === "authenticated" ? leaderboardVisible ? "主云存档同步后由服务端自动更新公开排名" : "公开记录已移除，云存档仍正常同步" : "登录云账号后可设置账号级排行榜参与状态"}</small></span><input type="checkbox" checked={leaderboardVisible} disabled={leaderboardVisibilityBusy} onChange={(event) => void updateLeaderboardVisibility(event.target.checked)} aria-label="参与公开排行榜" /><i aria-hidden="true"><b /></i></label>
             </form>
@@ -790,7 +970,7 @@ export function GalaxyWorkspace({
                 <article><Zap size={18} /><span>累计发电<strong>{formatMetric(metrics.energyGeneratedMj, 1)} <small>MJ</small></strong></span></article>
                 <article><Database size={18} /><span>白矩阵上传<strong>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></strong></span></article>
                 <article><Orbit size={18} /><span>戴森峰值<strong><PowerValue valueKw={metrics.peakDysonPowerKw} /></strong></span></article>
-                <article><Gauge size={18} /><span>实际结算吞吐<strong>{formatMetric(actualThroughputMetrics.peakThroughputPerMinute, 1)} <small>/min</small></strong></span></article>
+                <article><Gauge size={18} /><span>本地 60 秒实际结算吞吐最佳<strong>{formatMetric(metrics.peakThroughputPerMinute, 1)} <small>/min</small></strong></span></article>
                 <article><Factory size={18} /><span>全星区理论峰值<strong>{formatMetric(metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></strong></span></article>
                 <article><Globe2 size={18} /><span>星际版图<strong>{metrics.exploredSystems} <small>星系</small> · {metrics.colonizedPlanets} <small>行星</small></strong></span></article>
                 <article><Trophy size={18} /><span>银河综合<strong>{formatMetric(metrics.galaxyScore)} <small>分</small></strong></span></article>
@@ -801,6 +981,6 @@ export function GalaxyWorkspace({
           </section>
         </div>
       )}
-    </section>
+    </WorkspaceFrame>
   );
 }

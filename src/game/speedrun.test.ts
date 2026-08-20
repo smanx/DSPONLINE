@@ -72,7 +72,7 @@ describe("speedrun state", () => {
     const raw = serializeEnvelope(state, 1_700_000_000_100);
     const parsed = JSON.parse(raw) as { state: Record<string, unknown> };
     const loaded = migrateGame(parsed.state);
-    expect(loaded?.version).toBe(46);
+    expect(loaded?.version).toBe(47);
     expect(loaded?.speedrun?.factoryId).toBe("speedrun_test_factory_004");
     expect(loaded?.speedrun?.eligible).toBe(true);
   });

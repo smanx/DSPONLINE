@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { selectSettingsCategory } from "./settings-helpers";
 
 const REFRESH_PREFERENCE_KEY = "dsp-idle-network.production-refresh.v1";
@@ -6,13 +6,39 @@ const REFRESH_PREFERENCE_KEY = "dsp-idle-network.production-refresh.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
+  });
+  const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
+  await page.addLocatorHandler(offlineReport, async () => {
+    await offlineReport.getByRole("button", { name: "确认结算" }).click({ force: true });
   });
 });
 
 async function dismissOnboarding(page: Page) {
   const control = page.getByRole("button", { name: /^(?:关闭|跳过)启动引导$/ });
   if (await control.count()) await control.first().click();
+}
+
+async function enterDurableFactory(page: Page, path = "/?menu=1") {
+  await page.goto(path);
+  await expect(page.locator(".start-menu")).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "继续游戏" }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
+  return shell;
+}
+
+async function saveDurableFactoryBeforeNavigation(page: Page, shell: Locator) {
+  await page.getByLabel("打开设置").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await expect(operations).toBeVisible();
+  await operations.getByRole("tab", { name: "存档" }).click();
+  await operations.getByRole("button", { name: "立即保存" }).click();
+  await expect(shell).toHaveAttribute("data-persistence-kind", "manual");
+  await expect(shell).toHaveAttribute("data-persistence-phase", "complete", { timeout: 30_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false", { timeout: 15_000 });
 }
 
 async function openDesktopSettings(page: Page) {
@@ -236,25 +262,31 @@ test("galactic exporter is deployable and opens the active local construction ta
       }),
     });
   });
-  await page.addInitScript(() => {
-    const state = {
-      version: 31,
-      nextId: 10,
-      activePlanetId: "home",
-      entities: [],
-      belts: [],
-      construction: { galactic_material_exporter: 1 },
-      tray: {},
-      planetTrays: { home: {} },
-      totalProduced: {},
-      research: { selectedTechId: null, pausedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["universe_matrix"] },
-      paused: true,
-    };
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
-  });
+  const legacyState = {
+    version: 31,
+    nextId: 10,
+    activePlanetId: "home",
+    entities: [],
+    belts: [],
+    construction: { galactic_material_exporter: 1 },
+    tray: {},
+    planetTrays: { home: {} },
+    totalProduced: {},
+    research: { selectedTechId: null, pausedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["universe_matrix"] },
+    paused: true,
+  };
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/");
+  await page.goto("/?menu=1");
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.evaluate(async (state) => {
+    const storage = await import("/src/game/storage.ts");
+    const normalized = storage.importGame(JSON.stringify({ savedAt: Date.now(), state }));
+    if (!normalized) throw new Error("failed to normalize galactic exporter fixture");
+    const result = await storage.saveGameVerified(normalized);
+    if (!result.success) throw new Error(result.message);
+  }, legacyState);
+  const shell = await enterDurableFactory(page);
   await dismissOnboarding(page);
   const exporterDock = page.locator(".construction-item-shell").filter({ hasText: "超大型物资出口" });
   await expect(exporterDock).toBeVisible();
@@ -278,22 +310,24 @@ test("galactic exporter is deployable and opens the active local construction ta
   await task.getByRole("button", { name: "开始提交任务 1" }).click();
   await expect(task.getByRole("button", { name: "暂停提交 1" })).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(task).toHaveCount(0);
+  await saveDurableFactoryBeforeNavigation(page, shell);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/?mobileUi=next");
+  await enterDurableFactory(page, "/?menu=1&mobileUi=next");
   await dismissOnboarding(page);
   await page.getByRole("button", { name: "建造", exact: true }).click();
   const buildSheet = page.getByRole("dialog", { name: "建造" });
   await buildSheet.getByLabel("搜索建造项目").fill("超大型物资出口");
   const mobileExporterCard = buildSheet.locator(".mobile-build-card").filter({ hasText: "超大型物资出口" });
   await expect(mobileExporterCard).toBeVisible();
+  await expect(mobileExporterCard).toBeDisabled();
   await expect.poll(() => buildSheet.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await buildSheet.screenshot({ path: "artifacts/qa/v091-galactic-exporter-mobile.png" });
-  await mobileExporterCard.click();
+  await buildSheet.getByRole("button", { name: "关闭建造" }).first().click();
   await expect(buildSheet).toHaveCount(0);
-  await page.locator(".react-flow__pane").click({ position: { x: 34, y: 220 } });
-  const mobileExporter = page.locator('.react-flow__node').filter({ hasText: "超大型物资出口" });
+  const mobileExporter = page.getByRole("article", { name: "超大型物资出口，数量 1" });
   await expect(mobileExporter).toBeVisible();
-  await mobileExporter.locator(".factory-node__header").click();
+  await mobileExporter.click();
   const mobileTask = page.getByRole("dialog", { name: "生产统计" });
   await expect(mobileTask).toContainText("宇宙联合空间站巨构建设任务");
   const activityControls = mobileTask.locator(".galactic-exporter-command button");

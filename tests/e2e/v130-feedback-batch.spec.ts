@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-09-v1.0.35";
+const RELEASE_NOTE_ID = "2026-08-17-v1.0.46";
 
 async function seedBatchSave(page: Page, options: { offlineSeconds?: number; paused?: boolean; topology?: boolean; bypassMenu?: boolean } = {}) {
   await page.addInitScript(({ offlineSeconds, paused, topology, bypassMenu, releaseNoteId }) => {
@@ -65,7 +65,7 @@ async function seedBatchSave(page: Page, options: { offlineSeconds?: number; pau
 
 for (const scenario of [
   { name: "exact", seconds: 6, label: "精确结算", viewport: { width: 1280, height: 720 } },
-  { name: "fallback", seconds: 33, label: "保守宏观结算", viewport: { width: 1024, height: 768 } },
+  { name: "fallback", seconds: 33, label: "已确认跳过收益", viewport: { width: 1024, height: 768 } },
   { name: "approximate", seconds: 120, label: "近似宏观结算（实验）", viewport: { width: 390, height: 844 } },
 ] as const) {
   test(`offline report renders the ${scenario.name} settlement state without overflow`, async ({ page }) => {
@@ -74,13 +74,37 @@ for (const scenario of [
     await page.goto("/?menu=1");
     await page.getByRole("button", { name: /继续游戏/ }).click();
 
+    if (scenario.name === "approximate") {
+      const choice = page.getByRole("dialog", { name: "选择离线结算方式" });
+      await expect(choice).toBeVisible();
+      await expect(choice.getByRole("button", { name: /快速结算（推荐）/ })).toContainText("目标约 30 秒");
+      await expect(choice.getByRole("button", { name: /精确结算/ })).toContainText(/粗略预计.*运行后动态校正/);
+      await expect(choice.getByRole("button", { name: /放弃离线收益/ })).toContainText("不会重复结算");
+      await choice.getByRole("button", { name: /快速结算（推荐）/ }).click();
+    }
+
+    if (scenario.name === "fallback") {
+      const decision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
+      await expect(decision).toBeVisible({ timeout: 20_000 });
+      await expect(decision).toContainText("实际提交时间0 秒");
+      await decision.getByRole("button", { name: "保守跳过本次收益" }).click();
+      await page.getByRole("alertdialog", { name: "快速结算需要玩家选择" }).getByRole("button", { name: "再次确认：收益为 0" }).click();
+    }
+
     const report = page.getByRole("dialog", { name: "离线结算报告" });
     await expect(report).toBeVisible({ timeout: 20_000 });
     await expect(report.locator(".offline-report-method > header strong")).toHaveText(scenario.label);
     await expect(report.locator(".offline-report-method")).toContainText("精确校准");
     await expect(report.locator(".offline-report-method")).toContainText("宏观覆盖");
     await expect(report.locator(".offline-report-method")).toContainText("估计最大误差");
-    if (scenario.name === "fallback") await expect(report.locator(".offline-report-warning")).toBeVisible();
+    if (scenario.name === "fallback") {
+      await expect(report.locator(".offline-report-warning")).toBeVisible();
+      const submittedText = await report.locator(".offline-runtime").textContent();
+      const submittedSeconds = Number(submittedText?.match(/实际提交\s*(\d+)\s*秒/)?.[1] ?? Number.NaN);
+      expect(submittedSeconds).toBeGreaterThanOrEqual(33);
+      expect(submittedSeconds).toBeLessThan(43);
+      await expect(report).toContainText("收益为 0");
+    }
     else await expect(report.locator(".offline-report-warning")).toHaveCount(0);
     await expect.poll(() => report.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await expect(report.getByRole("button", { name: "确认结算" })).toBeVisible();
@@ -112,6 +136,56 @@ test("mobile construction inventory deletion reuses the guarded confirmation", a
   await expect(build.locator(".mobile-build-card--discard").filter({ hasText: "传送带 Mk.I" }).first()).toContainText("当前 ×0");
   await expect(page.locator(".game-notice")).toContainText("画布建筑和制造目标未改变");
   await context.close();
+});
+
+test("offline settlement choice traps keyboard focus and keeps its explicit zero-reward confirmation visible across target viewports and font scales", async ({ page }) => {
+  await seedBatchSave(page, { offlineSeconds: 33, bypassMenu: false });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+
+  const initialDecision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
+  await expect(initialDecision).toBeVisible({ timeout: 20_000 });
+  await expect(initialDecision).toHaveAttribute("aria-modal", "true");
+  await expect(page.locator(".start-menu-layout")).toHaveAttribute("inert", "");
+
+  await initialDecision.getByRole("button", { name: "取消并返回" }).focus();
+  await page.keyboard.press("Tab");
+  await expect.poll(() => page.evaluate(() => document.activeElement?.textContent?.replace(/\s+/g, " ").trim())).toBe("再次尝试快速结算");
+  await page.keyboard.press("Escape");
+  await expect(initialDecision).toHaveCount(0);
+  await expect(page.locator(".start-menu-layout")).not.toHaveAttribute("inert", "");
+
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+  const decision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
+  await expect(decision).toBeVisible({ timeout: 20_000 });
+  await decision.getByRole("button", { name: "保守跳过本次收益" }).click();
+
+  const finalConfirmation = page.getByRole("alertdialog", { name: "快速结算需要玩家选择" });
+  await expect(finalConfirmation).toBeVisible();
+  await expect(finalConfirmation.getByRole("status")).toContainText("再次确认跳过本次收益");
+  await page.keyboard.press("Escape");
+  await expect(finalConfirmation).toBeVisible();
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 844, height: 390 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const scale of [0.8, 1, 1.25, 1.5, 2]) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset.uiFontScale = String(Math.round(value * 100));
+        document.documentElement.style.setProperty("--ui-font-scale", String(value));
+      }, scale);
+      const bounds = await finalConfirmation.boundingBox();
+      expect(bounds, `${viewport.width}x${viewport.height} at ${scale * 100}%`).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.y).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width + 1);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height + 1);
+      await expect(finalConfirmation.getByRole("button", { name: "再次确认：收益为 0" })).toBeVisible();
+    }
+  }
 });
 
 test("zero-tick belt counts and locked machine ports come from topology", async ({ page }) => {
@@ -155,3 +229,4 @@ test("item hover details can be disabled and stay disabled after reload", async 
   await page.locator(".tray-row .item-reference").first().hover();
   await expect(page.locator(".item-hover-card")).toHaveCount(0);
 });
+

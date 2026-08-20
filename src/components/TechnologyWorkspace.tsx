@@ -7,10 +7,12 @@ import { INFINITE_RESEARCH_DEFINITIONS, getInfiniteResearchCompletion, getInfini
 import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../game/infiniteResearch";
 import type { GameState, InfiniteResearchId, ItemId, TechnologyLayoutMode, TechId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
-import { useHorizontalPan } from "../hooks/useHorizontalPan";
+import { horizontalFocusScrollLeft, useHorizontalPan } from "../hooks/useHorizontalPan";
+import { getTechnologyTierGrid } from "../game/technologyTreeLayout";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import { QuantityValue } from "./QuantityValue";
 import { PowerValue } from "./PowerValue";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 
 interface TechnologyWorkspaceProps {
   open: boolean;
@@ -46,19 +48,51 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
   const mobileListRef = useRef<HTMLDivElement | null>(null);
   const mobileListScrollRef = useRef(0);
   const previousMobileSubviewRef = useRef<string | null>(null);
+  const autoFocusedMobileSubviewRef = useRef<string | null>(null);
   const horizontalPan = useHorizontalPan<HTMLDivElement>({ wheelMode: "horizontal" });
+  const [treeViewportHeight, setTreeViewportHeight] = useState(560);
   useEffect(() => {
     if (!open || !focusTechId) return;
     setFocusedTechId(focusTechId);
     const timer = window.setTimeout(() => {
-      document.querySelector(`[data-tech-id="${focusTechId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      const tree = horizontalPan.surfaceRef.current;
+      const node = tree?.querySelector<HTMLElement>(`[data-tech-id="${focusTechId}"]`);
+      if (!tree || !node) return;
+      const treeRect = tree.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      tree.scrollTo({
+        left: horizontalFocusScrollLeft(
+          tree.scrollLeft,
+          treeRect.left,
+          tree.clientWidth,
+          nodeRect.left,
+          nodeRect.width,
+          tree.scrollWidth,
+        ),
+        behavior: "smooth",
+      });
+      tree.scrollTop = 0;
     }, 40);
     const clear = window.setTimeout(() => setFocusedTechId(null), 1800);
     return () => {
       window.clearTimeout(timer);
       window.clearTimeout(clear);
     };
-  }, [focusTechId, open]);
+  }, [focusTechId, horizontalPan.surfaceRef, open]);
+  useEffect(() => {
+    if (!open || mobile) return;
+    const tree = horizontalPan.surfaceRef.current;
+    if (!tree) return;
+    const measure = () => setTreeViewportHeight((current) => {
+      const next = Math.max(1, Math.floor(tree.clientHeight));
+      return current === next ? current : next;
+    });
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(tree);
+    return () => observer.disconnect();
+  }, [game.settings.fontScale, game.settings.technologyLayout, horizontalPan.surfaceRef, mobile, open]);
   useEffect(() => {
     if (!mobile || !open) return;
     if (previousMobileSubviewRef.current && !mobileSubview) {
@@ -70,9 +104,12 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
   }, [mobile, mobileSubview, open]);
   useEffect(() => {
     if (!mobile || !open || !focusTechId || !onMobileOpenDetail) return;
+    const targetSubview = `tech:${focusTechId}`;
+    if (mobileSubview === targetSubview || autoFocusedMobileSubviewRef.current === targetSubview) return;
+    autoFocusedMobileSubviewRef.current = targetSubview;
     if (mobileListRef.current) mobileListRef.current.scrollTop = 0;
-    onMobileOpenDetail(`tech:${focusTechId}`);
-  }, [focusTechId, mobile, onMobileOpenDetail, open]);
+    onMobileOpenDetail(targetSubview);
+  }, [focusTechId, mobile, mobileSubview, onMobileOpenDetail, open]);
   if (!open) return null;
   const selected = getTechnology(game.research.selectedTechId);
   const paused = getTechnology(game.research.pausedTechId);
@@ -116,7 +153,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
     });
     const mobileProgressPercent = selectedProgressPercent;
     return (
-      <section className={`technology-workspace mobile-workspace mobile-technology${detailTechnology || detailInfinite ? " mobile-workspace--detail" : ""}`} role="dialog" aria-modal="true" aria-label="科技树">
+      <WorkspaceFrame className={`technology-workspace mobile-workspace mobile-technology${detailTechnology || detailInfinite ? " mobile-workspace--detail" : ""}`} ariaLabel="科技树" onRequestClose={onClose}>
         {detailInfinite ? <div className="mobile-workspace-scroll mobile-technology-detail mobile-infinite-research-detail">
           <header className="mobile-detail-heading"><i style={{ color: detailInfinite.color }}><Rocket size={20} /></i><span><small>白糖阶段 · 无限科技</small><strong>{detailInfinite.name}</strong></span></header>
           <p className="mobile-detail-summary">{detailInfinite.summary}</p>
@@ -176,12 +213,12 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
           })}</div></section> : null}
           {visibleTechnologies.length === 0 && visibleInfiniteResearch.length === 0 ? <div className="mobile-workspace-empty"><FlaskConical size={24} /><span>当前筛选下没有科技</span><small>{mobileFilter === "available" && !endgameUnlocked ? "无限科技前置：完成宇宙矩阵科技" : "可清除筛选查看全部普通与无限科技"}</small><button type="button" onClick={() => setMobileFilter("all")}>清除筛选</button></div> : null}</div>
         </div>}
-      </section>
+      </WorkspaceFrame>
     );
   }
 
   return (
-    <section className="technology-workspace" role="dialog" aria-modal="true" aria-label="科技树">
+    <WorkspaceFrame className="technology-workspace" ariaLabel="科技树" onRequestClose={onClose}>
       <header className="technology-header">
         <div className="technology-title">
           <i><FlaskConical size={20} /></i>
@@ -268,12 +305,20 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
         </div> : null}
       </div>
 
-      <div className={`technology-tree technology-tree--${game.settings.technologyLayout}${horizontalPan.isPanning ? " horizontal-pan--active" : ""}`} style={{ "--technology-tier-count": maximumTier + 1 } as CSSProperties} {...horizontalPan.bindings}>
-        {Array.from({ length: maximumTier + 1 }, (_, tier) => (
-          <section className="technology-tier" key={tier}>
+      <div ref={horizontalPan.surfaceRef} className={`technology-tree technology-tree--${game.settings.technologyLayout}${horizontalPan.isPanning ? " horizontal-pan--active" : ""}`} tabIndex={0} role="region" aria-label="科技树横向视口" {...horizontalPan.bindings}>
+        {Array.from({ length: maximumTier + 1 }, (_, tier) => {
+          const tierTechnologies = TECHNOLOGY_LIST.filter((technology) => technology.tier === tier);
+          const grid = getTechnologyTierGrid(tierTechnologies.length, game.settings.technologyLayout, game.settings.fontScale, treeViewportHeight);
+          return (
+          <section className="technology-tier" key={tier} style={{
+            "--technology-tier-columns": grid.columns,
+            "--technology-tier-rows": grid.rows,
+            "--technology-tier-column-width": `${grid.columnWidth}px`,
+            "--technology-node-estimated-height": `${grid.estimatedCardHeight}px`,
+          } as CSSProperties} data-tier={tier + 1} data-tier-columns={grid.columns} data-tier-rows={grid.rows}>
             <header><span>层级 {String(tier + 1).padStart(2, "0")}</span></header>
             <div>
-              {TECHNOLOGY_LIST.filter((technology) => technology.tier === tier).map((technology) => {
+              {tierTechnologies.map((technology) => {
                 const complete = isTechnologyCompleted(game, technology.id);
                 const active = game.research.selectedTechId === technology.id;
                 const isPaused = game.research.pausedTechId === technology.id;
@@ -314,8 +359,9 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
               })}
             </div>
           </section>
-        ))}
+          );
+        })}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

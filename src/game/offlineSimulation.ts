@@ -1,4 +1,4 @@
-import type { GameSettings, GameState } from "./types";
+import type { GameSettings, GameState, IdleSettlementState, ItemId } from "./types";
 import { OFFLINE_PERFORMANCE_SESSION_KEY } from "./performanceMonitor";
 import { createContentPackRuntimeSnapshot, loadContentPackRegistry, type ContentPackRuntimeSnapshot } from "./contentPacks";
 import { advanceSimulationSession, type SimulationAdvanceSession } from "./engine";
@@ -11,6 +11,25 @@ import {
   classifyOfflineWorkload,
   type OfflineComplexityReport,
 } from "./offlineComplexity";
+import { decodeVerifiedSaveTransfer, serializeSaveEnvelopeToTransfer, type SaveTransferVerification } from "./saveTransfer";
+import { applyPureIdleMacroFinalState } from "./pureIdleMacro";
+import type { PureIdleMacroFinalEnvelopeTransfer, PureIdleMacroFinalizedIdentity } from "./pureIdleMacroProtocol";
+import {
+  workerBinaryPayloadTransferables,
+  type WorkerBinaryPayload,
+} from "./workerBinaryPayload";
+
+/**
+ * Terminal-settle baseline carried into the background finalize worker. It is
+ * the same `PureIdleMacroFinalStateOptions` shape as the macro session, so the
+ * worker can apply `applyPureIdleMacroFinalState` once all offline seconds are
+ * settled without ever decoding the full save on the UI thread.
+ */
+export interface BackgroundOfflineTerminalSettleBaseline {
+  startedPaused: boolean;
+  baselineIdleSettlement: IdleSettlementState;
+  baselineTotalProduced: Partial<Record<ItemId, number>>;
+}
 
 export type OfflineSimulationWorkerRequest =
   | {
@@ -26,9 +45,23 @@ export type OfflineSimulationWorkerRequest =
     deadlineMs?: number;
   }
   | {
+    type: "finalize-background";
+    id: number;
+    /** Macro-ready envelope settled for `highWallSeconds` (not yet terminal). */
+    sourceEnvelope: WorkerBinaryPayload;
+    sourceVerification: SaveTransferVerification;
+    baseline: BackgroundOfflineTerminalSettleBaseline;
+    highWallSeconds: number;
+    normalOfflineSeconds: number;
+    registry: ContentPackRuntimeSnapshot;
+    savedAt?: number;
+    approximate?: boolean;
+    deadlineMs?: number;
+  }
+  | {
     type: "prepare-upload";
     id: number;
-    raw: string;
+    rawBytes: ArrayBuffer;
     now: number;
     menuSettings?: Partial<GameSettings>;
     returningRewardClaimed: boolean;
@@ -50,8 +83,35 @@ export type OfflineSimulationWorkerResponse =
     algorithmVersion?: string;
     degradedReason?: string;
   }
-  | { type: "complete"; id: number; state: GameState; totalSeconds: number; approximation?: OfflineApproximationReport }
-  | { type: "upload-complete"; id: number; payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }>; diagnostics?: CloudUploadPreparationDiagnostics }
+  | {
+    type: "complete";
+    id: number;
+    payloadBytes: ArrayBuffer;
+    payloadChecksum: string;
+    byteLength: number;
+    summary: CloudUploadSummary;
+    totalSeconds: number;
+    approximation?: OfflineApproximationReport;
+  }
+  | { type: "decision-required"; id: number; totalSeconds: number; approximation: OfflineApproximationReport }
+  | {
+      type: "finalized-background";
+      id: number;
+      finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
+    durationMs: number;
+  }
+  | {
+    type: "upload-complete";
+    id: number;
+    payloadBytes: ArrayBuffer;
+    payloadChecksum: string;
+    payloadSha256: string;
+    byteLength: number;
+    summary: CloudUploadSummary;
+    offlineSeconds: number;
+    returningReward: Array<{ itemId: string; amount: number }>;
+    diagnostics?: CloudUploadPreparationDiagnostics;
+  }
   | { type: "cancelled"; id: number }
   | {
     type: "error";
@@ -80,10 +140,26 @@ export type OfflineSimulationPhase =
   | "bounded-exact"
   | "saving";
 
-export interface OfflineSimulationRunResult {
+export interface OfflineSimulationCompletedResult {
+  status: "complete";
   state: GameState;
   approximation?: OfflineApproximationReport;
   complexity: OfflineComplexityReport;
+}
+
+export interface OfflineSimulationDecisionResult {
+  status: "decision-required";
+  approximation: OfflineApproximationReport;
+  complexity: OfflineComplexityReport;
+}
+
+export type OfflineSimulationRunResult = OfflineSimulationCompletedResult | OfflineSimulationDecisionResult;
+
+export class OfflineSettlementDecisionRequiredError extends Error {
+  constructor(readonly approximation: OfflineApproximationReport, readonly complexity: OfflineComplexityReport) {
+    super(approximation.fallbackReason ?? "快速离线结算未完成，需要玩家选择后续操作");
+    this.name = "OfflineSettlementDecisionRequiredError";
+  }
 }
 
 export interface OfflineSimulationChunkOptions {
@@ -138,12 +214,35 @@ export interface CloudUploadPreparationDiagnostics {
   skippedOffline: boolean;
 }
 
+function parseTrustedOfflineWorkerState(raw: string, summary: CloudUploadSummary): GameState {
+  const envelope = JSON.parse(raw) as {
+    formatVersion?: unknown;
+    mode?: unknown;
+    checksum?: unknown;
+    state?: unknown;
+  };
+  if (envelope.formatVersion !== 2 || envelope.mode !== summary.mode ||
+    typeof envelope.checksum !== "string" || envelope.checksum !== summary.stateChecksum ||
+    !envelope.state || typeof envelope.state !== "object" || Array.isArray(envelope.state)) {
+    throw new Error("离线 Worker 结果信封与完整性证明不一致");
+  }
+  const state = envelope.state as GameState;
+  if (state.version !== summary.stateVersion || state.mode !== summary.mode ||
+    !Array.isArray(state.entities) || state.entities.length !== summary.entityCount) {
+    throw new Error("离线 Worker 结果摘要与游戏状态不一致");
+  }
+  return state;
+}
+
 export function runOfflineSimulationInWorker(
   state: GameState,
   seconds: number,
   options: { signal?: AbortSignal; onProgress?: (progress: OfflineSimulationProgress) => void; registry?: ContentPackRuntimeSnapshot; approximate?: boolean; onApproximationReport?: (report: OfflineApproximationReport) => void } = {},
 ): Promise<GameState> {
-  return runOfflineSimulationInWorkerDetailed(state, seconds, options).then((result) => result.state);
+  return runOfflineSimulationInWorkerDetailed(state, seconds, options).then((result) => {
+    if (result.status === "decision-required") throw new OfflineSettlementDecisionRequiredError(result.approximation, result.complexity);
+    return result.state;
+  });
 }
 
 export function runOfflineSimulationInWorkerDetailed(
@@ -181,6 +280,7 @@ export function runOfflineSimulationInWorkerDetailed(
     ? Math.min(5_000, Math.max(1_000, deadlineMs / 4))
     : 0;
   const workerDeadlineMs = deadlineMs === undefined ? undefined : Math.max(1_000, deadlineMs - conservativeReserveMs);
+  const registry = options.registry ?? createContentPackRuntimeSnapshot(loadContentPackRegistry());
   return new Promise<OfflineSimulationRunResult>((resolve, reject) => {
     let settled = false;
     let deadlineTimer: number | null = null;
@@ -233,9 +333,30 @@ export function runOfflineSimulationInWorkerDetailed(
         return;
       }
       if (message.type === "complete") {
-        try { window.sessionStorage.setItem(OFFLINE_PERFORMANCE_SESSION_KEY, String(Math.max(0, performance.now() - startedAt))); } catch { /* optional diagnostics */ }
-        if (message.approximation) options.onApproximationReport?.(message.approximation);
-        finish(() => resolve({ state: message.state, approximation: message.approximation, complexity }));
+        try {
+          const verification: SaveTransferVerification = {
+            integrity: "valid",
+            stateChecksum: message.summary.stateChecksum ?? "",
+            payloadChecksum: message.payloadChecksum,
+            byteLength: message.byteLength,
+          };
+          const raw = decodeVerifiedSaveTransfer(message.payloadBytes, verification);
+          const workerState = parseTrustedOfflineWorkerState(raw, message.summary);
+          try { window.sessionStorage.setItem(OFFLINE_PERFORMANCE_SESSION_KEY, String(Math.max(0, performance.now() - startedAt))); } catch { /* optional diagnostics */ }
+          if (message.approximation) options.onApproximationReport?.(message.approximation);
+          finish(() => resolve({ status: "complete", state: workerState, approximation: message.approximation, complexity }));
+        } catch (error) {
+          failOrRetryConservative(
+            "离线 Worker 结果传输校验失败，已使用一次零校准保守宏观恢复",
+            `${error instanceof Error ? error.message : "离线结果传输失败"}；未保存任何半成品`,
+          );
+        }
+        return;
+      }
+      if (message.type === "decision-required") {
+        const approximation = { ...message.approximation, settlementStatus: "conservative-preview" as const };
+        options.onApproximationReport?.(approximation);
+        finish(() => resolve({ status: "decision-required", approximation, complexity }));
         return;
       }
       if (message.type === "cancelled") {
@@ -257,7 +378,6 @@ export function runOfflineSimulationInWorkerDetailed(
       "快速 Worker 运行失败，已使用一次零校准保守宏观恢复",
       "离线计算 Worker 运行失败，未保存任何半成品",
     );
-    const registry = options.registry ?? createContentPackRuntimeSnapshot(loadContentPackRegistry());
     try {
       worker.postMessage({
         type: "start",
@@ -280,6 +400,161 @@ export function runOfflineSimulationInWorkerDetailed(
   });
 }
 
+export interface BackgroundFinalEnvelopeComposeOptions {
+  baseline: BackgroundOfflineTerminalSettleBaseline;
+  highWallSeconds: number;
+  normalOfflineSeconds: number;
+  registryFingerprint: string;
+  savedAt?: number;
+}
+
+/**
+ * Apply the terminal idle/research/pause settle to the already-advanced offline
+ * state and serialize it to a fresh verified envelope. Pure and deterministic,
+ * so it is unit-testable without spawning a Worker. The returned identity is
+ * bound to the exact serialized bytes; callers must never edit `finalState`
+ * after this envelope is produced.
+ */
+export function buildBackgroundFinalEnvelope(
+  offlineState: GameState,
+  options: BackgroundFinalEnvelopeComposeOptions,
+): { finalState: GameState; finalEnvelope: PureIdleMacroFinalEnvelopeTransfer } {
+  const finalTotalWallSeconds = options.highWallSeconds + options.normalOfflineSeconds;
+  const finalState = applyPureIdleMacroFinalState(offlineState, finalTotalWallSeconds, options.baseline);
+  const serialized = serializeSaveEnvelopeToTransfer(finalState, {
+    formatVersion: 2,
+    kind: "primary",
+    mode: finalState.mode === "speedrun" ? "speedrun" : "normal",
+    slot: "main",
+    savedAt: options.savedAt ?? Date.now(),
+  });
+  const identity: PureIdleMacroFinalizedIdentity = {
+    stateChecksum: serialized.stateChecksum,
+    stateVersion: finalState.version,
+    mode: finalState.mode === "speedrun" ? "speedrun" : "normal",
+    activePlanetId: finalState.activePlanetId,
+    entityCount: finalState.entities.length,
+    beltCount: finalState.belts.length,
+    elapsedSeconds: finalState.elapsedSeconds,
+    algorithmVersion: "background-offline-v47",
+    settledWallSeconds: finalTotalWallSeconds,
+    settledSimulationSeconds: finalTotalWallSeconds,
+    registryFingerprint: options.registryFingerprint,
+  };
+  const finalEnvelope: PureIdleMacroFinalEnvelopeTransfer = {
+    payloadBytes: serialized.bytes,
+    verification: {
+      integrity: serialized.integrity,
+      stateChecksum: serialized.stateChecksum,
+      payloadChecksum: serialized.payloadChecksum,
+      byteLength: serialized.byteLength,
+    },
+    identity,
+  };
+  return { finalState, finalEnvelope };
+}
+
+export interface OfflineBackgroundTerminalFinalizeOptions {
+  /** The macro-ready envelope (settled for `highWallSeconds`, not yet terminal). */
+  sourceEnvelope: WorkerBinaryPayload;
+  sourceVerification: SaveTransferVerification;
+  baseline: BackgroundOfflineTerminalSettleBaseline;
+  highWallSeconds: number;
+  normalOfflineSeconds: number;
+  savedAt?: number;
+  approximate?: boolean;
+  signal?: AbortSignal;
+  registry?: ContentPackRuntimeSnapshot;
+  onProgress?: (progress: OfflineSimulationProgress) => void;
+}
+
+export interface OfflineBackgroundTerminalFinalizeResult {
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
+  durationMs: number;
+}
+
+/**
+ * Settle the post-macro background remainder and derive the terminal envelope
+ * entirely inside a Worker. The macro envelope is handed over as bytes; the
+ * Worker decodes it, advances the offline remainder deterministically, applies
+ * the terminal idle/research/pause settle, and serializes the final state to a
+ * fresh verified envelope. The UI never parses the large save on the main
+ * thread, so the result can feed the same proof-bound persistence + simulation
+ * Worker rebase path as a normal pure-idle stop.
+ */
+export function runOfflineBackgroundTerminalFinalize(
+  options: OfflineBackgroundTerminalFinalizeOptions,
+): Promise<OfflineBackgroundTerminalFinalizeResult> {
+  if (typeof Worker === "undefined") {
+    return Promise.reject(new Error("当前浏览器不支持纯挂机后台结算 Worker"));
+  }
+  const worker = new Worker(new URL("./offlineSimulation.worker.ts", import.meta.url), {
+    type: "module",
+    name: "background-offline-finalize",
+  });
+  const id = Date.now() + Math.floor(Math.random() * 1_000_000);
+  const startedAt = performance.now();
+  const registry = options.registry ?? createContentPackRuntimeSnapshot(loadContentPackRegistry());
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", abort);
+      worker.terminate();
+      callback();
+    };
+    const abort = () => {
+      try { worker.postMessage({ type: "cancel", id } satisfies OfflineSimulationWorkerRequest); } catch { /* worker may be gone */ }
+      finish(() => reject(new DOMException("后台结算已取消", "AbortError")));
+    };
+    if (options.signal?.aborted) {
+      abort();
+      return;
+    }
+    options.signal?.addEventListener("abort", abort, { once: true });
+    worker.onmessage = (event: MessageEvent<OfflineSimulationWorkerResponse>) => {
+      const message = event.data;
+      if (message.id !== id || settled) return;
+      if (message.type === "progress") {
+        options.onProgress?.(message);
+        return;
+      }
+      if (message.type === "finalized-background") {
+        finish(() => resolve({
+          finalEnvelope: message.finalEnvelope,
+          durationMs: Math.max(0, performance.now() - startedAt),
+        }));
+        return;
+      }
+      if (message.type === "cancelled") {
+        finish(() => reject(new DOMException("后台结算已取消", "AbortError")));
+        return;
+      }
+      if (message.type === "error") {
+        finish(() => reject(new Error(message.message)));
+      }
+    };
+    worker.onerror = () => finish(() => reject(new Error("后台结算 Worker 运行失败，原主存档与恢复日志保持不变")));
+    try {
+      worker.postMessage({
+        type: "finalize-background",
+        id,
+        sourceEnvelope: options.sourceEnvelope,
+        sourceVerification: options.sourceVerification,
+        baseline: options.baseline,
+        highWallSeconds: options.highWallSeconds,
+        normalOfflineSeconds: options.normalOfflineSeconds,
+        registry,
+        savedAt: options.savedAt,
+        approximate: options.approximate === true,
+      } satisfies OfflineSimulationWorkerRequest, workerBinaryPayloadTransferables(options.sourceEnvelope));
+    } catch {
+      finish(() => reject(new Error("无法把后台结算交给 Worker 处理，原主存档与恢复日志保持不变")));
+    }
+  });
+}
+
 /**
  * Prepare a cloud payload without loading, simulating or serializing the save
  * on the UI thread. The Worker returns the one final checksum-verified payload
@@ -296,7 +571,15 @@ export function prepareCloudUploadInWorker(
     registry?: ContentPackRuntimeSnapshot;
     onProgress?: (progress: OfflineSimulationProgress) => void;
   } = {},
-): Promise<{ payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }>; diagnostics: CloudUploadPreparationDiagnostics }> {
+): Promise<{
+  payload: string;
+  summary: CloudUploadSummary;
+  verification: SaveTransferVerification;
+  payloadSha256: string;
+  offlineSeconds: number;
+  returningReward: Array<{ itemId: string; amount: number }>;
+  diagnostics: CloudUploadPreparationDiagnostics;
+}> {
   if (typeof Worker === "undefined") return Promise.reject(new Error("当前浏览器不支持云存档后台 Worker"));
   const worker = new Worker(new URL("./offlineSimulation.worker.ts", import.meta.url), { type: "module", name: "cloud-upload-preparation" });
   const id = Date.now() + Math.floor(Math.random() * 1_000_000);
@@ -329,9 +612,22 @@ export function prepareCloudUploadInWorker(
         return;
       }
       if (message.type === "upload-complete") {
+        const verification: SaveTransferVerification = {
+          integrity: "valid",
+          stateChecksum: message.summary.stateChecksum ?? "",
+          payloadChecksum: message.payloadChecksum,
+          byteLength: message.byteLength,
+        };
+        let payload: string;
+        try {
+          payload = decodeVerifiedSaveTransfer(message.payloadBytes, verification);
+        } catch (error) {
+          finish(() => reject(error instanceof Error ? error : new Error("云存档传输校验失败")));
+          return;
+        }
         const diagnostics = message.diagnostics ?? {
           sourceBytes: 0,
-          payloadBytes: typeof TextEncoder === "undefined" ? message.payload.length : new TextEncoder().encode(message.payload).byteLength,
+          payloadBytes: message.byteLength,
           totalMs: Math.max(0, performance.now() - startedAt),
           inspectMs: 0,
           offlineMs: 0,
@@ -339,7 +635,7 @@ export function prepareCloudUploadInWorker(
           offlineSeconds: message.offlineSeconds,
           skippedOffline: options.skipOffline === true,
         };
-        finish(() => resolve({ payload: message.payload, summary: message.summary, offlineSeconds: message.offlineSeconds, returningReward: message.returningReward, diagnostics }));
+        finish(() => resolve({ payload, summary: message.summary, verification, payloadSha256: message.payloadSha256, offlineSeconds: message.offlineSeconds, returningReward: message.returningReward, diagnostics }));
         return;
       }
       if (message.type === "cancelled") {
@@ -350,16 +646,18 @@ export function prepareCloudUploadInWorker(
     };
     worker.onerror = () => finish(() => reject(new Error("云存档后台 Worker 运行失败，未修改本地存档")));
     try {
+      const encoded = new TextEncoder().encode(raw);
+      const rawBytes = encoded.buffer;
       worker.postMessage({
         type: "prepare-upload",
         id,
-        raw,
+        rawBytes,
         now,
         menuSettings: options.menuSettings,
         returningRewardClaimed: options.returningRewardClaimed ?? false,
         skipOffline: options.skipOffline === true,
         registry,
-      } satisfies OfflineSimulationWorkerRequest);
+      } satisfies OfflineSimulationWorkerRequest, [rawBytes]);
     } catch {
       finish(() => reject(new Error("云存档无法交给后台 Worker 处理，未修改本地存档")));
     }

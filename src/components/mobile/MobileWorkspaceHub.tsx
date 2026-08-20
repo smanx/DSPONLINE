@@ -3,6 +3,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import type { OperationsTab } from "../OperationsWorkspace";
 import type { StatisticsTab } from "../StatisticsWorkspace";
 import type { MobileWorkspaceId } from "../../hooks/useMobileNavigation";
+import { WorkspaceFrame } from "../WorkspaceFrame";
 
 const RECENT_WORKSPACES_KEY = "dsp-idle-network.mobile-recent-workspaces.v1";
 
@@ -25,15 +26,17 @@ function readRecentWorkspaces(): string[] {
   }
 }
 
-export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onOpenStatistics, onOpenOperations, onOpenGalaxy, onOpenCommandPalette, onSwitchLegacy, onRequestExit }: {
+export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onOpenOrbitalStation, onOpenStatistics, onOpenOperations, onOpenGalaxy, onOpenCommandPalette, onSwitchLegacy, onRequestExit, onClose }: {
   hasConstructionCenter: boolean;
   onOpenWorkspace: (id: MobileWorkspaceId) => void;
+  onOpenOrbitalStation: () => void;
   onOpenStatistics: (tab: StatisticsTab) => void;
   onOpenOperations: (tab: OperationsTab) => void;
   onOpenGalaxy: (tab: "ranking" | "cloud" | "account") => void;
   onOpenCommandPalette: () => void;
   onSwitchLegacy: () => void;
   onRequestExit: () => void;
+  onClose: () => void;
 }) {
   const [recentIds, setRecentIds] = useState(readRecentWorkspaces);
   const groups = useMemo(() => {
@@ -45,6 +48,7 @@ export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onO
       { id: "planning", label: "工业规划", detail: "按目标产量反推设备需求", icon: <Calculator size={21} />, run: () => onOpenStatistics("planning") },
     ];
     const expansion: HubAction[] = [
+      { id: "orbital-station", label: "全星系空间站", detail: "建设、出口合同、装饰与公开档案", icon: <RadioTower size={21} />, run: onOpenOrbitalStation },
       { id: "star-map", label: "星图与星际工业", detail: "探索、殖民、航线与行星分工", icon: <Telescope size={21} />, run: () => onOpenWorkspace("star-map") },
       { id: "logistics", label: "物流管理", detail: "跨星球编辑物流塔、轨道采集器与量子模式", icon: <Route size={21} />, run: () => onOpenOperations("logistics") },
       { id: "dyson", label: "戴森规划", detail: "太阳帆、轨道、壳层和发射", icon: <Orbit size={21} />, run: () => onOpenWorkspace("dyson") },
@@ -74,7 +78,7 @@ export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onO
       { id: "tools", label: "工具", icon: <Route size={17} />, actions: tools },
       { id: "system", label: "系统", icon: <Settings size={17} />, actions: system },
     ];
-  }, [hasConstructionCenter, onOpenCommandPalette, onOpenGalaxy, onOpenOperations, onOpenStatistics, onOpenWorkspace, onRequestExit, onSwitchLegacy]);
+  }, [hasConstructionCenter, onOpenCommandPalette, onOpenGalaxy, onOpenOperations, onOpenOrbitalStation, onOpenStatistics, onOpenWorkspace, onRequestExit, onSwitchLegacy]);
   const allActions = groups.flatMap((group) => group.actions);
   const recentActions = recentIds.flatMap((id) => allActions.find((action) => action.id === id) ?? []);
   const runAction = (action: HubAction) => {
@@ -93,11 +97,11 @@ export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onO
   );
 
   return (
-    <section className="mobile-next-workspace-hub" role="dialog" aria-modal="true" aria-label="更多工作区">
+    <WorkspaceFrame className="mobile-next-workspace-hub" ariaLabel="更多工作区" onRequestClose={onClose}>
       <div className="mobile-next-workspace-hub__scroll">
         {recentActions.length > 0 ? <section><header><Trophy size={17} /><strong>最近使用</strong></header><div>{recentActions.map(actionButton)}</div></section> : null}
         {groups.map((group) => <section key={group.id}><header>{group.icon}<strong>{group.label}</strong></header><div>{group.actions.map(actionButton)}</div></section>)}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

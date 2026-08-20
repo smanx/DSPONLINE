@@ -2,75 +2,55 @@
 
 import {
   applyContentPackRuntimeSnapshot,
-  type ContentPackRuntimeSnapshot,
 } from "./contentPacks";
 import {
+  applyPureIdleMacroFinalState,
   advancePureIdleMacroSession,
   createPureIdleMacroSession,
-  finalizePureIdleMacroSession,
+  finalizePureIdleMacroCandidate,
   PURE_IDLE_MACRO_ALGORITHM_VERSION,
   PURE_IDLE_MACRO_OPERATION_DEADLINE_MS,
-  type PureIdleMacroMode,
+  type PureIdleMacroFinalStateOptions,
   type PureIdleMacroPhase,
   type PureIdleMacroSession,
-  type PureIdleMacroSummary,
 } from "./pureIdleMacro";
-import type { GameState } from "./types";
+import type {
+  PureIdleMacroFinalizedIdentity,
+  PureIdleMacroWorkerRequest,
+  PureIdleMacroWorkerResponse,
+} from "./pureIdleMacroProtocol";
+import { serializeSaveEnvelopeToTransfer } from "./saveTransfer";
+import {
+  createImmutableWorkerBinaryPayload,
+  workerBinaryPayloadTransferables,
+} from "./workerBinaryPayload";
 
-export type PureIdleMacroWorkerRequest =
-  | {
-    id: number;
-    type: "initialize";
-    state: GameState;
-    mode: PureIdleMacroMode;
-    registry: ContentPackRuntimeSnapshot;
-    deadlineMs?: number;
-    forceConservativeReason?: string;
-  }
-  | { id: number; type: "advance"; targetWallSeconds: number; deadlineMs?: number }
-  | { id: number; type: "finalize"; targetWallSeconds: number; deadlineMs?: number }
-  | { id: number; type: "cancel"; targetId?: number };
+export type { PureIdleMacroWorkerRequest, PureIdleMacroWorkerResponse } from "./pureIdleMacroProtocol";
 
-export type PureIdleMacroWorkerResponse =
-  | {
-    id: number;
-    type: "ready" | "advanced";
-    summary: PureIdleMacroSummary;
-    durationMs: number;
+interface PureIdleMacroWorkerSessionContext {
+  session: PureIdleMacroSession;
+  registryFingerprint: string;
+  terminalState?: PureIdleMacroFinalStateOptions;
+}
+
+function readTerminalState(request: Extract<PureIdleMacroWorkerRequest, { type: "initialize" }>): PureIdleMacroFinalStateOptions | undefined {
+  const hasTerminalState = request.startedPaused !== undefined ||
+    request.baselineIdleSettlement !== undefined || request.baselineTotalProduced !== undefined;
+  if (!hasTerminalState) return undefined;
+  if (typeof request.startedPaused !== "boolean" ||
+    !request.baselineIdleSettlement || typeof request.baselineIdleSettlement !== "object" ||
+    !request.baselineTotalProduced || typeof request.baselineTotalProduced !== "object" ||
+    Array.isArray(request.baselineTotalProduced)) {
+    throw new Error("纯挂机 Worker 终止态基线不完整");
   }
-  | {
-    id: number;
-    type: "progress";
-    operation: Exclude<PureIdleMacroWorkerRequest["type"], "cancel">;
-    phase: PureIdleMacroPhase;
-    wallClockMs: number;
-    algorithmVersion: string;
-  }
-  | {
-    id: number;
-    type: "cancelled";
-    operation: Exclude<PureIdleMacroWorkerRequest["type"], "cancel">;
-    durationMs: number;
-  }
-  | {
-    id: number;
-    type: "finalized";
-    summary: PureIdleMacroSummary;
-    state: GameState;
-    rawBytes: number;
-    durationMs: number;
-  }
-  | {
-    id: number;
-    type: "error";
-    operation: Exclude<PureIdleMacroWorkerRequest["type"], "cancel">;
-    message: string;
-    recoverable: true;
-    durationMs: number;
+  return {
+    startedPaused: request.startedPaused,
+    baselineIdleSettlement: request.baselineIdleSettlement,
+    baselineTotalProduced: request.baselineTotalProduced,
   };
+}
 
-let session: PureIdleMacroSession | null = null;
-let registry: ContentPackRuntimeSnapshot | null = null;
+let sessionContext: PureIdleMacroWorkerSessionContext | null = null;
 let queue: Promise<void> = Promise.resolve();
 let activeRequestId: number | null = null;
 const cancelledRequestIds = new Set<number>();
@@ -114,23 +94,31 @@ async function processRequest(request: PureIdleMacroWorkerRequest): Promise<void
   try {
     if (request.type === "initialize") {
       postProgress(request.forceConservativeReason ? "conservative" : "preparing-power");
+      sessionContext = null;
       applyContentPackRuntimeSnapshot(request.registry);
-      registry = request.registry;
       postProgress(request.forceConservativeReason ? "conservative" : "calibrating");
-      session = createPureIdleMacroSession(request.state, request.mode, {
+      const initializedSession = createPureIdleMacroSession(request.state, request.mode, {
         deadlineAtMs,
         shouldCancel: interrupted,
         forceConservativeReason: request.forceConservativeReason,
       });
+      const summary = advancePureIdleMacroSession(initializedSession, 0);
+      const terminalState = readTerminalState(request);
+      sessionContext = {
+        session: initializedSession,
+        registryFingerprint: request.registry.fingerprint,
+        ...(terminalState ? { terminalState } : {}),
+      };
       self.postMessage({
         id: request.id,
         type: "ready",
-        summary: advancePureIdleMacroSession(session, 0),
+        summary,
         durationMs: Math.max(0, performance.now() - startedAt),
       } satisfies PureIdleMacroWorkerResponse);
       return;
     }
-    if (!session || !registry) throw new Error("纯挂机 Worker 尚未完成校准");
+    if (!sessionContext) throw new Error("纯挂机 Worker 尚未完成校准");
+    const { session } = sessionContext;
     if (request.type === "advance") {
       postProgress(session.conservativeOnly ? "conservative" : "running");
       self.postMessage({
@@ -141,19 +129,59 @@ async function processRequest(request: PureIdleMacroWorkerRequest): Promise<void
       } satisfies PureIdleMacroWorkerResponse);
       return;
     }
+    if (request.terminal && !sessionContext.terminalState) {
+      throw new Error("纯挂机 Worker 缺少终止态基线，未生成可提交 envelope");
+    }
     postProgress("finalizing");
-    const result = finalizePureIdleMacroSession(session, request.targetWallSeconds, registry.registry, {
+    const result = finalizePureIdleMacroCandidate(session, request.targetWallSeconds, {
       deadlineAtMs,
       shouldCancel: interrupted,
     });
+    const finalState = request.terminal
+      ? applyPureIdleMacroFinalState(result.state, request.targetWallSeconds, sessionContext.terminalState!)
+      : result.state;
+    const mode = finalState.mode === "speedrun" ? "speedrun" : "normal";
+    const savedAt = Date.now();
+    const serialized = serializeSaveEnvelopeToTransfer(finalState, {
+      formatVersion: 2,
+      kind: "primary",
+      mode,
+      slot: "main",
+      savedAt,
+    });
+    const identity: PureIdleMacroFinalizedIdentity = {
+      stateChecksum: serialized.stateChecksum,
+      stateVersion: finalState.version,
+      mode,
+      activePlanetId: finalState.activePlanetId,
+      entityCount: finalState.entities.length,
+      beltCount: finalState.belts.length,
+      elapsedSeconds: finalState.elapsedSeconds,
+      algorithmVersion: result.summary.algorithmVersion,
+      settledWallSeconds: result.summary.settledWallSeconds,
+      settledSimulationSeconds: result.summary.settledSimulationSeconds,
+      registryFingerprint: sessionContext.registryFingerprint,
+    };
+    const payloadBytes = createImmutableWorkerBinaryPayload(
+      serialized.bytes,
+      request.binaryTransport ?? "array-buffer",
+    );
     self.postMessage({
       id: request.id,
       type: "finalized",
       summary: result.summary,
-      state: result.state,
-      rawBytes: result.rawBytes,
+      finalEnvelope: {
+        payloadBytes,
+        verification: {
+          integrity: serialized.integrity,
+          stateChecksum: serialized.stateChecksum,
+          payloadChecksum: serialized.payloadChecksum,
+          byteLength: serialized.byteLength,
+        },
+        identity,
+      },
       durationMs: Math.max(0, performance.now() - startedAt),
-    } satisfies PureIdleMacroWorkerResponse);
+    } satisfies PureIdleMacroWorkerResponse, workerBinaryPayloadTransferables(payloadBytes));
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       self.postMessage({

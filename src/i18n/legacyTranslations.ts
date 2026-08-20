@@ -14,6 +14,9 @@ const UI_EN: TranslationMap = {
   "物资": "Materials",
   "科研": "Research",
   "更多": "More",
+  "画布自适应细节状态": "Canvas Adaptive Detail Status",
+  "完整卡片": "Full Cards",
+  "可见": "visible",
   "返回工厂": "Back to Factory",
   "主菜单": "Main Menu",
   "设置": "Settings",
@@ -29,9 +32,15 @@ const UI_EN: TranslationMap = {
   "配方图鉴": "Recipe Codex",
   "科技界面": "Technology",
   "科技树": "Technology Tree",
+  "科技树横向视口": "Horizontal Technology Tree Viewport",
   "星图与行星探索": "Star Map & Planet Exploration",
   "星图": "Star Map",
+  "星图批量物流操作": "Star-map Batch Logistics Operations",
+  "可按名称、备注或标签搜索": "Search by name, note, or label",
   "银河网络": "Galactic Network",
+  "当前认证数据源：": "Current authenticated source: ",
+  "普通模式 · 主存档": "Normal mode · Primary save",
+  "。速通主槽和手动槽不会更新银河榜。": ". The speedrun primary slot and manual slots never update the Galaxy leaderboard.",
   "戴森规划": "Dyson Planning",
   "戴森球规划": "Dyson Sphere Planning",
   "主线任务": "Campaign",
@@ -663,7 +672,50 @@ const UI_EN: TranslationMap = {
   "排行榜赛季": "Leaderboard Season",
   "我的排名": "My Rank",
   "未登录": "Signed Out",
+  "已限制": "Restricted",
+  "等待复核": "Awaiting Review",
+  "等待统计": "Awaiting Metrics",
+  "读取中": "Loading",
+  "认证状态不可用": "Authenticated Status Unavailable",
+  "有效零产出": "Valid Zero Output",
+  "待同步": "Awaiting Sync",
+  "不具资格": "Ineligible",
+  "未生成": "Not Generated",
+  "本地预览": "Local Preview",
+  "正在读取当前账户的服务端排名": "Loading the current account's server ranking",
+  "正在读取当前账户的服务器认证排名": "Loading the current account's authenticated server ranking",
+  "排行榜暂时不可达，当前只显示本地预览数据": "The leaderboard is temporarily unavailable; only local preview data is shown.",
+  "服务端已验证指标": "Server-verified metric",
+  "服务器认证指标": "Server-authenticated metric",
+  "服务器认证成绩已计入": "The server-authenticated result is ranked",
+  "服务端等待有效窗口": "Server awaiting a valid window",
+  "服务端尚无有效指标": "No valid server metric yet",
+  "服务端": "Server",
+  "待统计": "Pending",
+  "/min · 服务端": "/min · Server",
+  "/min · 待统计": "/min · Pending",
+  "/min · 本地": "/min · Local",
+  "主云存档已计入；当前名次在公开榜前 100 名以外": "Primary cloud save counted; current rank is outside the public top 100",
+  "尚未上传普通模式主云存档；手动槽位和速通存档不会参与银河排行": "No normal-mode primary cloud save has been uploaded. Manual slots and speedrun saves do not enter the galaxy leaderboard.",
+  "尚未上传普通模式主云存档；速通主档和手动槽位不会参与银河排行": "No normal-mode primary cloud save has been uploaded. The speedrun primary slot and manual slots do not enter the galaxy leaderboard.",
+  "当前账号受到排行榜限制；本地与云存档仍保持正常，不会因此被修改": "This account is leaderboard-restricted. Local and cloud saves remain available and are not modified by this restriction.",
+  "当前账号已退出公开排行榜；云存档仍正常同步": "This account has left the public leaderboard; cloud saves continue to sync normally.",
+  "服务器暂时无法生成当前账号成绩；玩家存档、云存档和生产数据不会因此被修改": "The server cannot currently produce a result for this account. Player saves, cloud saves, and production data are not modified.",
+  "当前普通模式主云存档包含内容包状态，不参与官方排行榜": "The current normal-mode primary cloud save contains content-pack state and is not eligible for the official leaderboard.",
+  "主云存档正文暂时不可读取，排行榜未更新；原存档不会被改写": "The primary cloud-save payload is temporarily unavailable, so the leaderboard was not updated. The original save is not rewritten.",
+  "主云存档未通过排行榜只读解析，排行榜未更新；原存档不会被改写": "The primary cloud save failed read-only leaderboard parsing, so the leaderboard was not updated. The original save is not rewritten.",
+  "普通模式主云存档尚未生成排行榜记录，请刷新排名；存档与生产数据不受影响": "The normal-mode primary cloud save has not produced a leaderboard record yet. Refresh the ranking; save and production data are unaffected.",
+  "排行榜正在等待新的普通模式主云修订完成复核": "The leaderboard is waiting for a new normal-mode primary cloud revision to complete review.",
+  "等待第二次有效云同步：两次普通模式主云同步需相隔至少 60 个模拟秒": "Waiting for the second valid cloud sync. Two normal-mode primary syncs must be at least 60 simulated seconds apart.",
+  "等待第二次有效云同步：两次普通模式主云同步需相隔至少 60 个模拟秒；已验证的历史峰值仍会保留": "Waiting for the second valid cloud sync. Two normal-mode primary syncs must be at least 60 simulated seconds apart; the verified historical peak remains intact.",
+  "当前排行榜记录来自旧诊断格式；下一次普通模式主云同步后会显示具体统计窗口": "This leaderboard record uses the legacy diagnostics format. The next normal-mode primary cloud sync will provide the exact metric window.",
+  "当前排行榜记录来自旧诊断格式；下一次普通模式主云同步后会显示具体统计窗口；已验证的历史峰值仍会保留": "This leaderboard record uses the legacy diagnostics format. The next normal-mode primary cloud sync will provide the exact metric window; the verified historical peak remains intact.",
   "访客可查看真实排名": "Guests can view the live leaderboard",
+  "服务器白糖产量峰值": "Server White Matrix Output Peak",
+  "本地 60 秒白糖最佳": "Local 60-Second White Matrix Best",
+  "本地尚未记录": "Not Recorded Locally",
+  "服务器实际结算吞吐": "Server Actual Settled Throughput",
+  "本地 60 秒实际结算吞吐最佳": "Local 60-Second Actual Throughput Best",
   "分": "pts",
   "银河规模": "Galactic Scale",
   "星系": "Star Systems",
@@ -911,6 +963,7 @@ const UI_EN: TranslationMap = {
   "生产历史趋势": "Production History Trend",
   "历史产量趋势": "Historical Output Trend",
   "选择趋势物品": "Select Trend Item",
+  "趋势": "Trend",
   "累计总产量": "Total Output",
   "累计总产量仅记录全星区权威值；请选择“全部星球”查看。": "Total output records authoritative all-system values only. Select All Planets to view it.",
   "暂无累计生产记录": "No Total Production Recorded",
@@ -1710,6 +1763,19 @@ const UI_EN: TranslationMap = {
   "亮色/深色、字体、语言和默认画布显示": "Light or dark theme, text size, language, and default canvas display",
   "刷新频率、极限模式与独立画布回退开关": "Refresh rate, extreme mode, and independent canvas fallbacks",
   "线路、缺料跳转、寻线和输入行为": "Belts, shortage navigation, line tracing, and input behavior",
+  "默认并联数量": "Default parallel lanes",
+  "新建传送带默认并联数量": "Default parallel lanes for new belts",
+  "新建传送带默认并联数量自定义值": "Custom default parallel lanes for new belts",
+  "恢复默认 ×1": "Restore default ×1",
+  "新线路会一次性消耗对应数量的同级传送带；材料不足时整条线路不会建立。蓝图保留高于默认值的并联数量，未解锁的货物堆叠等级不可选择。": "A new route consumes the matching number of same-tier belts atomically; if materials are short, no part of the route is created. Blueprints retain lane counts above the default, and locked cargo-stack levels remain unavailable.",
+  "请输入默认并联数量": "Enter a default parallel-lane count",
+  "默认并联数量不能为负数": "The default parallel-lane count cannot be negative",
+  "默认并联数量只接受整数": "The default parallel-lane count must be an integer",
+  "默认并联数量不接受指数格式": "Scientific notation is not accepted for the default parallel-lane count",
+  "默认并联数量只能包含数字": "The default parallel-lane count can contain digits only",
+  "默认并联数量超出安全整数范围": "The default parallel-lane count exceeds the safe integer range",
+  "默认并联数量不能低于 1": "The default parallel-lane count cannot be below 1",
+  "默认并联数量不能高于 4096": "The default parallel-lane count cannot exceed 4,096",
   "自动保存、资源模式和存档保护": "Autosave, resource mode, and save protection",
   "性能采样、运行记录和诊断报告": "Performance sampling, run log, and diagnostics",
   "教程入口、版本记录、难度与社区": "Tutorials, release history, difficulty, and community",
@@ -1720,6 +1786,41 @@ const UI_EN: TranslationMap = {
   "速通与宏观纯挂机稳定性更新": "Speedrun & Macro Pure-Idle Stability Update",
   "离线与时间扭曲终局快速结算更新": "Fast Endgame Offline & Time-Warp Settlement Update",
   "云存档、纯挂机与排行榜可信度更新": "Cloud Save, Pure-Idle & Leaderboard Integrity Update",
+  "传送带、燃料与终局性能更新": "Belts, Fuel & Endgame Performance Update",
+  "单极磁石、离线决策与星图批量操作更新": "Unipolar Magnets, Offline Decisions & Star-Map Batch Operations",
+  "终局性能、存档瘦身与矿脉扩容更新": "Endgame Performance, Leaner Saves & Vein Expansion",
+  "1.0.38 减少大存档在主线程与 Worker 间的重复复制，复用传送带、生产、电力和量子物流批处理，并安全压缩可重建的默认存档字段；普通模式中仅有一个单极磁石矿脉的存档可在备份与双重确认后补到硬上限两个。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。": "Version 1.0.38 reduces duplicate copies of large saves between the main thread and Workers, reuses batching for belts, production, power, and quantum logistics, and safely omits reconstructable default save fields. In normal mode, a save with exactly one unipolar-magnet vein can add one more after a backup and double confirmation, up to a hard cap of two. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 are unchanged.",
+  "大存档只做一次权威序列化": "One Authoritative Serialization for Large Saves",
+  "保存、云上传、离线和纯挂机 Worker 返回带长度、哈希与状态校验的可转移缓冲区；槽位和快照也走后台序列化，失败仍保留原始状态和精确重试能力。": "Save, cloud-upload, offline, and pure-idle Workers return transferable buffers with length, payload hash, and state-integrity proofs. Slots and snapshots also serialize in the background, while failures preserve the original state and exact-retry ability.",
+  "终局结算复用稳定批次": "Reuse Stable Endgame Settlement Batches",
+  "传送带候选与容量账本、配方静态量、戴森接收与电网拓扑、量子供需索引在结构未变化时复用；完整状态、缓存、在途物资和稳定排序继续与既有 oracle 对照。": "Belt candidates and capacity ledgers, recipe constants, Dyson reception and power-grid topology, and quantum supply-demand indexes are reused while structure is unchanged. Full state, buffers, in-transit cargo, and stable ordering remain checked against the existing oracle.",
+  "存档默认字段可安全瘦身": "Safely Omit Default Save Fields",
+  "仅省略 v46 迁移可精确重建的实体和传送带零值默认字段，运行时拓扑与历史诊断不落盘；旧版未压缩 v46 存档仍可直接读取并保留失败回滚路径。": "Only zero-value entity and belt defaults that v46 migration reconstructs exactly are omitted. Runtime topology and historical diagnostics are not persisted; older uncompressed v46 saves remain directly readable with rollback on failure.",
+  "单矿脉存档可受控补到两个": "Controlled Expansion from One Vein to Two",
+  "仅普通模式、恰好一个健康单极磁石矿脉且暂停时可操作；先创建持久快照并双重确认，只新增零缓存、零矿机的有限矿脉，不增加库存、产量或既有矿脉储量，重复执行会被硬上限阻止。": "The action is available only in paused normal-mode saves with exactly one healthy unipolar-magnet vein. It creates a durable snapshot and requires double confirmation, adds only a finite vein with zero buffer and zero miners, grants no inventory, production, or reserve to the existing vein, and rejects repeat use at the hard cap.",
+  "高密度画布减少无效刷新": "Fewer Redundant Dense-Canvas Refreshes",
+  "线路颜色与物品映射只在拓扑变化时重建，并新增暂停/运行拖动、缩放、建筑/线路选择、检查器、200% 字号和移动窗口的有界矩阵；不会承诺未经真机验证的统一 60 FPS。": "Belt item and color maps rebuild only after topology changes. A bounded matrix now covers paused and running pan, zoom, building and belt selection, the inspector, 200% text scale, and mobile viewports; no universal 60 FPS claim is made without physical-device evidence.",
+  "1.0.37 修复旧存档资源目录迁移边界，重排横向科技树导航，并让不可靠的离线近似先由玩家决策；星图批量物流操作同步收紧布局并支持轨道收集器一键接入量子网络。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。": "Version 1.0.37 fixes legacy resource-catalog migration boundaries, reorganizes horizontal technology-tree navigation, and asks the player before any unreliable offline approximation. Star-map batch logistics are more compact and can connect all eligible orbital collectors to the quantum network. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 are unchanged.",
+  "单极磁石资源边界可审计": "Auditable Unipolar-Magnet Resource Boundaries",
+  "旧存档迁移只恢复其星球资源目录明确声明的稳定资源点，不再从重新生成的目录引入幽灵矿脉；人工修复工具提供预览、备份摘要、确认令牌、回滚和速通复核门禁。": "Legacy migration restores stable resource nodes only when the persisted planet catalog declares them, preventing phantom veins from regenerated catalogs. The manual repair tool includes preview, backup hashes, an explicit confirmation token, rollback data, and a speedrun-review gate.",
+  "科技树横向浏览更稳定": "More Stable Horizontal Technology Navigation",
+  "桌面科技树按层级横向排列，滚轮、触控板、Shift 滚轮、拖动与键盘均只移动科技区域；100%～200% 字号和紧凑布局不会带动页面纵向跳动，手机仍使用纵向列表。": "The desktop technology tree is arranged horizontally by tier. Wheel, trackpad, Shift-wheel, drag, and keyboard input move only the technology viewport; 100%–200% text scales and compact layout do not move the page vertically, while mobile keeps its vertical list.",
+  "不可靠离线近似不再自动落盘": "Unreliable Offline Approximations Never Auto-Commit",
+  "零校准、Worker 异常、内存风险和边界失败会保留原存档并进入决策界面；可从原状态精确重试、返回菜单，或在普通模式双重确认后按零收益推进时钟，速通模式只允许精确结算。": "Zero calibration, Worker errors, memory risk, and boundary failures preserve the source save and open a decision screen. Players can retry exactly from the original state, return to the menu, or double-confirm a clock-only zero-reward skip in normal mode; speedrun remains exact-only.",
+  "星图批量物流操作更集中": "More Focused Star-Map Batch Logistics",
+  "升级全部星际物流站与切换全部量子物流站保持同排，并新增轨道收集器一键接入量子网络；批量操作会确认影响范围并显示成功数、跳过数和分组原因。": "Upgrade-all and quantum-switch-all station controls stay on one row, with a new action to connect every eligible orbital collector to the quantum network. Batch actions confirm their scope and report successes, skips, and grouped reasons.",
+  "本批不升级 GameState、存档封装、云服务或 SQLite 版本；不会自动修改排行榜历史、批量增加资源或提交未确认的离线候选状态。": "This release does not change GameState, the save envelope, cloud-service schema, or SQLite layout. It never edits leaderboard history, bulk-adds resources, or commits an unconfirmed offline candidate.",
+  "1.0.36 增加新建传送带默认并联数量与可燃冰火力发电支持，并以可重建运行时索引优化传送带、物流、生产缓存和高密度画布。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。": "Version 1.0.36 adds a default parallel-lane count for new belts and fire-ice thermal power, while reconstructable runtime indexes optimize belts, logistics, production buffers, and dense canvases. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 are unchanged.",
+  "新建线路可预设并联数量": "Preset Parallel Lanes for New Belts",
+  "设置中可选择 1、2、4 或自定义 1～4096 条并联线路；桌面、触摸和蓝图新建线路按实际数量原子扣除施工托盘，既有线路和货物堆叠不变。": "Choose 1, 2, 4, or a custom 1–4,096 parallel lanes in settings. Desktop, touch, and blueprint placement atomically consume the exact construction inventory, while existing belts and cargo stacking stay unchanged.",
+  "火力发电站支持可燃冰": "Thermal Generators Support Fire Ice",
+  "可燃冰按 4.8 MJ/个接入既有火电燃料、耗尽提示、供电和统计路径；煤、石墨、氢、氘与燃料棒规则不变。": "Fire ice joins the existing thermal-fuel, depletion-warning, power, and statistics path at 4.8 MJ per item. Coal, energetic graphite, hydrogen, deuterium, and fuel-rod rules are unchanged.",
+  "终局线路按运行状态调度": "Schedule Endgame Belts by Runtime State",
+  "星球级线路、源端、目标端和物品索引复用稳定容量与路由计划；已证明休眠的线路只在库存、配方、供电或拓扑变化时唤醒，结算顺序与状态哈希保持一致。": "Planet-scoped belt, source, target, and item indexes reuse stable capacities and route plans. Proven dormant belts wake only after inventory, recipe, power, or topology changes, while settlement order and state hashes remain identical.",
+  "高密度星球画布更轻量": "Lighter Dense-Planet Canvas",
+  "普通线路由 Canvas 批量绘制并通过空间索引命中，React Flow 只保留选中、悬浮、寻线和生产相关细节；Canvas 不可用时自动回退完整线路。": "Canvas batches ordinary belts and a spatial index handles hits. React Flow retains only selected, hovered, traced, and production-related detail edges, with an automatic full-edge fallback when Canvas is unavailable.",
+  "生产缓存与物流调度复用": "Reuse Production Buffers & Logistics Scheduling",
+  "配方静态量、矿脉列表、物流容量和稳定槽位排序改为运行时缓存；每座建筑缓存、量子库存、运输载荷和翘曲器仍独立守恒。": "Recipe constants, vein lists, logistics capacities, and stable slot ordering now use runtime caches. Per-building buffers, quantum inventory, transport cargo, and warpers remain independently conserved.",
   "1.0.35 为终局离线和纯挂机增加设备感知分级与内存预警，补齐大存档上传诊断、云数据库治理、匿名新设备登录提醒和排行榜复核；历史百万白糖里程碑可安全自愈，建筑堆叠快捷档扩展到 ±10000 与 ±100000。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。": "Version 1.0.35 adds device-aware workload classification and memory warnings for end-game offline and pure-idle settlement, large-save upload diagnostics, cloud database governance, anonymous new-device alerts, leaderboard review, safe recovery for missed one-million white-matrix milestones, and ±10,000/±100,000 building stack shortcuts. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 are unchanged.",
   "终局结算、云端安全与速通恢复更新": "End-game settlement, cloud security, and speedrun recovery",
   "终局离线按存档与设备分级": "Classify end-game offline work by save and device",
@@ -1920,6 +2021,9 @@ const UI_EN: TranslationMap = {
   "可按默认名、自定义名、备注或标签搜索": "Search by default names, custom names, notes, or tags",
   "升级全部星际物流站": "Upgrade all interstellar logistics stations",
   "一键切换全部量子物流站": "Switch all quantum logistics stations",
+  "量子网络一键接入所有轨道收集器": "Connect all orbital collectors to the quantum network",
+  "关闭批量操作结果": "Dismiss batch-operation result",
+  "全部符合条件的目标均已提交": "All eligible targets were submitted",
   "自定义星球资料": "Custom planetary data",
   "名称、备注与标签": "Names, notes, and tags",
   "恒星系名称": "Star system name",
@@ -2042,6 +2146,38 @@ function translateRequirementList(source: string): string {
 function translateDynamicSystemText(body: string): string {
   let match = body.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
   if (match) return `${new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).toLocaleDateString("en-US", { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" })}`;
+  match = body.match(/^普通模式 · 主存档 · 修订 (\d+)$/);
+  if (match) return `Normal mode · Primary save · Revision ${match[1]}`;
+  match = body.match(/^排行榜正在等待新的普通模式主云修订完成复核（需高于修订 (\d+)）$/);
+  if (match) return `The leaderboard is waiting for a new normal-mode primary cloud revision above revision ${match[1]} to complete review.`;
+  match = body.match(/^服务器认证成绩已计入；完整榜共 (\d+) 条$/);
+  if (match) return `The server-authenticated result is ranked among ${match[1]} total entries.`;
+  match = body.match(/^缺少相邻普通主云修订，当前已观察 ([\d.]+) 个模拟秒；完成第二次有效同步后再统计(；已验证的历史峰值仍会保留)?$/);
+  if (match) return `No adjacent normal-mode primary cloud revision is available. ${match[1]} simulated seconds have been observed; complete a second valid sync to form a window${match[2] ? "; the verified historical peak remains intact" : ""}.`;
+  match = body.match(/^统计窗口已观察 ([\d.]+) 个模拟秒，还需 ([\d.]+) 秒才能统计(白糖产量|实际结算吞吐)(；已验证的历史峰值仍会保留)?$/);
+  if (match) return `The window has observed ${match[1]} simulated seconds; ${match[2]} more seconds are required to measure ${match[3] === "白糖产量" ? "White Matrix output" : "actual settled throughput"}${match[4] ? "; the verified historical peak remains intact" : ""}.`;
+  match = body.match(/^相邻修订的模拟时间没有增加（已观察 ([\d.]+) 秒），本次不计入(白糖产量|实际结算吞吐)排名(；已验证的历史峰值仍会保留)?$/);
+  if (match) return `Simulation time did not increase between adjacent revisions (${match[1]} seconds observed), so this sync does not enter the ${match[2] === "白糖产量" ? "White Matrix output" : "actual settled throughput"} ranking${match[3] ? "; the verified historical peak remains intact" : ""}.`;
+  match = body.match(/^有效窗口，当前无产出（已观察 ([\d.]+) 个模拟秒）$/);
+  if (match) return `Valid window, currently no output (${match[1]} simulated seconds observed).`;
+  match = body.match(/^服务器已采用主云修订 (\d+|\?) → (\d+|\?) 的 ([\d.]+) 秒窗口认证(白糖产量|实际结算吞吐)$/);
+  if (match) return `The server authenticated ${match[4] === "白糖产量" ? "White Matrix output" : "actual settled throughput"} from the ${match[3]}-second window between primary cloud revisions ${match[1]} and ${match[2]}.`;
+  match = body.match(/^相邻主云窗口暂不可用（已观察 ([\d.]+) 个模拟秒），本次不更新(白糖产量|实际结算吞吐)成绩(；已验证的历史峰值仍会保留)?$/);
+  if (match) return `The adjacent primary-cloud window is unavailable (${match[1]} simulated seconds observed), so this sync does not update the ${match[2] === "白糖产量" ? "White Matrix output" : "actual settled throughput"} result${match[3] ? "; the verified historical peak remains intact" : ""}.`;
+  match = body.match(/^本地 60 秒最佳为 (.+)\/min；服务器尚无有效窗口，本地值不会计入服务器排行榜。$/);
+  if (match) return `Local 60-second best: ${translateChineseCompactNumbers(match[1])}/min. The server has no valid window yet, and the local value is not used as a server leaderboard result.`;
+  match = body.match(/^本地 60 秒最佳为 (.+)\/min，服务器认证峰值为 (.+)\/min；服务器排行榜只采用普通模式主云存档。$/);
+  if (match) return `Local 60-second best: ${translateChineseCompactNumbers(match[1])}/min; server-authenticated peak: ${translateChineseCompactNumbers(match[2])}/min. The server leaderboard only uses normal-mode primary cloud saves.`;
+  match = body.match(/^两次普通模式主云同步仅相隔 ([\d.]+) 个模拟秒，还需 ([\d.]+) 秒才能统计(；已验证的历史峰值仍会保留)?$/);
+  if (match) return `The two normal-mode primary cloud syncs are only ${match[1]} simulated seconds apart; ${match[2]} more seconds are required${match[3] ? "; the verified historical peak remains intact" : ""}.`;
+  match = body.match(/^有效的 ([\d.]+) 秒统计窗口已经形成，本窗口(白糖产量|实际结算吞吐)确实为 0$/);
+  if (match) return `A valid ${match[1]}-second window exists, and this window's ${match[2] === "白糖产量" ? "White Matrix output" : "actual settled throughput"} is genuinely zero.`;
+  match = body.match(/^服务端已采用主云修订 (\d+|\?) → (\d+|\?) 的 ([\d.]+) 秒窗口统计(白糖产量|实际结算吞吐)$/);
+  if (match) return `The server measured ${match[4] === "白糖产量" ? "White Matrix output" : "actual settled throughput"} from the ${match[3]}-second window between primary cloud revisions ${match[1]} and ${match[2]}.`;
+  match = body.match(/^本地个人档案记录为 (.+)\/min，但该值尚未通过服务端有效主云窗口校验，因此不会直接写入排行榜。$/);
+  if (match) return `The local profile records ${translateChineseCompactNumbers(match[1])}/min, but it has not passed validation in a valid server-side primary-cloud window and is not written directly to the leaderboard.`;
+  match = body.match(/^本地个人档案为 (.+)\/min，服务端已验证峰值为 (.+)\/min；排行榜只采用普通模式主云存档的有效统计窗口。$/);
+  if (match) return `Local profile: ${translateChineseCompactNumbers(match[1])}/min; server-verified peak: ${translateChineseCompactNumbers(match[2])}/min. The leaderboard only uses valid windows from normal-mode primary cloud saves.`;
   match = body.match(/^放弃约 (.+) 未结算时间并继续普通模拟$/);
   if (match) return `Abandon about ${translateLegacyText(match[1], "en")} of unsettled time and continue normal simulation`;
   match = body.match(/^检测到未提交的冻结结算（(.+)），请重试或放弃$/);
@@ -2101,6 +2237,10 @@ function translateDynamicSystemText(body: string): string {
     const name = translateCatalogName(match[1]);
     if (name !== match[1]) return `${name} ×${match[2]}`;
   }
+  match = body.match(/^查看(.+)趋势(和详情)?$/);
+  if (match) return `View ${translateCatalogName(match[1])} trend${match[2] ? " and details" : ""}`;
+  match = body.match(/^收起(.+)趋势(和详情)?$/);
+  if (match) return `Collapse ${translateCatalogName(match[1])} trend${match[2] ? " and details" : ""}`;
   match = body.match(/^查看(.+)配方$/);
   if (match) return `View ${translateCatalogName(match[1])} recipe`;
   match = body.match(/^查看(.+)$/);

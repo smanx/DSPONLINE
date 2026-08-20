@@ -5,13 +5,15 @@ interface ExactValueProps {
   className?: string;
   compact: ReactNode;
   label: string;
+  /** Avoid a nested widget when the value is rendered inside a button or progressbar. */
+  interactive?: boolean;
 }
 
 function hasCoarsePointer(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 }
 
-export function ExactValue({ className = "", compact, label }: ExactValueProps) {
+export function ExactValue({ className = "", compact, label, interactive = true }: ExactValueProps) {
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -80,6 +82,25 @@ export function ExactValue({ className = "", compact, label }: ExactValueProps) 
       event.currentTarget.blur();
     }
   };
+
+  if (!interactive) {
+    return <>
+      <span
+        ref={rootRef}
+        className={`quantity-value quantity-value--passive${expanded ? " quantity-value--expanded" : ""}${hovered ? " quantity-value--hovered" : ""}${className ? ` ${className}` : ""}`}
+        aria-label={label}
+        aria-describedby={visible ? tooltipId : undefined}
+        title={label}
+        onClick={toggle}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      ><span>{compact}</span></span>
+      {visible && typeof document !== "undefined" ? createPortal(
+        <span className="quantity-value__tooltip" style={tooltipStyle} id={tooltipId} role="tooltip">{label}</span>,
+        document.body,
+      ) : null}
+    </>;
+  }
 
   return <>
     <span

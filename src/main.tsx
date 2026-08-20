@@ -4,56 +4,82 @@ import "./styles.css";
 import "./theme.css";
 import { installAnalytics } from "./game/analytics";
 import { installClientMonitoring } from "./game/monitoring";
-import { finishNativeLaunch, initializeNativeRuntime, isNativeApp } from "./nativeApp";
+import { getDesktopBridge } from "./desktop";
 import { registerPwa } from "./pwa";
 import "./styles/native-app.css";
 import "./styles/dynamic-import-recovery.css";
 import "./styles/save-storage.css";
+import "./styles/local-save-writer.css";
 import "./styles/ui-clarity.css";
 import { AppLocaleProvider, initializeDocumentLocale } from "./i18n/locale";
 import { initializeLocalSaveStore } from "./game/localSaveStore";
-import { importWithRecovery, reloadLatestBuild } from "./game/dynamicImportRecovery";
+import { importWithRecovery, isDynamicImportFailure, reloadLatestBuild, runtimeErrorDiagnosticCode } from "./game/dynamicImportRecovery";
 import { initializeDocumentTheme } from "./game/uiPreferences";
+import { resolveApplicationRoute } from "./game/applicationRoute";
+import { isSpaceStationFeatureEnabled } from "./game/spaceStationFeature";
 
 // Apply the device-only theme before the first React paint. The legacy
 // GameState theme is still read for old saves, but it is no longer the source
 // of the initial document color and therefore cannot cause a dark flash.
 initializeDocumentTheme();
-const nativeRuntime = initializeNativeRuntime();
+const startupPlatform = __APP_PLATFORM__ === "android"
+  ? "android"
+  : getDesktopBridge() ? "desktop" : "web";
+document.documentElement.dataset.appPlatform = startupPlatform;
+// Keep the Android bridge outside the static startup closure. Platform data is
+// set synchronously above so native styles apply before the first React paint.
+const nativeRuntime = __APP_PLATFORM__ === "android"
+  ? importWithRecovery(() => import("./nativeApp"), "Android 原生运行时")
+  : Promise.resolve(null);
+const nativeInitialization = nativeRuntime.then((native) => native?.initializeNativeRuntime());
 initializeDocumentLocale();
 installClientMonitoring();
-const adminRoute = /^\/admin\/?$/.test(window.location.pathname);
-if (!adminRoute) installAnalytics();
+const applicationRoute = resolveApplicationRoute(window.location.pathname);
+if (applicationRoute.kind !== "admin") installAnalytics();
 
 async function mountApplication(): Promise<void> {
-  if (!adminRoute) await initializeLocalSaveStore();
-  const application = adminRoute
+  if (applicationRoute.kind === "game") await initializeLocalSaveStore();
+  const application = applicationRoute.kind === "admin"
     ? await importWithRecovery(() => import("./components/AdminDashboard"), "管理后台模块").then(({ AdminDashboard }) => <AdminDashboard />)
-    : await importWithRecovery(() => import("./GameLauncher"), "游戏启动模块").then(({ App }) => <App />);
+    : applicationRoute.kind === "public-station" && isSpaceStationFeatureEnabled()
+      ? await importWithRecovery(() => import("./components/PublicStationPage"), "公开空间站页面").then(({ PublicStationPage }) => <PublicStationPage publicId={applicationRoute.publicId} />)
+      : await importWithRecovery(() => import("./GameLauncher"), "游戏启动模块").then(({ App }) => <App />);
   createRoot(document.getElementById("root")!).render(<StrictMode><AppLocaleProvider>{application}</AppLocaleProvider></StrictMode>);
-  await nativeRuntime.catch(() => undefined);
+  await nativeInitialization.catch(() => undefined);
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-  await finishNativeLaunch();
+  await nativeRuntime.then((native) => native?.finishNativeLaunch()).catch(() => undefined);
 }
 
-void mountApplication().catch(() => {
+void mountApplication().catch((error) => {
   const root = document.getElementById("root");
   if (!root) return;
   const english = document.documentElement.lang === "en";
+  const dynamicImportFailure = isDynamicImportFailure(error);
   root.replaceChildren();
   const panel = document.createElement("main");
   panel.className = "dynamic-import-fatal";
   panel.setAttribute("role", "alert");
   const title = document.createElement("strong");
-  title.textContent = english ? "Page resources failed to load" : "页面资源载入失败";
+  title.textContent = dynamicImportFailure
+    ? english ? "Page resources failed to load" : "页面资源载入失败"
+    : english ? "The page encountered a runtime error" : "页面运行时发生错误";
   const detail = document.createElement("p");
-  detail.textContent = english ? "Your local saves were not cleared. Reload the latest version to continue." : "本地存档不会被清除，请重新加载最新版。";
+  detail.textContent = dynamicImportFailure
+    ? english ? "Your local saves were not cleared. Reload the latest version to continue." : "本地存档不会被清除，请重新加载最新版。"
+    : english ? "Your local saves were not changed. Reload the page to continue." : "本地存档未被修改，请重新加载页面后继续。";
+  if (!dynamicImportFailure) {
+    const diagnostic = document.createElement("small");
+    diagnostic.textContent = english ? `Diagnostic: ${runtimeErrorDiagnosticCode(error)}` : `诊断码：${runtimeErrorDiagnosticCode(error)}`;
+    panel.append(diagnostic);
+  }
   const button = document.createElement("button");
   button.type = "button";
-  button.textContent = english ? "Reload latest version" : "重新加载最新版";
+  button.textContent = dynamicImportFailure
+    ? english ? "Reload latest version" : "重新加载最新版"
+    : english ? "Reload page" : "重新加载页面";
   button.addEventListener("click", reloadLatestBuild);
   panel.append(title, detail, button);
   root.append(panel);
 });
 
-if (import.meta.env.PROD && !isNativeApp()) window.addEventListener("load", () => void registerPwa());
+if (import.meta.env.PROD && startupPlatform === "web") window.addEventListener("load", () => void registerPwa());

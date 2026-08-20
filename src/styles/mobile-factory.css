@@ -523,6 +523,70 @@
 .mobile-selection-context button.danger { border-color: var(--theme-danger-border); color: var(--coral); }
 .mobile-selection-context button:disabled { opacity: .38; }
 
+/* Continuous connection controls grow upward from a compact bar. This is a
+   non-modal surface: the canvas remains interactive and no backdrop is used. */
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions {
+  position: fixed;
+  z-index: 180;
+  right: 8px;
+  bottom: calc(var(--mobile-next-nav-height) + 8px);
+  left: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  align-items: stretch;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--theme-accent-border);
+  border-radius: 8px;
+  background: var(--theme-surface-translucent);
+  box-shadow: 0 9px 26px var(--theme-shadow);
+  pointer-events: auto;
+}
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__bar { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) repeat(2, auto); gap: 5px; align-items: center; min-width: 0; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__summary { display: grid; min-width: 0; min-height: 44px; grid-template-columns: 22px minmax(0, 1fr) 18px; align-items: center; gap: 5px; padding: 0 6px; border: 1px solid var(--theme-border); border-radius: 6px; background: transparent; color: var(--theme-text-soft); text-align: left; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__summary > span { display: grid; min-width: 0; gap: 2px; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__summary strong,
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__summary strong { color: var(--theme-text); font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__summary small { color: var(--theme-text-muted); font-size: calc(10px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__bar > button:not(.mobile-batch-connection-actions__summary) { display: inline-flex; min-width: 54px; min-height: 44px; align-items: center; justify-content: center; gap: 3px; padding: 0 7px; border: 1px solid var(--theme-border-strong); border-radius: 6px; background: var(--theme-control); color: var(--theme-text-soft); font-size: calc(11px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__bar > button.primary { border-color: var(--theme-accent-border); color: var(--green); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__bar > button:disabled { opacity: .45; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list { display: grid; grid-column: 1 / -1; min-width: 0; gap: 6px; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 6px; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > header > span { display: grid; min-width: 0; gap: 2px; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > header strong { font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > header small { color: var(--theme-text-muted); font-size: calc(10px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > header button { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--theme-border); border-radius: 6px; background: transparent; color: var(--theme-text-soft); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > ol { display: grid; max-height: min(46dvh, 390px); min-width: 0; gap: 5px; overflow: auto; margin: 0; padding: 0; list-style: none; overscroll-behavior: contain; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > ol > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; min-width: 0; padding: 6px; border: 1px solid var(--theme-border); border-radius: 5px; background: var(--theme-control); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > ol > li.is-invalid { border-color: var(--theme-danger-border); background: var(--theme-danger-bg); }
+.mobile-batch-connection-candidate__copy { display: grid; min-width: 0; gap: 2px; }
+.mobile-batch-connection-candidate__copy span { color: var(--accent-text); font-size: calc(11px * var(--ui-font-scale, 1)); }
+.mobile-batch-connection-candidate__copy strong,
+.mobile-batch-connection-candidate__copy small,
+.mobile-batch-connection-candidate__copy em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-batch-connection-candidate__copy strong { color: var(--theme-text-soft); font-size: calc(11px * var(--ui-font-scale, 1)); }
+.mobile-batch-connection-candidate__copy small { color: var(--theme-text-muted); font-size: calc(10px * var(--ui-font-scale, 1)); }
+.mobile-batch-connection-candidate__copy em { color: var(--coral); font-size: calc(10px * var(--ui-font-scale, 1)); font-style: normal; }
+.mobile-batch-connection-candidate__actions { display: grid; grid-template-columns: repeat(2, 44px); gap: 4px; align-content: start; }
+.mobile-batch-connection-candidate__actions button { display: grid; min-width: 44px; min-height: 44px; place-items: center; gap: 1px; border: 1px solid var(--theme-border-strong); border-radius: 5px; background: transparent; color: var(--theme-text-soft); font-size: calc(9px * var(--ui-font-scale, 1)); }
+.mobile-batch-connection-actions__list > p,
+.mobile-batch-connection-actions__feedback,
+.mobile-batch-connection-actions__error { margin: 0; color: var(--theme-text-muted); font-size: calc(10px * var(--ui-font-scale, 1)); line-height: 1.4; }
+.mobile-batch-connection-actions__feedback { color: var(--status-warning-text); }
+.mobile-batch-connection-actions__error { color: var(--coral); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > footer button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--theme-border-strong); border-radius: 5px; background: var(--theme-control); color: var(--theme-text-soft); font-size: calc(10px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__list > footer button:disabled { opacity: .45; }
+
+/* The legacy mobile rule above styles every descendant span/button. Reset
+   only the inherited spacing that would collapse the new full-width grid. */
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions span { padding-left: 0; }
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__feedback,
+.game-shell[data-mobile-shell="true"] .mobile-batch-connection-actions__error { grid-column: 1 / -1; }
+
 .game-shell[data-mobile-shell="true"] .selection-toolbar { display: none; }
 .game-shell[data-mobile-shell="true"] .game-notice { font-size: calc(12px * var(--ui-font-scale, 1)) !important; }
 .game-shell[data-mobile-shell="true"][data-mobile-canvas-mode="layout"] .react-flow__node { cursor: move; }

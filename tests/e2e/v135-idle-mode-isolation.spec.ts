@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-09-v1.0.35";
+const RELEASE_NOTE_ID = "2026-08-17-v1.0.46";
 
 async function prepare(page: import("@playwright/test").Page): Promise<void> {
   await page.addInitScript((releaseNoteId) => {
@@ -26,9 +26,13 @@ test("普通与速通本地槽位同时存在，速通只能单向复制到空�
     const speedrun = engine.createSpeedrunInitialState(1_777_777_777_000, "e2e_mode_isolation_factory");
     speedrun.paused = true;
     speedrun.elapsedSeconds = 222;
-    if (!storage.saveGame(normal).success || !storage.saveGame(speedrun).success) throw new Error("failed to create primary fixtures");
-    storage.saveGameSlot(1, normal);
-    storage.saveGameSlot(2, speedrun);
+    const normalPrimary = await storage.saveGameVerified(normal);
+    const speedrunPrimary = await storage.saveGameVerified(speedrun);
+    const normalSlot = await storage.saveGameSlotVerified(1, normal);
+    const speedrunSlot = await storage.saveGameSlotVerified(2, speedrun);
+    if (!normalPrimary.success || !speedrunPrimary.success || !normalSlot.success || !speedrunSlot.success) {
+      throw new Error("failed to create primary fixtures");
+    }
     await localStore.flushLocalSaveWrites();
   });
   await page.reload();
@@ -56,17 +60,22 @@ test("普通与速通本地槽位同时存在，速通只能单向复制到空�
   await normalOne.getByRole("button", { name: "删除普通模式槽位 1" }).click();
   const deleteDialog = page.getByRole("dialog", { name: "删除普通模式槽位 1" });
   await deleteDialog.getByRole("button", { name: /继续确认/ }).click();
-  await deleteDialog.getByRole("button", { name: /确认永久删除/ }).click();
+  await page.getByRole("alertdialog", { name: "删除普通模式槽位 1" }).getByRole("button", { name: /确认永久删除/ }).click();
   await expect(page.locator(".start-menu-message")).toContainText("其他存档未受影响");
 
   const persisted = await page.evaluate(async () => {
     const storage = await import("/src/game/storage.ts");
+    const [deletedNormal, copiedNormal, sourceSpeedrun] = await Promise.all([
+      storage.loadGameSlotFromPersistence(1, "normal"),
+      storage.loadGameSlotFromPersistence(2, "normal"),
+      storage.loadGameSlotFromPersistence(2, "speedrun"),
+    ]);
     return {
-      deletedNormal: storage.loadGameSlot(1, "normal"),
-      copiedNormalMode: storage.loadGameSlot(2, "normal")?.state.mode,
-      copiedHasSpeedrunState: Boolean(storage.loadGameSlot(2, "normal")?.state.speedrun),
-      sourceMode: storage.loadGameSlot(2, "speedrun")?.state.mode,
-      sourceFactoryId: storage.loadGameSlot(2, "speedrun")?.state.speedrun?.factoryId,
+      deletedNormal,
+      copiedNormalMode: copiedNormal?.state.mode,
+      copiedHasSpeedrunState: Boolean(copiedNormal?.state.speedrun),
+      sourceMode: sourceSpeedrun?.state.mode,
+      sourceFactoryId: sourceSpeedrun?.state.speedrun?.factoryId,
     };
   });
   expect(persisted).toEqual({
@@ -77,3 +86,4 @@ test("普通与速通本地槽位同时存在，速通只能单向复制到空�
     sourceFactoryId: "e2e_mode_isolation_factory",
   });
 });
+

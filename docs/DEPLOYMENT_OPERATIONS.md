@@ -15,9 +15,13 @@
 
 硬边界：上海节点必须继续由上海本机提供前端与 `/api`，不得改成香港反代或域名跳转。上海为 HTTP，前端必须继续拒绝云账号密码传输。
 
-> 当前生产状态（2026-08-09）：香港、上海 Web/API 均运行 `1.0.35-080844f55852`，构建 ID 为 `1.0.35+080844f55852`；上海下载页运行 `download-site-1.0.35-080844f55852`。Web/API 和下载页直接回滚均为 1.0.34。两地数据库继续独立使用 schema v7 / SQLite layout v2。香港 `/canary/previous/` 现在 302 到不可变上一稳定版 `/canary/1.0.34-4a7d51241424/`；旧 1.0.35 测试地址只作兼容重定向，不再暴露候选目录。发布前备份、未激活目录复验、原子切换、启动观察、公网完整哈希、Range、缓存、五场 stable Chrome 证据和回退入口证据见 [releases/1.0.35.md](./releases/1.0.35.md)。
+> 当前生产状态（2026-08-15）：香港 Web generation 13 current 为 `web-1.0.43-fceca3eda51c`、Build ID `1.0.43+fceca3eda51c`，直接 previous 为 `web-1.0.42-c24e6247d257`；香港 API、上海 Web/API、上海下载页和 Android/Windows stable 均保持 1.0.42。发布代理继续 forward 到 `api-1.0.42-c24e6247d257`，活动 API `NRestarts=0`，pending switch 为空。两地数据库继续独立使用 schema v7 / SQLite layout v2；本次 Web-only 发布没有 API/数据库/上海/下载/原生写入。香港 `/canary/previous/` 继续 302 到不可变 `/canary/1.0.37-853ecdb12795/`。完整 1.0.43 切换、两次安全回滚、真实附件与观察证据见 [releases/1.0.43.md](./releases/1.0.43.md)；1.0.42 双节点/原生/下载历史见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
-> 1.0.35 新增内部账号安全、治理指标和排行榜复核状态，但没有升级 schema/layout。两地发布前备份均通过 SQLite Backup API、`quick_check` 和哈希验证；未激活 API 已在各自备份副本上隔离启动。不得跨节点复制、合并或裁剪数据库。用户只豁免精确候选的物理真机 stable 门禁，不豁免后续版本或其他发布门禁。
+> 当前生产状态（1.0.44）：香港 Web/API、上海 Web/API、上海下载页与 Windows/Android stable 均已切换至 1.0.44。香港 switch-state generation 14：current Web `web-1.0.44-3e580c715a5a`、API `api-1.0.44-3e580c715a5a`，slot green / 4322，previous Web `web-1.0.43-fceca3eda51c`、previous API `api-1.0.42-c24e6247d257`；上海 switch-state generation 5：current Web/API `1.0.44`，slot blue / 4321。上海下载页 `current` = `download-site-1.0.44-3e580c715a5a`（回滚目标 `download-site-1.0.42-c24e6247d257`）；Android stable `1.0.44 / 1000044`、Windows stable setup `1.0.44`。两地发布代理分别 forward 到 `api-1.0.44-3e580c715a5a`，活动 API `NRestarts=0`，pending switch 为空；数据库继续独立使用 schema v7 / SQLite layout v2，本版为代码级稳定发布，无 schema/layout 迁移、恢复或数据写入。下载节点仍为上海（`download.dsponline.cn` → `111.229.128.211`）。**香港上一稳定版回退入口 `/canary/previous/` 已于 1.0.44 观察通过后更新为 302 → `/canary/1.0.43-fceca3eda51c/`**（活动 snippet 新 hash `822389023b94546ca0709afbf959aa8ab606a4545b0311fd48c7171d92efbbab`，回滚副本 `dsp-idle-app.conf.pre-previous-fallback-1.0.43-20260816T175329Z` 原 hash `b230cdf74bc067999e65d33347ab3ed8b860f9506641ca14b70cc2d45bc75cdc`）；`/canary/1.0.37-853ecdb12795/` 保留为历史兼容入口。完整证据见 [releases/1.0.44.md](./releases/1.0.44.md)。
+
+> 1.0.39 API 优先 P0 已发布，1.0.38 Web/Android/Windows 无需清缓存或重装即可恢复上传。Release Agent 已分别创建并验证两节点快照，用各自备份副本合成验证 v46 稀疏普通/速通 main 与手动槽、原始正文/校验/revision、历史恢复、服务重启、v45 稠密兼容与非法值拒绝；普通/速通复核阈值独立、隐藏状态和永久冻结由完整远端服务测试与香港隔离副本覆盖。本版没有 schema/layout migration；回滚只切回 1.0.38 代码并重启，绝不恢复生产数据库。
+
+> 1.0.38 没有升级 schema/layout 或修改排行榜协议。两地发布前备份均通过 SQLite Backup API、`quick_check` 和哈希验证；未激活 API 已在各自备份副本上隔离启动。不得跨节点复制、合并或裁剪数据库。用户只豁免精确候选 `1.0.38-351c649af9ee` 的 Android 真机、低配 Windows、`1.0.37 → 1.0.38` Windows 覆盖升级和约一小时后台/锁屏门禁，并接受已列明性能残余风险；不豁免后续版本、备份、签名、健康或回滚门禁。
 
 ## 2. 服务器布局
 
@@ -36,7 +40,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港、上海 Web/API 已切换到 `1.0.35-080844f55852`，上海下载站切换到不可变目录 `download-site-1.0.35-080844f55852`；构建 `1.0.35+080844f55852` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港另以 Web-only 方式暴露不可变回滚目录 `web-1.0.34-4a7d51241424`，稳定入口为 `/canary/previous/`，继续使用当前 1.0.35 API。Android SHA-256 为 `56598fecf674c05141535a4fa99b868c16b4c6ccc6acdf7358a6f305a3c8e88a`，Windows SHA-256 为 `ea4ceb1625b69347a0207dac86d10cb0314b63738f84d5d3379481d55a67d322`（Authenticode `NotSigned`），blockmap SHA-256 为 `1641d9c7bdf0901f2b0923715e5a50fac931a0adfc0de29283c2f670fc4d2cdf`。香港发布前备份为 2,776,186,880 字节、上海为 200,704 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2 验证；Web/API 与下载页回滚目标均为 1.0.34。公网健康、9 文件完整下载哈希、Range、缓存头、当前/历史 hashed asset、CORS Origin 和五场浏览器 smoke 均已复验。两地服务 active、`NRestarts=0`；发布收口磁盘约为香港 76%、上海 83%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.35.md](./releases/1.0.35.md)。
+香港 Web 已切换到 `web-1.0.43-fceca3eda51c`；香港 API 与上海 Web/API 保持 `1.0.42-c24e6247d257`，上海下载站保持不可变 `download-site-1.0.42-c24e6247d257`。两地继续使用 GameState v46、云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名，公开 `/canary/previous/` 仍指向 `web-1.0.37-853ecdb12795`。Android 1.0.42 APK、Windows 1.0.42 setup、签名状态及下载哈希均未改变。香港 Web 直接回滚目标为 `web-1.0.42-c24e6247d257`；生产收口磁盘香港约 74%，API PID/restarts 与 proxy generation 保持不变。完整 1.0.43 Web 证据见 [releases/1.0.43.md](./releases/1.0.43.md)，1.0.42 API/上海/原生/下载证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
@@ -158,7 +162,7 @@ node /path/to/backup-sqlite.mjs \
 5. 公网 Chrome 必须先建立正式 worker，再访问测试入口，核对浏览器只保留正式 active worker、没有 waiting/installing worker、访问前后 `/index.html` 缓存逐字不变，并在断网后重新打开正式根站。
 6. 测试入口不得进入 Android/Windows stable feed 或正式下载页；若真机门禁被豁免，文档必须把豁免范围限制在 Web 测试入口。
 
-移除测试入口时只恢复已记录的 Nginx 配置备份并 reload；正式代码回滚、数据库恢复和下载指针切换都不属于该操作。当前 1.0.35 实例和浏览器证据见 [1.0.35 香港 Web 测试版发布记录](./releases/1.0.35.md)。
+移除测试入口时只恢复已记录的 Nginx 配置备份并 reload；正式代码回滚、数据库恢复和下载指针切换都不属于该操作。历史 1.0.35 测试实例和浏览器证据见 [1.0.35 香港 Web 测试版发布记录](./releases/1.0.35.md)。
 
 正式 stable 发布及观察窗口通过后，香港还必须把刚被替换的 Web 版保留为上一稳定版回退入口。该机制只处理“新 Web 代码回归而 Nginx 与当前 API 仍正常”的情况，不能承诺覆盖 API、数据库、服务器或网络故障：
 
@@ -181,14 +185,43 @@ Get-FileHash release/download-site-<build-id>/downloads/desktop/stable/*.exe -Al
 
 前端回滚只需把 `current` 切回上一发布目录，不触碰数据库。
 
-仓库提供 `deploy/switch-release.sh` 原子切换前端与后端代码，并保存上一次代码指向。两台正式节点已将同一脚本安装为 `/usr/local/sbin/dsp-idle-switch-release`；发布或回滚后都会验证 Nginx、云服务和本机健康接口：
+仓库提供 `deploy/switch-release.sh` 切换前端与后端代码并保存上一次代码指向。1.0.40 候选增加稳定交接代理：Nginx 固定指向 `127.0.0.1:4330`；代理先让已有上传和导出完成并排队新写请求，再短暂排队全部请求。旧写实例释放共享 `flock` 后，新实例才可在 4321/4322 之一接触生产 SQLite。候选预热只允许使用已经验证的发布前备份克隆，不允许两个写实例同时打开生产库。正式安装时须把控制文件放入不可变 `/usr/local/lib/dsp-idle-release/<build-id>/`，再原子更新 `/usr/local/lib/dsp-idle-release/current`，不得覆盖正在运行的控制文件。
+
+API 切换必须提供与不可变 SQLite Backup API 快照绑定的证据。证据锁定绝对路径、大小、mtime、dev/inode、SHA-256、`quick_check`、schema 和 SQLite layout；切换关键路径只复核身份和元数据，避免重新顺序读取多 GiB 快照。快照创建和独立预置副本生成时完成完整 SHA-256。`--dry-run` 执行同样的证据与目标校验，但不启动服务、不 reload Nginx、不改软链。节点级非密钥配置从 `deploy/dsp-idle-runtime.env.example` 安装到 `/etc/dsp-idle-cloud/runtime.env`；真实凭据仍只放 `admin.env`。
+
+1.0.41 起 pending journal 固定为 `/var/lib/dsp-idle-cloud/release-state/pending-switch.json`，不得放回 `/run`。状态目录必须是 `root:<service-group> 2750`，状态文件是 `root:<service-group> 0640`；active API 只读。阶段依次为 `prepared → publishing → published`，失败或不一致时进入 `recovering`。任何恢复失败都保留 journal 和 proxy hold，禁止手工删除后强行启动 writer。所有参与 unit 保留共享 RuntimeDirectory，并对配置错误 78、锁占用 75 使用 `RestartPreventExitStatus` 和 StartLimit。
+
+ext4 无 reflink 且备份超过 `DSP_RELEASE_PREFLIGHT_INLINE_COPY_LIMIT_BYTES`（默认 512 MiB）时，切换器必须在停止旧 writer 之前立即拒绝。Release Agent 应在低流量窗口提前运行 `release-backup-evidence.mjs --prepare-preflight`，以有界带宽生成独立副本及证据，再通过 `--preflight-evidence` 原子采用。不得在 handoff 关键路径无上限复制多 GiB 数据库，也不得删除或手动处理生产 WAL/SHM。
+
+旧 API 没有 `/api/ready` 时，只有明确 HTTP 404 才可把通过的 `/api/health` 作为兼容 readiness；503、连接错误或 `writable=false` 仍失败。`DSP_CLOUD_BACKUP_WINDOW` 是 interrupted recovery 的必需配置，1.0.41 还默认使用 900000 ms 启动宽限，避免服务恢复时立即生成大备份，同时保留后续低流量窗口备份。
 
 ```bash
-sudo dsp-idle-switch-release --web-release <web-id> --api-release <api-id>
-sudo dsp-idle-switch-release --rollback-last
+node /usr/local/lib/dsp-idle-release/current/release-backup-evidence.mjs \
+  --database /var/lib/dsp-idle-cloud/backups/<verified-snapshot>.sqlite \
+  --output /var/lib/dsp-idle-cloud/release-state/<build-id>-backup-evidence.json
+sudo dsp-idle-switch-release --web-release <web-id> --api-release <api-id> \
+  --backup-evidence /var/lib/dsp-idle-cloud/release-state/<build-id>-backup-evidence.json --dry-run
+sudo dsp-idle-switch-release --web-release <web-id> --api-release <api-id> \
+  --backup-evidence /var/lib/dsp-idle-cloud/release-state/<build-id>-backup-evidence.json
+sudo dsp-idle-switch-release --rollback-last \
+  --backup-evidence /var/lib/dsp-idle-cloud/release-state/<verified-current>-backup-evidence.json
 ```
 
-`--rollback-last` 只切换 `/var/www/dsp-idle/current` 与 `/opt/dsp-idle-cloud/current`，绝不恢复、替换或初始化数据库。
+`--rollback-last` 走同一备份证据、预热、单写锁、readiness、排队和优雅关闭流程，只回滚代码，绝不恢复、替换或初始化数据库。重复执行同一目标为 no-op，`switch.lock` 阻止两个切换器并行。测试故障注入只有显式设置 `DSP_ENABLE_RELEASE_FAULT_INJECTION=1` 才能启用，生产禁止设置。
+
+#### 1.0.43 香港 Web-only 当前回滚状态
+
+1.0.43 的生产收口状态精确为 generation 13：current Web `web-1.0.43-fceca3eda51c`、previous Web `web-1.0.42-c24e6247d257`、current/previous API 均为 `api-1.0.42-c24e6247d257`、pending switch 不存在、proxy 保持 forward，活动 API PID 与 `NRestarts=0` 未变。只有只读检查仍精确满足这一状态时，`--rollback-last` 才指向 1.0.42；generation 或 current/previous 漂移时必须停手重新审计，不能凭本文盲目回滚。
+
+若需回滚，继续使用发布时已验证的 backup evidence，并要求切换后得到下一 generation、current Web 1.0.42、previous Web 1.0.43、API 仍为 1.0.42、pending 为空；随后逐字验证 `/version.json` 的 1.0.42 Build ID、根页、`sw.js`、hashed asset、health/ready、proxy、Nginx 和 API PID/restarts。回滚不恢复数据库，不删除 1.0.43 不可变目录，不触碰上海、下载页、原生包、账号或玩家存档。
+
+本次 generation 9→10 与 generation 11→12 都是受保护的安全前进/回滚对：第一次由物理绑定出口的单次 TLS 前超时触发，后续 server-local、正常公网、Chrome 与同尺寸 1.0.42 control 证明制品无误；第二次由探针错误要求 `application/manifest+json` 触发，而 1.0.42/1.0.43 实际继承的精确响应均为 413 B、固定 SHA-256、`no-cache`、`application/octet-stream`。第三次只有在把该继承字节/MIME 与 Chrome `Page.getAppManifest` 无错误作为精确契约后才完成 generation 13。未来 MIME 修复必须作为独立 Nginx 变更执行活动配置备份、候选 `nginx -t`、原子安装、正式 `nginx -t`/reload 和回滚；不得把现网响应误记为 `application/manifest+json`。
+
+固定顺序为：验证备份证据 → 候选在备份克隆和 4390 端口达到 health/ready → `drain` 并等待在途写归零 → `hold` 并等待全部请求归零 → 停旧实例 → 验证单写锁空闲 → 启动新实例并等待 readiness → 发布软链与代理 generation。启动、readiness、Nginx reload 或 SQLite 锁失败时恢复旧 unit/upstream 和软链。代理队列默认 512，保护窗口和 Nginx API `proxy_read_timeout` 均为 300 秒；systemd `TimeoutStopSec` 为 90 秒。超过有界窗口时返回明确 503 与 `Retry-After`，不会无限占用内存。
+
+1.0.42 的代理控制提交 `d885a9e…` 修复 keep-alive 空闲 socket 复用时的只读 `ECONNRESET`：只有无请求体、非 writer 的 GET/HEAD 在尚未收到响应时可重试一次；PUT/POST/DELETE/PATCH、云存档和账号原子导入导出必须保持单次发送。`api-handoff-proxy.mjs` 的正式 SHA-256 为 `2f908b40b5a715bf290ee4b5aad55256eae25c1e642abd4bb2677ec90fc16dd0`。
+
+禁止为单独更新代理直接执行普通 `systemctl restart dsp-idle-api-handoff-proxy.service`：active API 对代理有 `Requires=`，普通 restart 会反向停止大库 writer 并触发数分钟冷启动。1.0.42 发布采用的受控流程是：先备份并逐字核验 active unit；临时装入只移除该 `Requires=` 的完整 unit；`daemon-reload` 后确认 API PID 不变且依赖确已移除；原子切换不可变控制目录并仅重启代理；等待 4330 开始监听并通过 health/ready；最后逐字恢复原 unit、再次 reload 并确认依赖、API PID、代理状态和哈希。任一步失败都要在依赖仍临时分离时先切回旧控制目录和旧代理，再恢复原 unit。临时 unit 不能留在 `/run` 或 `/etc`，也不能借此启动第二个 SQLite writer。
 
 执行 `--rollback-last` 前必须读取 `/var/lib/dsp-idle-cloud/release-state/previous-release`，确认两个目录存在且后端能读取当前 schema。数据库升级后不能把旧 schema 后端继续留作“一键回滚”目标；应先在当前数据库的一致性备份副本上用隔离端口完成兼容验证。
 
@@ -203,6 +236,8 @@ SQLite layout v2 将云存档正文从 `app_state` 拆到 `cloud_save_payloads`�
 3. 切换 `current`，重启云服务。
 4. 检查 `systemctl status`、journal 和本机 `/api/health`。
 5. 再从公网入口验证同源 `/api/health`、登录页面和云存档元数据读取。
+
+1.0.40 起 `/api/health` 是进程 liveness；发布切换、反向代理接流量和持久化故障告警还必须检查 `/api/ready`。readiness 正常为 200，最近 SQLite 写入失败且尚未恢复、或进程正在关闭时为 503。收到 SIGTERM/SIGINT 后服务拒绝新的 mutation，并等待在途请求、备份、历史裁剪和持久化队列完成；API/proxy/preflight unit 使用 `TimeoutStopSec=90`，不得短于服务端 75 秒强制退出边界。健康定时器只检查稳定代理上的 health 与 readiness，不在切换中擅自 restart 某个槽位。
 
 后端失败时切回上一代码目录并重启；除非新代码已执行不可逆数据迁移，否则不要回滚数据库。
 
@@ -236,6 +271,24 @@ sudo systemctl restart dsp-idle-cloud.service
 公开 `/api/public-status` 只提供玩家累计、今日、120 秒在线口径和匿名活动时钟/模拟进度；`/api/admin/metrics` 与兼容路径 `/api/metrics` 必须携带管理员 bearer token。后台入口为 `https://dsponline.cn/admin`。
 
 1.0.35 候选可配置 `DSP_CLOUD_BACKUP_WINDOW=HH:MM-HH:MM`、`DSP_CLOUD_PRUNE_INTERVAL_MS` 和 `DSP_CLOUD_REQUEST_TIMEOUT_MS`。部署前在生产备份副本上验证时间窗跨午夜、重复裁剪和中断恢复；正式节点先只读调用 `GET /api/admin/cloud-history/prune-preview`，确认保留最近 20 条及预览哈希。写入裁剪必须同时提交精确确认文字 `PRUNE_CLOUD_HISTORY` 和当前预览 ID；预览变化返回冲突后必须重新检查，不能复用旧确认。磁盘达到 80% 时停止非必要发布，达到 90% 时云存档 PUT 返回保护性 507，禁止通过删除数据库或未验证备份解除保护。
+
+### 香港 1.0.41 云裁剪 P0 热修边界
+
+`DSPIDLE-1041-HK-GC-HOTFIX` 只授权发布 Web/API 代码，不授权恢复、迁移、重写或手工编辑生产 SQLite。新 API 启动时会对 `cloud_save_payloads` 做一次固定前缀引用审计；这是逐逻辑行工作，但不选择 direct 正文、不调用正文长度，也不解析 blob。普通上传触发第 21 条历史裁剪时，只允许读取被删主键行的固定 alias、更新对应内存 refcount，并按 checksum 主键决定是否删除候选 blob。显式离线 `server/cloud-payload-maintenance.mjs gc` 的全量 alias/blob/正文校验语义保持不变，只能在既有维护流程和已验证备份边界中执行，不能作为在线 PUT 的同步步骤。
+
+如果启动审计发现 malformed alias 或 SQLite `typeof(payload) != 'text'`，自动 cleanup 会 fail-closed 并暂留 orphan；不得用手工 SQL 改成“完整”或直接删除 blob。Release 应在只读备份副本/临时 SQLite 上运行维护审计定位问题，再另行取得数据维护授权。`app_state` metadata checksum 与实际 alias 不一致时，以实际 alias 计入在线引用，metadata 不会被本热修改写。
+
+### 云正文缺失别名的离线恢复
+
+`server/cloud-payload-recovery.mjs` 是专门的事故恢复入口，不属于 `cloud-payload-maintenance.mjs` 的 backfill、materialize 或 GC 功能。默认 dry-run 使用只读 SQLite 和 `query_only`；它只统计普通模式主档历史元数据中缺失的 `(user_id, 'main', revision)` 别名。模式判定必须与服务端一致：显式 normal、没有速通身份标记的旧版无 `mode` 存档都属于 normal，显式或可证明的 legacy speedrun 仍拒绝。每条候选必须同时满足历史 revision/checksum/size、Blob 或源正文大小、SHA-256、envelope v2 完整性与 normal 模式。任何已有逻辑行都跳过，绝不覆盖 direct body 或 alias；缺 Blob、哈希/大小不符、损坏 envelope、非普通模式或没有匹配历史的当前主档一律只报告，不能凭元数据伪造正文。
+
+执行顺序固定为：先在只读副本 dry-run 记录候选数量和确认文字；停止 API 写入服务；创建并验证与停服库 `app_state` 精确一致、`quick_check=ok` 的 SQLite 备份；再以 dry-run 返回的 `RELINK_CLOUD_PAYLOAD_ALIASES:<previewId>` 和 `--service-stopped` 应用。若当前库缺 Blob 但事故前快照有精确正文，必须显式传入 `--body-source <snapshot> --body-source-sha256 <full-sha256> --current-only`；apply 前会重新完整哈希来源、核对停写生产备份和来源/目标 `quick_check`。该路径只对当前普通主档执行，事务内再次核对完整 `app_state` 指纹、候选主键和既有 Blob 内容；只会无冲突插入缺失 Blob 与 alias，绝不写源快照的 `app_state`、用户、排行榜、限制状态或已有正文。若预览后玩家上传了更高 revision，`app_state` 指纹或主键占用会使旧确认被拒绝；该情况下重新 dry-run，而不是覆盖新主档。恢复后重启服务并复核 `/api/ready`，重复执行应报告零候选。
+
+旧 `storageLayoutVersion` 的迁移现在只允许在 `cloud_save_payloads` 和 `cloud_save_payload_blobs` 都为空时执行删除；任一表非空会以 `CLOUD_PAYLOAD_LEGACY_MIGRATION_DELETE_BLOCKED` 中止启动。不要为了通过启动而清空表或手工修改 metadata，应保留原库并走上述专门恢复或经验证备份恢复路径。
+
+SQLite 启动审计及 `/api/ready.currentMainPayloads` 会返回无身份信息的当前普通主档聚合计数（检查数、可寻址正文数、缺失行/Blob、metadata 不匹配等）。这用于发现“元数据仍在但正文无法寻址”的事故；它不暴露账号、revision、checksum 或正文，也不自动解除排行榜限制。该 ready 计数检查 alias/Blob 地址和元数据，不代替离线恢复入口对 Blob SHA-256 与 envelope 的完整验证。
+
+香港 `PUT /api/cloud-save` 维护锁已在 2026-08-14 热修切换、观察和真实上传验证后由 Release 明确解除；当前 telemetry 202 熔断与云存档维护锁相互独立。若后续故障重新启用维护锁，必须保持到以下条件全部满足：不可变 Web/API 制品和 aggregate manifest 复算一致；未激活 API 使用临时 SQLite 通过 health/ready、共享 blob、21 次裁剪和故障回滚 smoke；正式切换后 readiness、backlog、WAL/磁盘、延迟和错误率完成约定观察；Release 再次明确解除。开发完成本身不是解锁授权。代码回滚只切回已验证 API/Web 制品，绝不恢复数据库。上海、下载页、Android 和 Windows 不在该香港热修发布范围；完整状态见 [1.0.41 发布记录](./releases/1.0.41.md)。
 
 账号处置先用 `GET /api/admin/account?accountId=...` 核对精确账号摘要，再向 `POST /api/admin/account/action` 提交 `CONFIRM:<action>:<accountId>`。彻底注销还要求最近 24 小时内的已验证本机备份时间戳；不得用显示名、邮箱模糊匹配或直接编辑 SQLite。速通历史恢复只能离线运行 `server/speedrun-recovery.mjs`：先 dry-run 核对最新主云 revision、元数据/正文哈希、v46 速通身份和百万白糖事实；apply 前停止服务，并提供匹配 `quick_check` 备份及 `RECOVER_SPEEDRUN:<account>:<revision>`。该工具只写内部提交和最小化审计，不改云存档正文；完成后重启并复核一次，重复执行必须无变化。
 
@@ -330,14 +383,22 @@ chmod 0600 backup-private.pem
 
 云服务自身每 6 小时的快速快照也已改为 `DSP_CLOUD_BACKUP_DIRECTORY=/lhcos-data/dsp-idle-archive/auto`，因此不会再把 30 份约 1 GiB 文件写满香港根盘；该目录位于私有 COS 挂载，不代替加密日备份。香港节点探针的 `DSP_MONITOR_MIN_DISK_FREE_RATIO` 已从 0.15 提高到 0.20，剩余空间低于约 8 GiB 时提前告警。
 
+### 2026-08-19 日备份与恢复演练加固
+
+每日加密备份不得把 SQLite Backup API 的明文 staging 直接放在 COSFS。生产配置已恢复为先写香港本机 `/var/lib/dsp-idle-cloud/offsite-staging`，完成 `quick_check`、加密和 manifest 后再通过固定主机指纹及受限账号传到上海；本机只保留两份完整密文。COS 继续承载每 6 小时自动快照和已经逐份验证的历史归档，但不是 SQLite 在线备份的直接写入目标。
+
+备份、恢复演练和节点探针从独立不可变目录 `/usr/local/lib/dsp-idle-ops/releases/<ops-release>` 运行，由 `/usr/local/lib/dsp-idle-ops/current` 原子指向当前运维包，不再依赖应用 `/opt/dsp-idle-cloud/current` 是否包含对应脚本。备份与恢复 service 都设置有限启动/停止超时，并在主进程开始前原子写入 `running` 状态，避免长任务期间继续暴露上一次成功。上海恢复私钥通过 systemd `LoadCredential` 只读注入单次 service，不扩大私钥或父目录权限。
+
+2026-08-19 真实闭环验证使用 schema v7 密文：两端密文 SHA-256 和 manifest 完全一致，上海隔离恢复得到 schema v7；909 个账号、731 个当前云档、8,660 条修订等受保护计数与备份 manifest 一致，随机本机端口健康检查通过，结束后恢复工作目录明文 SQLite 数量为 0。完整证据见 [releases/ops-backup-restore-2026-08-19.md](./releases/ops-backup-restore-2026-08-19.md)。本次只调整运维工具和 systemd 配置，没有发布或切换 1.0.46 应用制品。
+
 本次爆满原因是历史备份副本而非游戏数据库异常：香港本地 `backups` 曾累积约 25 GiB、35 份 0.16～1.0 GiB SQLite 快照；异地 staging 另有约 1.5 GiB 加密副本；旧 API 发布目录约 0.86 GiB，日志、APT 缓存和新版本备份又叠加约 0.5 GiB。原 COS 挂载为空且每日任务仍按 SCP + 本地保留 14 份运行，导致三天内再次接近满盘。
 
 长期运营规则：
 
 1. 生产盘只保留当前数据库、当前/回滚代码、4 份本地快速恢复副本和 staging 2 份；所有更早快照必须先生成加密对象、manifest 和跨重挂载哈希，再删除本地副本。
-2. 每日备份写 COS，保留上海已有异地加密副本作为第二恢复位置；COS 桶设置 30～90 天生命周期和版本控制，避免对象无限增长。任何切换到新桶都要先完成小文件写入、重挂载读取和完整对象计数校验。
+2. 每日备份先在香港本机完成一致性快照、校验和加密，再传到上海恢复节点；COS 作为独立自动快照/验证归档位置，禁止把在线 SQLite 备份的明文 staging 直接写到 COSFS。COS 桶设置 30～90 天生命周期和版本控制；任何切换到新桶都要先完成小文件写入、重挂载读取和完整对象计数校验。
 3. 磁盘探针将告警阈值设为 80%，硬保护阈值设为 90%；超过 80% 自动暂停非必要发布/快照并提示归档，超过 90% 只允许完成当前备份和清理已验证副本，不能删除数据库或手动恢复点。
-4. 每周检查 `cloud.sqlite`、本地快照、staging、发布目录、日志和 COS 对象数量；每月在隔离端口用 COS 密文完成一次恢复演练。密钥应替换为只允许 COS 指定前缀读写的 CAM 子账号，并定期轮换。
+4. 每周检查 `cloud.sqlite`、本地快照、staging、上海接收目录、发布目录、日志和 COS 对象数量；每月在上海隔离端口用最新的完整密文与 manifest 完成一次恢复演练。密钥和对象存储凭据使用最小权限并定期轮换。
 
 ## 9. 监控与日常检查
 
@@ -352,14 +413,14 @@ chmod 0600 backup-private.pem
 - 香港 `dsp-idle-offsite-backup.timer` 与上海 `dsp-idle-restore-drill.timer`：检查最后成功时间、timer 上次结果和报告文件。
 - 玩家指标：检查 `players.total`、`players.today`、`players.online` 和 `players.onlineWindowSeconds`；两个节点分别统计，不能直接相加当作严格独立用户数。
 
-这些 oneshot 服务从 `/opt/dsp-idle-cloud/current/deploy` 软链接执行脚本。CLI 入口判断必须比较真实路径；若 unit 显示 `success` 却没有生成对应状态文件，应按空运行故障处理，不能视为监控或备份成功。
+备份、恢复演练和节点探针 oneshot 必须从独立不可变运维包 `/usr/local/lib/dsp-idle-ops/current/deploy` 执行；不得绑定应用 `current` 软链接。CLI 入口判断必须比较真实路径；unit 只有在退出码为 0、最新状态文件为 `ok=true` 且制品/报告存在时才算成功。若 unit 显示 `success` 却没有生成对应状态文件，应按空运行故障处理，不能视为监控或备份成功。
 
 匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v7 后端前必须先使用 SQLite Backup API 创建并验证备份，并在隔离副本验证 v6→v7 归一化：每个旧账号获得稳定唯一用户名，原邮箱与验证状态不变，账号、会话、主存档、三个手动槽、各槽历史、榜单、玩家和匿名统计数量不得减少。切换后不得用测试账号或测试存档对生产数据库执行写验证。
 
 ## 10. 当前性能事项
 
-香港与上海 `1.0.34-4a7d51241424` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.33 入口资源已进入共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.42-c24e6247d257` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.38 与 1.0.37 入口资源继续位于共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.35 发布前，香港在停止健康定时器与云服务写入的短维护窗口完成 2,776,186,880 字节一致性备份；启动后的既有“立即备份”配置又触发一次 COS `auto` 快照和短时本机 health 超时，快照最终收敛为 `ready`，服务未重启。后续大库发布必须继续选择低流量窗口，停止健康定时器、避免并发备份，并为服务重启保留至少 3 分钟 health 等待；还应评估显式 `DSP_CLOUD_BACKUP_WINDOW`，避免每次重启立即执行大备份。当前香港根盘约 76%、上海约 83%；后续仍按 80% 告警、90% 保护以及备份保留/异地归档规则运营，任何旧本地数据库备份只有在证明已完成加密异地归档与哈希校验后才能删除。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理。1.0.42 发布前，香港 3,284,348,928 字节一致性备份和上海 393,216 字节备份均通过完整 SHA、`quick_check`、schema v7/layout v2；香港大库冷启动实测约 181 秒，正式切换使用 300 秒 readiness 窗口。后续大库发布仍必须在对象存储传输前同时预算源文件、目标对象缓存和即刻启动快照，不能只按最终净空间计算；超过 90% 时不得继续隔离启动或切换。当前收口磁盘约为香港 74%、上海 75%；任何旧本地数据库备份只有在受保护异地对象完整哈希匹配后才能解除，代码回滚仍不得恢复数据库。完整证据见 [releases/1.0.42.md](./releases/1.0.42.md)。

@@ -123,6 +123,29 @@ export interface WorkProgressSnapshot {
   active: boolean;
 }
 
+/**
+ * Sparse Worker publications can arrive after the visual clock has already
+ * advanced the same cycle. Do not make a still-active cycle visibly rewind:
+ * its visual clock will cross the natural wrap boundary on its own.
+ */
+export function reconcileWorkDisplaySnapshot(
+  previous: WorkProgressSnapshot,
+  next: WorkProgressSnapshot,
+  publishedAtMs: number,
+): WorkProgressSnapshot {
+  const sameCycle = previous.active && next.active &&
+    previous.mode === next.mode && previous.semanticKey === next.semanticKey &&
+    previous.cyclesPerSecond === next.cyclesPerSecond &&
+    previous.effectiveSimulationMultiplier === next.effectiveSimulationMultiplier &&
+    previous.mode !== "indeterminate" && previous.mode !== "level";
+  if (sameCycle) {
+    const displayed = getWorkDisplayProgress(previous, publishedAtMs);
+    const incoming = Math.max(0, Math.min(1, Number.isFinite(next.snapshotProgress) ? next.snapshotProgress : 0));
+    if (displayed > incoming) return previous;
+  }
+  return { ...next, publishedAtMs };
+}
+
 export function getWorkDisplayProgress(snapshot: WorkProgressSnapshot, monotonicTimeMs: number): number {
   const progress = Math.max(0, Math.min(1, Number.isFinite(snapshot.snapshotProgress) ? snapshot.snapshotProgress : 0));
   if (snapshot.mode === "indeterminate" || snapshot.mode === "level" || !snapshot.active) return progress;

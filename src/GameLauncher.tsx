@@ -5,6 +5,8 @@ import { DynamicImportBoundary, DynamicImportRecoveryNotice } from "./components
 import { importWithRecovery } from "./game/dynamicImportRecovery";
 import type { LoadedGame } from "./game/storage";
 import { GameDialogProvider } from "./components/GameDialogProvider";
+import { LocalSaveWriterBanner } from "./components/LocalSaveWriterBanner";
+import { canBypassFactoryMenu } from "./game/factoryBypassPolicy";
 
 const FactoryRuntime = lazy(() => importWithRecovery(() => import("./FactoryRuntime"), "行星工厂模块"));
 
@@ -16,9 +18,15 @@ export function App() {
   const [bypassMenu] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const forceMenu = params.get("menu") === "1";
-    let bypassMenu = params.get("factory") === "1";
-    try { bypassMenu ||= window.sessionStorage.getItem("dsp-idle-network.test-bypass-menu") === "1"; } catch { /* optional test flag */ }
-    return !forceMenu && bypassMenu;
+    let testSessionRequested = false;
+    try { testSessionRequested = window.sessionStorage.getItem("dsp-idle-network.test-bypass-menu") === "1"; } catch { /* optional test flag */ }
+    return canBypassFactoryMenu({
+      hostname: window.location.hostname,
+      developmentBuild: import.meta.env.DEV,
+      forceMenu,
+      queryRequested: params.get("factory") === "1",
+      testSessionRequested,
+    });
   });
   const [launch, setLaunch] = useState<{ id: number; loaded: LoadedGame } | null>(null);
   const [bypassLoading, setBypassLoading] = useState(bypassMenu);
@@ -35,7 +43,17 @@ export function App() {
     void importWithRecovery(() => import("./game/contentPacks"), "内容包注册表")
       .then((contentPacks) => contentPacks.applyContentPackRegistry(contentPacks.loadContentPackRegistry()))
       .then(() => importWithRecovery(() => import("./game/storage"), "本地存档模块"))
-      .then(({ loadGame }) => {
+      .then(async ({ loadGame }) => {
+        // The local/dev bypass is mounted after IndexedDB initialization, at
+        // which point catalog mode intentionally holds no large raw payload in
+        // the synchronous cache. Hydrate only the selected verified candidate
+        // before calling the legacy synchronous loader used by test fixtures.
+        const [{ resolveMenuContinueSave }, { retainLocalSavePayload }] = await Promise.all([
+          importWithRecovery(() => import("./game/savePreviewPayload"), "本地存档正文"),
+          importWithRecovery(() => import("./game/localSaveStore"), "本地存档目录"),
+        ]);
+        const selected = await resolveMenuContinueSave("normal");
+        if (selected) retainLocalSavePayload(selected.save.key, selected.raw);
         if (active) setLaunch({ id: Date.now(), loaded: loadGame() });
       })
       .finally(() => { if (active) setBypassLoading(false); });
@@ -53,6 +71,7 @@ export function App() {
           </Suspense>
         )}
       </DynamicImportBoundary>
+      <LocalSaveWriterBanner />
       <DynamicImportRecoveryNotice />
       <ReleaseNotesDialog open={releaseNotesOpen} onClose={closeReleaseNotes} />
     </GameDialogProvider>

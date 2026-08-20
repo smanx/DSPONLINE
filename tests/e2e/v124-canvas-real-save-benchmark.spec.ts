@@ -194,7 +194,7 @@ async function runStage(browser: Browser, source: SourceState, planetId: string,
   const raw = JSON.stringify({ savedAt: Date.now(), state });
   await page.addInitScript(({ extreme, features }) => {
     sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     localStorage.setItem("dsp-idle-network.canvas-performance-features.v1", JSON.stringify(features));
     if (extreme) {
@@ -210,7 +210,7 @@ async function runStage(browser: Browser, source: SourceState, planetId: string,
     await page.goto("/version.json");
     await page.evaluate(async ({ saveRaw }) => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("dsp-idle-network.local-saves", 1);
+        const request = indexedDB.open("dsp-idle-network.local-saves");
         request.onupgradeneeded = () => {
           if (!request.result.objectStoreNames.contains("records")) request.result.createObjectStore("records", { keyPath: "key" });
         };
@@ -277,7 +277,7 @@ async function runStagesOnOnePage(browser: Browser, source: SourceState, planetI
   const raw = JSON.stringify({ savedAt: Date.now(), state });
   await page.addInitScript(({ features, extreme }) => {
     sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     localStorage.setItem("dsp-idle-network.canvas-performance-features.v1", JSON.stringify(features));
     if (extreme) localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
@@ -291,7 +291,7 @@ async function runStagesOnOnePage(browser: Browser, source: SourceState, planetI
     await page.goto("/version.json");
     await page.evaluate(async ({ saveRaw }) => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("dsp-idle-network.local-saves", 1);
+        const request = indexedDB.open("dsp-idle-network.local-saves");
         request.onupgradeneeded = () => {
           if (!request.result.objectStoreNames.contains("records")) request.result.createObjectStore("records", { keyPath: "key" });
         };
@@ -377,3 +377,4 @@ test("profiles staged canvas optimizations on an explicitly supplied local real 
     results,
   }));
 });
+

@@ -1,9 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-09-v1.0.35";
+const RELEASE_NOTE_ID = "2026-08-17-v1.0.46";
+const VISUAL_FIXTURE_SESSION_KEY = "dsp-idle-network.ui-visual-fixture-seeded.v1";
 
 async function seedVisualFactory(page: Page, options: { fontScale?: number; extreme?: boolean } = {}) {
-  await page.addInitScript(({ fontScale, extreme, releaseNoteId }) => {
+  await page.addInitScript(({ fontScale, extreme, releaseNoteId, fixtureSessionKey }) => {
     const base = {
       planetId: "home",
       minerCount: 0,
@@ -61,9 +62,18 @@ async function seedVisualFactory(page: Page, options: { fontScale?: number; extr
     if (window.localStorage.getItem("dsp-idle-network.ui.theme.v1") == null) window.localStorage.setItem("dsp-idle-network.ui.theme.v1", "light");
     if (window.localStorage.getItem("dsp-idle-network.ui.show-run-log.v1") == null) window.localStorage.setItem("dsp-idle-network.ui.show-run-log.v1", "true");
     window.localStorage.setItem("dsp-idle-network.production-refresh.v1", "classic");
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
-    if (extreme) window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
-  }, { fontScale: options.fontScale ?? 1, extreme: options.extreme ?? false, releaseNoteId: RELEASE_NOTE_ID });
+    // Feed the legacy compatibility ingress once. The app migrates this value
+    // into its authoritative local save store; re-seeding during page.reload()
+    // would correctly look like a second writer and trigger conflict recovery.
+    if (window.sessionStorage.getItem(fixtureSessionKey) !== "1") {
+      window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+      window.sessionStorage.setItem(fixtureSessionKey, "1");
+    }
+    if (extreme) {
+      window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
+      window.localStorage.setItem("dsp-idle-network.ui.canvas-detail.v1", "minimal");
+    }
+  }, { fontScale: options.fontScale ?? 1, extreme: options.extreme ?? false, releaseNoteId: RELEASE_NOTE_ID, fixtureSessionKey: VISUAL_FIXTURE_SESSION_KEY });
 }
 
 async function openFactory(page: Page) {
@@ -155,7 +165,7 @@ test("follow-system theme resolves both light and dark without changing save sta
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.ui.theme.v1"))).toBe("system");
   await page.emulateMedia({ colorScheme: "dark" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect.poll(() => page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1") ?? "{}").state?.settings?.theme)).toBe("light");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.ui.theme.v1"))).toBe("system");
 });
 
 test("explicit light theme persists through menu, re-entry and reload", async ({ page }) => {
@@ -218,7 +228,7 @@ test("release history supports direct paging and technology wheel stays horizont
   const releaseDialog = page.locator(".release-notes-dialog");
   await releaseDialog.getByRole("button", { name: "查看历史版本" }).click();
   await expect(releaseDialog.locator(".release-notes-history-list > button")).toHaveCount(3);
-  const pageSelect = releaseDialog.getByLabel("跳转版本页");
+  const pageSelect = releaseDialog.getByLabel("跳转页码");
   const oldestPage = await pageSelect.locator("option").last().getAttribute("value");
   expect(oldestPage).not.toBeNull();
   await pageSelect.selectOption(oldestPage!);
@@ -344,17 +354,21 @@ test("light theme uses semantic surfaces for settings, saves, factory and inspec
   await page.screenshot({ path: "artifacts/qa/ui-2026-08-04/B11-carried-cargo-tray-after.png", fullPage: true });
 });
 
-test("extreme LOD titles identify output and side panels collapse without clearing selection", async ({ page }) => {
+test("extreme LOD compact labels and side panels preserve selection", async ({ page }) => {
   await seedVisualFactory(page, { extreme: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   await openFactory(page);
-  const compactSmelter = page.locator('.react-flow__node[data-id="visual-smelter"] .factory-node-lod');
+  const compactSmelter = page.locator('.react-flow__node[data-id="visual-smelter"] .factory-node-compact');
   await expect(compactSmelter).toBeVisible();
-  await expect(compactSmelter.locator(".factory-node__header strong")).toHaveText("铁块");
-  await expect(compactSmelter.locator(".factory-node__header span")).toContainText("熔炉");
+  await expect(compactSmelter).toHaveAttribute("data-node-lod", "compact");
+  await expect(compactSmelter).toHaveAttribute("title", "配方：铁块；产物：铁块；数量 2");
+  await expect(compactSmelter).toHaveAttribute("aria-label", /配方：铁块；产物：铁块/);
+  await expect(compactSmelter.locator("strong")).toHaveText("铁块");
   await page.screenshot({ path: "artifacts/qa/ui-2026-08-04/E1-endgame-node-title-after.png", fullPage: true });
 
-  await compactSmelter.locator(".factory-node__header").click();
+  await page.locator('.react-flow__node[data-id="visual-smelter"]').evaluate((element) => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+  });
   await page.getByRole("button", { name: "边缘按钮：收起左侧物资面板" }).click();
   await page.getByRole("button", { name: "边缘按钮：收起右侧检查器面板" }).click();
   await expect(page.locator(".game-shell")).toHaveClass(/sidebar-left-collapsed/);

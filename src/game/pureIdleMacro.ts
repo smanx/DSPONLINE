@@ -1,9 +1,11 @@
-import type { ContentPackRegistry } from "./contentPacks";
 import {
   getEffectiveSimulationMultiplier,
   refreshDysonGenerationSnapshot,
   refreshTimeWarpPowerSnapshotInPlace,
+  setPaused,
+  settleCompletedResearchBoundaries,
 } from "./engine";
+import { finishIdleRun, settleIdleRun } from "./idleSettlement";
 import {
   advanceExactSimulationWindow,
   applyPureIdleAffineContract,
@@ -16,8 +18,7 @@ import {
   type ResearchMacroLedger,
   type ResearchMacroStatus,
 } from "./researchMacro";
-import { inspectSave, serializeEnvelope } from "./storage";
-import type { GameState, ItemId } from "./types";
+import type { GameState, IdleSettlementState, ItemId } from "./types";
 
 export const PURE_IDLE_MACRO_ALGORITHM_VERSION = "pure-idle-macro-v3";
 export const PURE_IDLE_MACRO_BUCKET_WALL_SECONDS = 30;
@@ -147,6 +148,33 @@ export interface PureIdleMacroOperationOptions {
   forceConservativeReason?: string;
 }
 
+/**
+ * Small recovery-record fields required to turn a macro candidate into the
+ * exact state that should be persisted when a normal stop completes. These
+ * fields travel to the Worker; the UI must not apply them after the envelope
+ * has already been serialized.
+ */
+export interface PureIdleMacroFinalStateOptions {
+  startedPaused: boolean;
+  baselineIdleSettlement: IdleSettlementState;
+  baselineTotalProduced: Partial<Record<ItemId, number>>;
+}
+
+export function applyPureIdleMacroFinalState(
+  candidate: GameState,
+  targetWallSeconds: number,
+  options: PureIdleMacroFinalStateOptions,
+): GameState {
+  const idleSettlement = finishIdleRun(settleIdleRun(
+    options.baselineIdleSettlement,
+    targetWallSeconds,
+    options.baselineTotalProduced,
+    candidate.totalProduced,
+  ));
+  const researchSettled = settleCompletedResearchBoundaries(candidate);
+  return setPaused({ ...researchSettled, idleSettlement }, options.startedPaused);
+}
+
 export class PureIdleMacroDeadlineError extends Error {
   constructor() {
     super("纯挂机计算达到现实时间上限");
@@ -166,10 +194,6 @@ function throwIfMacroInterrupted(options: PureIdleMacroOperationOptions): void {
 }
 
 type ResearchMacroApplicationRemainders = Parameters<typeof advanceResearchMacroInPlace>[4];
-
-export type PureIdleCandidateValidation =
-  | { ok: true; state: GameState; rawBytes: number }
-  | { ok: false; failure: string };
 
 function finite(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -636,36 +660,12 @@ export function advancePureIdleMacroSession(
   return summarizePureIdleMacroSession(session);
 }
 
-function rawByteLength(raw: string): number {
-  try {
-    return new TextEncoder().encode(raw).byteLength;
-  } catch {
-    return raw.length;
-  }
-}
-
-export function validatePureIdleCandidate(
-  candidate: GameState,
-  contentPackRegistry: ContentPackRegistry,
-): PureIdleCandidateValidation {
-  try {
-    const raw = serializeEnvelope(candidate, Date.now(), "primary", undefined, contentPackRegistry);
-    const inspection = inspectSave(raw, contentPackRegistry);
-    if (!inspection.valid || !inspection.state) {
-      return { ok: false, failure: inspection.issues[0] ?? "候选存档无法通过正式重载校验" };
-    }
-    return { ok: true, state: inspection.state, rawBytes: rawByteLength(raw) };
-  } catch (error) {
-    return { ok: false, failure: error instanceof Error ? error.message : "候选存档序列化失败" };
-  }
-}
-
-export function finalizePureIdleMacroSession(
+/** Worker path: finish deterministic settlement before transferable serialization. */
+export function finalizePureIdleMacroCandidate(
   session: PureIdleMacroSession,
   targetWallSeconds: number,
-  contentPackRegistry: ContentPackRegistry,
   options: PureIdleMacroOperationOptions = {},
-): { state: GameState; summary: PureIdleMacroSummary; rawBytes: number } {
+): { state: GameState; summary: PureIdleMacroSummary } {
   throwIfMacroInterrupted(options);
   advancePureIdleMacroSession(session, targetWallSeconds, options);
   session.phase = "finalizing";
@@ -679,13 +679,6 @@ export function finalizePureIdleMacroSession(
     allocatedPowerKw: 0,
   };
   throwIfMacroInterrupted(options);
-  const validation = validatePureIdleCandidate(session.candidate, contentPackRegistry);
-  throwIfMacroInterrupted(options);
-  if (!validation.ok) {
-    session.phase = "failed";
-    throw new Error(`纯挂机候选存档未通过重载校验：${validation.failure}`);
-  }
-  session.candidate = validation.state;
   const summary = summarizePureIdleMacroSession(session);
-  return { state: validation.state, summary, rawBytes: validation.rawBytes };
+  return { state: session.candidate, summary };
 }

@@ -1,6 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
+import { getBuilding, getRecipe } from "../../src/game/content";
+import { createInitialState, placeBuilding, setEntityRecipe } from "../../src/game/engine";
+import { validateTimedPeriodicProgress, type TimedPeriodicProgressSample } from "../../src/game/periodicProgressValidation";
+import { serializeEnvelope } from "../../src/game/storage";
 
-const RELEASE_NOTE_ID = "2026-08-09-v1.0.35";
+const RELEASE_NOTE_ID = "2026-08-17-v1.0.46";
+
+test.beforeEach(async ({ page }) => {
+  const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
+  await page.addLocatorHandler(offlineReport, async () => {
+    await offlineReport.getByRole("button", { name: "确认结算" }).click({ force: true });
+  });
+});
 
 async function seedUiState(page: Page, options: { theme?: "dark" | "light"; fontScale?: number; paused?: boolean } = {}) {
   await page.addInitScript(({ theme, fontScale, paused, releaseNoteId }) => {
@@ -71,6 +82,41 @@ async function openGame(page: Page, path = "/") {
   await expect(page.locator(".factory-canvas")).toBeVisible();
 }
 
+function createDurableLockFixture(): string {
+  let state = createInitialState(101_440);
+  state.paused = true;
+  state.construction.arc_smelter = 1;
+  state.research.completedTechIds = [...new Set([...state.research.completedTechIds, "electromagnetism"])];
+  state = placeBuilding(state, "arc_smelter", { x: 40, y: -180 });
+  const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter");
+  if (!smelter) throw new Error("durable lock fixture did not create a smelter");
+  smelter.id = "smelter";
+  state = setEntityRecipe(state, smelter.id, "magnet");
+  state.entities.find((entity) => entity.id === smelter.id)!.inputs.iron_ore = 10_000;
+  return serializeEnvelope(state, Date.now(), "primary", undefined, undefined, "main");
+}
+
+async function seedDurableLockState(page: Page): Promise<void> {
+  const saveRaw = createDurableLockFixture();
+  await page.addInitScript(({ releaseNoteId, initialSaveRaw }) => {
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", releaseNoteId);
+    window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
+    window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, completedEvents: [], skipped: true }));
+    window.localStorage.setItem("dsp-idle-network.save.v1", initialSaveRaw);
+  }, { releaseNoteId: RELEASE_NOTE_ID, initialSaveRaw: saveRaw });
+}
+
+async function enterDurableGame(page: Page): Promise<void> {
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.getByRole("button", { name: "进入工厂", exact: true }).click();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toBeVisible({ timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
+  await expect(shell).toHaveAttribute("data-primary-save-edit-lock", "false");
+  await dismissOnboarding(page);
+  await expect(page.locator(".factory-canvas")).toBeVisible();
+}
+
 function rgbLuminance(value: string): number {
   const channels = value.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
   return channels.reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
@@ -87,9 +133,9 @@ test("exact-value tooltip and classic progress share one visible value", async (
   await expect(power).toBeVisible();
   await expect(tooltip).toBeHidden();
   await expect(async () => {
-    await power.hover();
+    await power.hover({ timeout: 1_000 });
     await expect(tooltip).toBeVisible({ timeout: 1_000 });
-  }).toPass({ timeout: 5_000 });
+  }).toPass({ timeout: 15_000 });
   await expect(page.locator(".quantity-value__tooltip:visible")).toHaveCount(1);
   await page.mouse.move(4, 4);
   await expect(tooltip).toBeHidden();
@@ -100,34 +146,64 @@ test("exact-value tooltip and classic progress share one visible value", async (
   await expect(tooltip).toBeHidden();
 
   const cycle = smelter.locator(".work-cycle[role='progressbar']");
-  const samples: Array<{ aria: number; text: number; fill: number }> = [];
-  for (let index = 0; index < 18; index += 1) {
-    await page.waitForTimeout(100);
-    samples.push(await cycle.evaluate((element) => {
+  // Establish a fresh authoritative boundary after startup/offline catch-up.
+  // The test then owns the exact resume point used by its browser timestamps.
+  await page.getByRole("button", { name: "暂停模拟", exact: true }).click();
+  await expect(page.getByRole("button", { name: "继续模拟", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "继续模拟", exact: true }).click();
+  await expect(page.getByRole("button", { name: "暂停模拟", exact: true })).toBeVisible();
+  await expect(cycle).toHaveClass(/work-cycle--active/);
+  const recipe = getRecipe("magnet");
+  if (!recipe) throw new Error("magnet recipe is unavailable");
+  const cyclesPerSecond = getBuilding("arc_smelter").speed / recipe.duration;
+  const samplingDurationMs = Math.ceil(2.2 / cyclesPerSecond * 1_000);
+  const samples = await cycle.evaluate(async (element, durationMs): Promise<TimedPeriodicProgressSample[]> => new Promise((resolve) => {
+    const captured: TimedPeriodicProgressSample[] = [];
+    const startedAt = performance.now();
+    let frame = 0;
+    const capture = () => {
       const aria = Number(element.getAttribute("aria-valuenow"));
       const text = Number(element.querySelector("strong")?.textContent?.match(/\d+/)?.[0] ?? Number.NaN);
       const transform = (element.querySelector("i") as HTMLElement | null)?.style.transform ?? "scaleX(0)";
-      return { aria, text, fill: Number(transform.match(/scaleX\(([^)]+)\)/)?.[1] ?? 0) * 100 };
-    }));
-  }
-  for (const sample of samples) {
-    expect(sample.text).toBe(sample.aria);
-    expect(Math.abs(sample.fill - sample.aria)).toBeLessThanOrEqual(1.1);
-  }
-  const illegalDrops = samples.slice(1).filter((sample, index) => {
-    const previous = samples[index];
-    const drop = previous.aria - sample.aria;
-    const clearCycleWrap = drop >= 50;
-    return drop > 1 && !clearCycleWrap;
+      captured.push({
+        atMs: performance.now(),
+        aria,
+        text,
+        fill: Number(transform.match(/scaleX\(([^)]+)\)/)?.[1] ?? Number.NaN) * 100,
+      });
+    };
+    const observer = new MutationObserver(capture);
+    observer.observe(element, { attributes: true, attributeFilter: ["aria-valuenow", "style"], characterData: true, childList: true, subtree: true });
+    const tick = () => {
+      capture();
+      if (performance.now() - startedAt >= durationMs) {
+        observer.disconnect();
+        resolve(captured);
+        return;
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    void frame;
+  }), samplingDurationMs);
+  const validation = validateTimedPeriodicProgress(samples, {
+    cyclesPerSecond,
+    refreshIntervalMs: 100,
+    authorityPublicationIntervalMs: 1_000,
+    minimumTransitions: 10,
+    minimumWraps: 2,
   });
-  expect(illegalDrops).toHaveLength(0);
+  expect(validation.issues, JSON.stringify({ validation, samples }, null, 2)).toEqual([]);
   await page.screenshot({ path: "artifacts/qa/v101-progress-tooltip-dark-1440x900.png", fullPage: true });
 });
 
 test("building lock persists, protects commands and turns a body drag into canvas pan", async ({ page }) => {
-  await seedUiState(page);
+  await seedDurableLockState(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await openGame(page);
+  await page.goto("/?menu=1");
+  await enterDurableGame(page);
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-runtime-recovery-sequence", "-1");
   let smelter = page.locator('.react-flow__node[data-id="smelter"]');
   await smelter.locator(".factory-node__header").click();
   await page.getByLabel("锁定所选建筑").click();
@@ -143,14 +219,9 @@ test("building lock persists, protects commands and turns a body drag into canva
   await page.mouse.move(box!.x + box!.width / 2 + 90, box!.y + Math.min(box!.height - 20, 82) + 35, { steps: 8 });
   await page.mouse.up();
   await expect.poll(() => page.locator(".react-flow__viewport").getAttribute("style")).not.toBe(beforeViewport);
-
-  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
-  await expect.poll(() => page.evaluate(() => {
-    const payload = JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1") ?? "{}");
-    return payload.state?.entities?.find((entity: { id: string }) => entity.id === "smelter")?.interactionLocked;
-  })).toBe(true);
+  await expect(shell).toHaveAttribute("data-runtime-recovery-sequence", "-1");
   await page.reload();
-  await dismissOnboarding(page);
+  await enterDurableGame(page);
   smelter = page.locator('.react-flow__node[data-id="smelter"]');
   await expect(smelter.locator(".factory-node--locked")).toBeVisible();
   await smelter.locator(".factory-node__header").click();

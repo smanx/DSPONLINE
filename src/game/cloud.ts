@@ -1,26 +1,52 @@
-import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type LeaderboardMetrics } from "./leaderboard";
-import type { SaveMode, SpeedrunTargetId } from "./types";
+import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type LeaderboardMetrics } from "./leaderboardContract";
+import type { PublicStationMetricKey, SaveMode, SpeedrunTargetId, StationDecorationPlacement } from "./types";
 import {
   assessSavePayloadSize,
+  CLOUD_SAVE_LARGE_ENDGAME_BYTES,
   CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES,
   utf8Bytes,
   type SavePayloadSizeTier,
 } from "./saveSizePolicy";
 import { apiFetch } from "./apiTransport";
+import { androidBase64RequestSupported } from "./androidApiTransport";
+import { CLOUD_TRANSFER_CONTRACT, cloudRequestTimeoutMs, createCloudRequestId, validCloudExpectedRevision } from "./cloudTransferContract";
 import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
-import { getDesktopBridge } from "../desktop";
+import { sha256Text } from "./payloadDigest";
+import {
+  capacityDetailsFromCloudError,
+  cloudSaveCapacityDetails,
+  cloudSaveSizeErrorMessage,
+  type CloudSaveCapacityDetails,
+} from "./cloudSaveCapacity";
+import type {
+  CloudAccountArchiveImportPreview,
+  CloudAccountArchiveImportResult,
+} from "./cloudAccountArchive";
+import {
+  clearWebCookieSessionState,
+  createWebSessionMigrationCoordinator,
+  parseWebCookieSessionPayload,
+  webCookieSessionRequest,
+  webSessionIssuanceHeaders,
+  type WebCookieSession,
+  type WebSessionMigrationState,
+} from "./webSessionMigration";
 
 export const CLOUD_TOKEN_STORAGE_KEY = "dsp-idle-network.cloud-token.v1";
 export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
 export const CLOUD_AUTO_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-auto-sync.v1";
 export const CLOUD_DEVICE_ID_STORAGE_KEY = "dsp-idle-network.cloud-device-id.v1";
 export const CLOUD_AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+export const CLOUD_ACCOUNT_LEGACY_JSON_CONTENT_TYPE = "application/vnd.dspidle.account-export+json";
 export const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"] as const;
 export type CloudSaveSlot = typeof CLOUD_SAVE_SLOTS[number];
 export type CloudSaveMode = SaveMode;
 
 let inMemoryCloudToken: string | null = null;
 let preferInMemoryCloudToken = false;
+let inMemoryWebCookieSession: WebCookieSession | null = null;
+let webSessionMigrationState: WebSessionMigrationState = clearWebCookieSessionState();
+const webSessionMigrationCoordinator = createWebSessionMigrationCoordinator();
 
 export interface CloudUser {
   id: string;
@@ -32,6 +58,11 @@ export interface CloudUser {
   emailVerifiedAt: number | null;
   passwordChangedAt: number;
   leaderboardVisible: boolean;
+  /** Missing on schema v7 nodes and is treated as the default public setting. */
+  stationVisibility?: "public" | "private";
+  /** Stable anonymous aliases used only to identify this account in public lists. */
+  leaderboardPublicId?: string;
+  speedrunPublicId?: string;
 }
 
 export interface CloudAccountSession {
@@ -127,6 +158,27 @@ export interface CloudSession {
   message: string | null;
 }
 
+export interface CloudTransferLimits {
+  guaranteedSavePayloadBytes: number;
+  savePayloadLimitBytes: number;
+  rawFallbackSafeLimitBytes: number;
+  requestCompressedLimitBytes: number;
+  requestExpandedLimitBytes: number;
+  compression: string[];
+  chunkedUpload: boolean;
+}
+
+export interface CloudQuotaPreflightPlan {
+  accepted: boolean;
+  reason: string | null;
+  code: string | null;
+  incoming?: { bytes?: number; checksum?: string | null };
+  limits?: Record<string, number>;
+  usage?: Record<string, unknown>;
+  prune?: { revisionCount?: number; logicalBytes?: number; revisions?: number[] };
+  projected?: Record<string, number>;
+}
+
 export interface CloudAutoSyncStatus {
   userId: string;
   state: "success" | "error" | "conflict" | "skipped";
@@ -136,7 +188,7 @@ export interface CloudAutoSyncStatus {
   message: string;
 }
 
-export type CloudUploadStage = "compressing" | "sending" | "waiting";
+export type CloudUploadStage = "compressing" | "sending" | "waiting" | "confirming";
 
 export interface CloudUploadOptions {
   mode?: CloudSaveMode;
@@ -146,6 +198,12 @@ export interface CloudUploadOptions {
   onDiagnostics?: (diagnostics: CloudUploadDiagnostics) => void;
   /** Build-selected in production; injectable so native transport contracts can be unit tested. */
   runtimePlatform?: CloudUploadRuntimePlatform;
+  /** Injectable Android capability probe for native bridge tests. */
+  androidGzipSupported?: boolean;
+  /** Exact SHA-256 produced by an upstream save Worker, when already available. */
+  payloadSha256?: string;
+  /** Exact UTF-8 byte length paired with payloadSha256 by an upstream Worker. */
+  payloadByteLength?: number;
 }
 
 export interface CloudUploadDiagnostics {
@@ -164,10 +222,11 @@ export interface CloudUploadDiagnostics {
   usedRawFallback: boolean;
   fallbackReason?: string;
   lastErrorCode?: string;
+  capacity: CloudSaveCapacityDetails;
 }
 
 const CLOUD_COMPRESSION_MIN_BYTES = 256 * 1024;
-const CLOUD_COMPRESSION_TIMEOUT_MS = 5_000;
+const CLOUD_COMPRESSION_TIMEOUT_MS = CLOUD_TRANSFER_CONTRACT.compressionTimeoutMs;
 const CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES = CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES;
 const CLOUD_UPLOAD_DIAGNOSTICS_SESSION_KEY = "dsp-idle-network.cloud-upload-diagnostics.v1";
 
@@ -186,10 +245,45 @@ export function readLastCloudUploadDiagnostics(): CloudUploadDiagnostics | null 
 
 function assertRawCloudRetryAllowed(rawBodyBytes: number): void {
   if (rawBodyBytes <= CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES) return;
-  throw new CloudApiError("压缩失败且原始请求超过安全上限（30 MiB），本地存档未修改", 413, {
+  const capacity = cloudSaveCapacityDetails(rawBodyBytes);
+  throw new CloudApiError(`${cloudSaveSizeErrorMessage(capacity)} 当前存档超过 30 MiB 明文回退边界，需要可用的 gzip 压缩。`, 413, {
     code: "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE",
-    originalBytes: rawBodyBytes,
+    ...capacity,
   });
+}
+
+const CLOUD_SIZE_ERROR_CODES = new Set([
+  "SAVE_SIZE_TOO_LARGE",
+  "CLOUD_REVISION_QUOTA_EXCEEDED",
+  "CLOUD_SLOT_BYTES_QUOTA_EXCEEDED",
+  "CLOUD_MODE_BYTES_QUOTA_EXCEEDED",
+  "CLOUD_ACCOUNT_BYTES_QUOTA_EXCEEDED",
+  "CLOUD_HISTORY_REVISIONS_QUOTA_EXCEEDED",
+  "CLOUD_QUOTA_EXCEEDED",
+  "REQUEST_BODY_TOO_LARGE",
+  "REQUEST_EXPANDED_BODY_TOO_LARGE",
+  "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE",
+]);
+
+export function describeCloudUploadError(
+  error: unknown,
+  fallbackOriginalBytes = 0,
+  fallbackCompressedBytes: number | null = null,
+): { message: string; code: string | null; capacity: CloudSaveCapacityDetails | null } {
+  if (!(error instanceof CloudApiError)) {
+    return { message: error instanceof Error ? error.message : "云存档上传失败", code: null, capacity: null };
+  }
+  const code = typeof error.payload.code === "string" ? error.payload.code : null;
+  if (!code || !CLOUD_SIZE_ERROR_CODES.has(code)) return { message: error.message, code, capacity: null };
+  const capacity = capacityDetailsFromCloudError(error.payload, fallbackOriginalBytes, fallbackCompressedBytes);
+  const suggestion = capacity.overPayloadBytes > 0
+    ? "请先导出本地备份并使用存档瘦身；分块上传尚未启用，不能绕过完整性校验。"
+    : capacity.compressionAvailable
+      ? "压缩体积在请求边界内，可安全重试；若仍失败请复制脱敏诊断。"
+      : capacity.originalBytes > CLOUD_TRANSFER_CONTRACT.rawFallbackSafeLimitBytes
+        ? "该存档必须使用 gzip；当前环境无法安全回退明文上传。"
+        : "可以重试 gzip 或明文兼容路径。";
+  return { message: `${cloudSaveSizeErrorMessage(capacity)} ${suggestion}`, code, capacity };
 }
 
 type CloudUploadRuntimePlatform = "web" | "desktop" | "android";
@@ -209,6 +303,97 @@ export interface CloudLeaderboardEntry {
   value: number;
   verified: boolean;
   rank: number;
+  stationPublicId?: string;
+}
+
+export type StationSignalId = "spectacular" | "precise" | "industrial" | "layout";
+
+export interface PublicStationSnapshot {
+  schema: "station-showcase-v1";
+  publicId: string;
+  owner: { displayName: string; avatar: string };
+  profile: { title: string; motto: string };
+  station: {
+    stage: "operational";
+    reputation: string;
+    level: number;
+    themeId: string;
+    placements: StationDecorationPlacement[];
+    featuredAchievementIds: string[];
+    completedContracts: number;
+    featuredContract: { id: string; title: string; difficulty: "P1" | "P2" | "P3"; settledAtTaskDay: number } | null;
+  };
+  metrics: Partial<Record<PublicStationMetricKey, number | string>>;
+  aggregateMetrics: Partial<Record<PublicStationMetricKey, number | string>>;
+  metricStatus: "official" | "content-pack-unverified";
+  publishedAt: number;
+}
+
+export interface PublicStationSocial {
+  favoriteCount: number;
+  viewerFavorite: boolean;
+  signals: Record<StationSignalId, number>;
+  viewerSignal: StationSignalId | null;
+}
+
+export interface PublicStationResponse {
+  snapshot: PublicStationSnapshot;
+  social: PublicStationSocial;
+}
+
+export interface CloudStationProfile {
+  visibility: "public" | "private";
+  publicId: string | null;
+  published: boolean;
+  sourceRevision: number | null;
+  snapshot: PublicStationSnapshot | null;
+  social: PublicStationSocial;
+}
+
+export type CloudLeaderboardMeStatus =
+  | "ranked"
+  | "hidden"
+  | "restricted"
+  | "revalidation_required"
+  | "missing_main_save"
+  | "missing_adjacent_revision"
+  | "interval_too_short"
+  | "elapsed_not_increasing"
+  | "valid_zero_production"
+  | "unavailable";
+
+export type CloudLeaderboardWindowStatus =
+  | "ranked"
+  | "missing_adjacent_revision"
+  | "interval_too_short"
+  | "elapsed_not_increasing"
+  | "valid_zero_production"
+  | "unavailable";
+
+export interface CloudLeaderboardMetricWindow {
+  status: CloudLeaderboardWindowStatus;
+  valid: boolean;
+  value: number | null;
+  metricVersion: string;
+  requiredSeconds: number;
+  observedSeconds: number;
+  remainingSeconds: number;
+  productionDelta: number | null;
+  fromRevision: number | null;
+  toRevision: number | null;
+}
+
+export interface CloudLeaderboardMe {
+  status: CloudLeaderboardMeStatus;
+  entry: CloudLeaderboardEntry | null;
+  rank: number | null;
+  totalEntries: number;
+  serverMetrics: LeaderboardMetrics | null;
+  latestWindowState: CloudLeaderboardMetricWindow | null;
+  mode: "normal";
+  slot: "main";
+  latestCloudRevision: number | null;
+  reviewResumeAfterRevision: number | null;
 }
 
 export interface SpeedrunLeaderboardEntry {
@@ -225,6 +410,7 @@ export interface SpeedrunLeaderboardEntry {
   completedAtSeconds: number;
   completedAt: number;
   receivedAt: number;
+  resourceMode: "finite" | "infinite";
   verified: boolean;
   rank: number;
 }
@@ -273,7 +459,7 @@ export class CloudApiError extends Error {
   }
 }
 
-function apiBase(allowInsecurePublicRead = false): string | null {
+export function cloudApiBase(allowInsecurePublicRead = false): string | null {
   const configured = import.meta.env.VITE_API_BASE_URL?.trim();
   if (configured) return configured.replace(/\/$/, "");
   if (typeof __APP_PLATFORM__ !== "undefined" && __APP_PLATFORM__ !== "web") return null;
@@ -295,6 +481,98 @@ export function getCloudToken(): string | null {
   } catch {
     return inMemoryCloudToken;
   }
+}
+
+function isWebCloudRuntime(): boolean {
+  return typeof window !== "undefined"
+    && (typeof __APP_PLATFORM__ === "undefined" || __APP_PLATFORM__ === "web");
+}
+
+function webCookieSessionEligible(base = cloudApiBase()): boolean {
+  if (!isWebCloudRuntime() || !base) return false;
+  try {
+    const page = new URL(window.location.href);
+    const target = new URL(base, page);
+    const localDevelopment = page.protocol === "http:"
+      && (page.hostname === "localhost" || page.hostname === "127.0.0.1");
+    return (page.protocol === "https:" || localDevelopment)
+      && target.origin === page.origin
+      && target.pathname.replace(/\/+$/, "") === "/api"
+      && !target.username
+      && !target.password
+      && !target.search
+      && !target.hash;
+  } catch {
+    return false;
+  }
+}
+
+function activeWebCookieSession(): WebCookieSession | null {
+  if (!isWebCloudRuntime() || !inMemoryWebCookieSession) return null;
+  if (inMemoryWebCookieSession.expiresAt > Date.now()) return inMemoryWebCookieSession;
+  inMemoryWebCookieSession = null;
+  webSessionMigrationState = clearWebCookieSessionState();
+  return null;
+}
+
+function applyWebSessionMigrationState(next: WebSessionMigrationState): WebSessionMigrationState {
+  webSessionMigrationState = next;
+  inMemoryWebCookieSession = next.phase === "ready" || next.phase === "cleanup_pending"
+    ? next.session
+    : null;
+  return next;
+}
+
+function clearCloudAuthenticationState(clearBearer = true): void {
+  applyWebSessionMigrationState(clearWebCookieSessionState());
+  if (clearBearer) setCloudToken(null);
+}
+
+/**
+ * Attempts the one-way legacy Web Bearer -> HttpOnly Cookie migration.
+ * A failed or unsupported migration deliberately leaves the legacy token in
+ * place so 1.0.39 APIs and interrupted rolling upgrades remain usable.
+ */
+export async function initializeCloudAuthentication(): Promise<WebSessionMigrationState> {
+  if (!webCookieSessionEligible()) return webSessionMigrationState;
+  const existing = activeWebCookieSession();
+  if (existing) return applyWebSessionMigrationState({
+    ...webSessionMigrationState,
+    phase: "ready",
+    session: existing,
+    legacyTokenPresent: Boolean(getCloudToken()),
+    reason: null,
+    retryable: false,
+  });
+  const base = cloudApiBase();
+  if (!base) return webSessionMigrationState;
+  const next = await webSessionMigrationCoordinator.run({
+    apiBase: base,
+    pageUrl: window.location.href,
+    storage: window.localStorage,
+  });
+  return applyWebSessionMigrationState(next);
+}
+
+export function hasCloudAuthentication(): boolean {
+  return Boolean(activeWebCookieSession() || getCloudToken());
+}
+
+export function getWebCookieSession(): WebCookieSession | null {
+  return activeWebCookieSession();
+}
+
+export function prepareCloudAuthenticatedRequest(init: RequestInit = {}): RequestInit {
+  const cookieSession = activeWebCookieSession();
+  if (cookieSession) return webCookieSessionRequest(cookieSession, init);
+  const token = getCloudToken();
+  const headers: Record<string, string> = {};
+  new Headers(init.headers).forEach((value, key) => { headers[key] = value; });
+  // Preserve the historical request contract when no local credential is
+  // present: the server remains authoritative and returns its stable 401.
+  // Callers that must avoid an anonymous request use hasCloudAuthentication().
+  if (token) headers.authorization = `Bearer ${token}`;
+  return { ...init, headers };
 }
 
 function setCloudToken(token: string | null): void {
@@ -461,8 +739,17 @@ export function writeCloudAutoSyncStatus(status: CloudAutoSyncStatus): void {
   try { window.localStorage.setItem(CLOUD_AUTO_SYNC_STORAGE_KEY, JSON.stringify(status)); } catch { /* optional status */ }
 }
 
-async function cloudRequest<T>(path: string, options: RequestInit = {}, authenticated = false, allowInsecurePublicRead = false): Promise<T> {
-  const base = apiBase(allowInsecurePublicRead);
+async function cloudRequest<T>(
+  path: string,
+  options: RequestInit = {},
+  authenticated = false,
+  allowInsecurePublicRead = false,
+  transferBytes = 0,
+  expectedResponseBytes = 0,
+  sessionIssuance = false,
+  preserveAuthenticationOnSessionFailure = false,
+): Promise<T> {
+  const base = cloudApiBase(allowInsecurePublicRead);
   if (!base) throw new CloudApiError(
     typeof window !== "undefined" && window.location.protocol === "http:"
       ? "云账户仅在 HTTPS 安全入口开放"
@@ -470,8 +757,7 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
     0,
   );
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 8_000);
-  const token = authenticated ? getCloudToken() : null;
+  const timer = window.setTimeout(() => controller.abort(), cloudRequestTimeoutMs(transferBytes, expectedResponseBytes));
   const externalSignal = options.signal;
   if (externalSignal?.aborted) {
     window.clearTimeout(timer);
@@ -480,17 +766,32 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
   const abortFromCaller = () => controller.abort();
   externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
   try {
-    const response = await apiFetch(`${base}${path}`, {
+    const headers = new Headers(options.headers);
+    if (!headers.has("content-type")) headers.set("content-type", "application/json");
+    let requestInit: RequestInit = {
       ...options,
       signal: controller.signal,
-      headers: {
-        "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(options.headers ?? {}),
-      },
-    });
+      headers,
+    };
+    if (authenticated) requestInit = prepareCloudAuthenticatedRequest(requestInit);
+    else if (sessionIssuance && webCookieSessionEligible(base)) {
+      requestInit = {
+        ...requestInit,
+        headers: webSessionIssuanceHeaders(requestInit.headers),
+        credentials: "include",
+      };
+    }
+    const response = await apiFetch(`${base}${path}`, requestInit);
     const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-    if (!response.ok) throw new CloudApiError(typeof payload.error === "string" ? payload.error : `云服务返回 ${response.status}`, response.status, payload);
+    if (!response.ok) {
+      const code = payload.code;
+      if (!preserveAuthenticationOnSessionFailure
+        && response.status === 401
+        && (code === "SESSION_EXPIRED" || code === "SESSION_REVOKED" || code === "AUTH_REQUIRED")) {
+        clearCloudAuthenticationState();
+      }
+      throw new CloudApiError(typeof payload.error === "string" ? payload.error : `云服务返回 ${response.status}`, response.status, payload);
+    }
     return payload as T;
   } catch (error) {
     if (error instanceof CloudApiError) throw error;
@@ -509,8 +810,12 @@ export async function resumeCloudSession(mode: CloudSaveMode = "normal"): Promis
   try {
     const health = await cloudRequest<{ ok: boolean; mailProvider?: string }>("/health", {}, false, true);
     const mailAvailable = Boolean(health.mailProvider && health.mailProvider !== "disabled");
-    const token = getCloudToken();
-    if (!token) return { status: "anonymous", user: null, cloudSave: null, mode, mailAvailable, message: null };
+    if (isWebCloudRuntime()) {
+      // Migration is opportunistic. Unsupported/temporarily unavailable new
+      // endpoints must never prevent the retained legacy Bearer from working.
+      await initializeCloudAuthentication().catch(() => webSessionMigrationState);
+    }
+    if (!hasCloudAuthentication()) return { status: "anonymous", user: null, cloudSave: null, mode, mailAvailable, message: null };
     try {
       const account = await cloudRequest<{ user: CloudUser; cloudSave: CloudSaveMetadata | null; cloudSaves?: Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>; cloudSavesByMode?: Partial<Record<CloudSaveMode, Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>>> }>("/account", {}, true);
       const selected = account.cloudSavesByMode?.[mode];
@@ -520,7 +825,6 @@ export async function resumeCloudSession(mode: CloudSaveMode = "normal"): Promis
       );
       return { status: "authenticated", user: account.user, cloudSave: cloudSaves.main, cloudSaves, mode, cloudSavesByMode: account.cloudSavesByMode as CloudSession["cloudSavesByMode"], mailAvailable, message: null };
     } catch (error) {
-      if (error instanceof CloudApiError && error.status === 401) setCloudToken(null);
       return { status: "anonymous", user: null, cloudSave: null, mode, mailAvailable, message: error instanceof Error ? error.message : null };
     }
   } catch (error) {
@@ -528,15 +832,56 @@ export async function resumeCloudSession(mode: CloudSaveMode = "normal"): Promis
   }
 }
 
-export async function registerCloudAccount(username: string, password: string, displayName: string): Promise<CloudSession> {
-  const result = await cloudRequest<{ token: string; user: CloudUser; mailAvailable?: boolean }>("/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, deviceId: cloudDeviceId() }) });
+interface CloudSessionIssuanceResponse {
+  token?: unknown;
+  session?: unknown;
+}
+
+async function acceptCloudSessionIssuance(result: CloudSessionIssuanceResponse): Promise<"cookie" | "bearer"> {
+  const cookieSession = parseWebCookieSessionPayload(result);
+  if (cookieSession && isWebCloudRuntime()) {
+    const confirmation = await cloudRequest<CloudSessionIssuanceResponse>("/auth/web-session", {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: webSessionIssuanceHeaders(),
+    }, false, false, 0, 0, false, true);
+    const confirmed = parseWebCookieSessionPayload(confirmation);
+    if (!confirmed || confirmed.csrfToken !== cookieSession.csrfToken || confirmed.expiresAt !== cookieSession.expiresAt) {
+      throw new CloudApiError("浏览器未能确认安全云会话，请重试登录", 0, {
+        code: "CLOUD_COOKIE_SESSION_CONFIRMATION_FAILED",
+      });
+    }
+    applyWebSessionMigrationState({
+      phase: "ready",
+      session: confirmed,
+      legacyTokenPresent: false,
+      attempt: webSessionMigrationState.attempt,
+      reason: null,
+      retryable: false,
+    });
+    // The secret is now HttpOnly. Remove any previous JS-readable credential
+    // only after a structurally valid Cookie response was received.
+    setCloudToken(null);
+    return "cookie";
+  }
+  if (typeof result.token !== "string" || result.token.length < 1 || result.token.length > 4_096 || /[\r\n]/.test(result.token)) {
+    throw new CloudApiError("云服务返回的会话凭据无效", 0, { code: "CLOUD_SESSION_RESPONSE_INVALID" });
+  }
+  applyWebSessionMigrationState(clearWebCookieSessionState());
   setCloudToken(result.token);
+  return "bearer";
+}
+
+export async function registerCloudAccount(username: string, password: string, displayName: string): Promise<CloudSession> {
+  const result = await cloudRequest<CloudSessionIssuanceResponse & { user: CloudUser; mailAvailable?: boolean }>("/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, deviceId: cloudDeviceId() }) }, false, false, 0, 0, true);
+  await acceptCloudSessionIssuance(result);
   return { status: "authenticated", user: result.user, cloudSave: null, cloudSaves: emptyCloudSaveSlots(), mailAvailable: result.mailAvailable === true, message: null };
 }
 
 export async function loginCloudAccount(identifier: string, password: string): Promise<CloudSession> {
-  const result = await cloudRequest<{ token: string; user: CloudUser; security?: { newDevice: boolean; newRegion: boolean; message: string | null } }>("/auth/login", { method: "POST", body: JSON.stringify({ identifier, password, deviceId: cloudDeviceId() }) });
-  setCloudToken(result.token);
+  const result = await cloudRequest<CloudSessionIssuanceResponse & { user: CloudUser; security?: { newDevice: boolean; newRegion: boolean; message: string | null } }>("/auth/login", { method: "POST", body: JSON.stringify({ identifier, password, deviceId: cloudDeviceId() }) }, false, false, 0, 0, true);
+  await acceptCloudSessionIssuance(result);
   const resumed = await resumeCloudSession();
   return resumed.status === "authenticated"
     ? { ...resumed, message: result.security?.message ?? null }
@@ -544,7 +889,7 @@ export async function loginCloudAccount(identifier: string, password: string): P
 }
 
 export async function logoutCloudAccount(): Promise<void> {
-  try { await cloudRequest("/auth/logout", { method: "POST" }, true); } finally { setCloudToken(null); }
+  try { await cloudRequest("/auth/logout", { method: "POST" }, true); } finally { clearCloudAuthenticationState(); }
 }
 
 export async function verifyCloudEmail(token: string): Promise<CloudUser> {
@@ -570,8 +915,8 @@ export async function requestCloudPasswordReset(email: string): Promise<string> 
 }
 
 export async function resetCloudPassword(token: string, password: string): Promise<CloudSession> {
-  const result = await cloudRequest<{ token: string; user: CloudUser; security?: { message: string | null } }>("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password, deviceId: cloudDeviceId() }) });
-  setCloudToken(result.token);
+  const result = await cloudRequest<CloudSessionIssuanceResponse & { user: CloudUser; security?: { message: string | null } }>("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password, deviceId: cloudDeviceId() }) }, false, false, 0, 0, true);
+  await acceptCloudSessionIssuance(result);
   const resumed = await resumeCloudSession();
   return resumed.status === "authenticated"
     ? { ...resumed, message: result.security?.message ?? null }
@@ -604,7 +949,16 @@ export async function revokeCloudSession(sessionId: string): Promise<{ currentSe
     method: "POST",
     body: JSON.stringify({ sessionId }),
   }, true);
-  if (result.currentSessionRevoked) setCloudToken(null);
+  if (result.currentSessionRevoked) clearCloudAuthenticationState();
+  return result;
+}
+
+export async function revokeAllCloudSessions(): Promise<{ currentSessionRevoked: boolean; revokedCount: number }> {
+  const result = await cloudRequest<{ currentSessionRevoked: boolean; revokedCount: number }>("/account/sessions/revoke-all", {
+    method: "POST",
+    body: "{}",
+  }, true);
+  if (result.currentSessionRevoked) clearCloudAuthenticationState();
   return result;
 }
 
@@ -612,12 +966,125 @@ export async function exportCloudAccountData(): Promise<CloudAccountExport> {
   return cloudRequest<CloudAccountExport>("/account/export", {}, true);
 }
 
+function legacyJsonImportResponseRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CloudApiError(`${label}格式无效`, 0, { code: "CLOUD_RESPONSE_INVALID" });
+  }
+  return value as Record<string, unknown>;
+}
+
+function legacyJsonImportSafeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new CloudApiError(`${label}格式无效`, 0, { code: "CLOUD_RESPONSE_INVALID" });
+  }
+  return value as number;
+}
+
+function normalizeLegacyJsonImportResult(value: unknown): CloudAccountArchiveImportResult {
+  const source = legacyJsonImportResponseRecord(value, "旧版 JSON 账号导入响应");
+  if (source.imported !== true) {
+    throw new CloudApiError("旧版 JSON 账号导入响应缺少成功标记", 0, { code: "CLOUD_RESPONSE_INVALID" });
+  }
+  if (typeof source.guard !== "string" || !/^[a-f0-9]{64}$/.test(source.guard)) {
+    throw new CloudApiError("旧版 JSON 账号导入响应 guard 无效", 0, { code: "CLOUD_RESPONSE_INVALID" });
+  }
+  const modes = legacyJsonImportResponseRecord(source.modes, "旧版 JSON 导入后模式槽位");
+  const revalidation = legacyJsonImportResponseRecord(
+    source.leaderboardRevalidationRequired,
+    "旧版 JSON 排行榜复核状态",
+  );
+  const normalizedModes = Object.fromEntries((["normal", "speedrun"] as const).map((mode) => [
+    mode,
+    legacyJsonImportResponseRecord(modes[mode], `${mode} 模式槽位`),
+  ])) as CloudAccountArchiveImportResult["modes"];
+  const normalizedRevalidation = Object.fromEntries((["normal", "speedrun"] as const).map((mode) => {
+    if (typeof revalidation[mode] !== "boolean") {
+      throw new CloudApiError(`${mode} 排行榜复核状态无效`, 0, { code: "CLOUD_RESPONSE_INVALID" });
+    }
+    return [mode, revalidation[mode]];
+  })) as CloudAccountArchiveImportResult["leaderboardRevalidationRequired"];
+  return {
+    imported: true,
+    revisionCount: legacyJsonImportSafeInteger(source.revisionCount, "旧版 JSON 导入修订数"),
+    logicalBytes: legacyJsonImportSafeInteger(source.logicalBytes, "旧版 JSON 导入逻辑字节数"),
+    guard: source.guard,
+    modes: normalizedModes,
+    leaderboardRevalidationRequired: normalizedRevalidation,
+  };
+}
+
+function rethrowLegacyJsonImportError(error: unknown): never {
+  if (!(error instanceof CloudApiError)) throw error;
+  const code = typeof error.payload.code === "string" ? error.payload.code : "";
+  if (code === "ACCOUNT_ARCHIVE_LEGACY_JSON_HISTORY_UNRESTORABLE") {
+    throw new CloudApiError(
+      "旧版 JSON 含有缺少正文、无法安全恢复的独立历史修订；请改用 ZIP 账号归档。现有云存档未修改。",
+      error.status,
+      error.payload,
+    );
+  }
+  if (code === "ACCOUNT_ARCHIVE_MODE_MISMATCH") {
+    throw new CloudApiError(
+      "旧版 JSON 的普通/速通模式标记不匹配；缺少模式不会被推断为速通。现有云存档未修改。",
+      error.status,
+      error.payload,
+    );
+  }
+  if (error.status === 404 || error.status === 501) {
+    throw new CloudApiError(
+      "当前云节点尚不支持旧版 JSON 账号导入；请优先使用 ZIP 账号归档。现有云存档未修改。",
+      error.status,
+      { ...error.payload, code: "LEGACY_JSON_IMPORT_UNSUPPORTED" },
+    );
+  }
+  if (!/现有云存档未修改/.test(error.message)) {
+    throw new CloudApiError(`${error.message}；现有云存档未修改`, error.status, error.payload);
+  }
+  throw error;
+}
+
+/**
+ * Imports a player-selected pre-ZIP account export without parsing or rewriting
+ * it on the client. The server remains authoritative for UTF-8, identity,
+ * schema, checksum, mode and quota validation before its atomic replacement.
+ */
+export async function importLegacyJsonCloudAccountArchive(
+  archive: Blob,
+  preview: CloudAccountArchiveImportPreview,
+): Promise<CloudAccountArchiveImportResult> {
+  if (typeof Blob === "undefined" || !(archive instanceof Blob) || archive.size < 1) {
+    throw new CloudApiError("请选择有效的旧版 JSON 账号导出文件", 0, {
+      code: "ACCOUNT_ARCHIVE_IMPORT_FILE_INVALID",
+    });
+  }
+  if (!preview || !/^[a-f0-9]{64}$/.test(preview.guard)
+    || preview.confirmation !== `REPLACE_CLOUD_SAVES:${preview.guard}`) {
+    throw new CloudApiError("账号归档导入确认信息无效，请重新预检", 0, {
+      code: "ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_INVALID",
+    });
+  }
+  try {
+    const response = await cloudRequest<unknown>("/account/import/legacy-json", {
+      method: "POST",
+      headers: {
+        "content-type": CLOUD_ACCOUNT_LEGACY_JSON_CONTENT_TYPE,
+        "x-dsp-account-import-guard": preview.guard,
+        "x-dsp-account-import-confirmation": preview.confirmation,
+      },
+      body: archive,
+    }, true, false, archive.size);
+    return normalizeLegacyJsonImportResult(response);
+  } catch (error) {
+    return rethrowLegacyJsonImportError(error);
+  }
+}
+
 export async function deleteCloudAccount(password: string): Promise<void> {
   await cloudRequest("/account/delete", {
     method: "POST",
     body: JSON.stringify({ password, confirmation: "DELETE" }),
   }, true);
-  setCloudToken(null);
+  clearCloudAuthenticationState();
 }
 
 function cloudSaveQuery(slot: CloudSaveSlot, revision?: number, mode: CloudSaveMode = "normal"): string {
@@ -644,21 +1111,13 @@ function isUncertainCloudRequestError(error: unknown): error is CloudApiError {
     && (error.payload.code === "CLOUD_REQUEST_TIMEOUT" || error.payload.code === "CLOUD_REQUEST_NETWORK");
 }
 
-function cloudSummaryMatchesPayload(remote: CloudSaveMetadata, payloadSummary: CloudSaveSummary | null): boolean {
-  const summary = remote.summary;
-  if (!summary || !payloadSummary) return false;
-  const keys: Array<keyof CloudSaveSummary> = [
-    "stateVersion",
-    "savedAt",
-    "elapsedSeconds",
-    "activePlanetId",
-    "entityCount",
-    "completedTechCount",
-    "structurePoints",
-    "uploadedWhiteMatrix",
-    "stateChecksum",
-  ];
-  return keys.every((key) => summary[key] === payloadSummary[key]);
+function cloudMetadataMatchesPayload(
+  remote: CloudSaveMetadata,
+  expectedRevision: number,
+  payloadChecksum: string,
+  payloadBytes: number,
+): boolean {
+  return remote.revision === expectedRevision + 1 && remote.checksum === payloadChecksum && remote.size === payloadBytes;
 }
 
 /** Re-read only the current cloud metadata after an uncertain upload response. */
@@ -683,27 +1142,59 @@ function conflictFromCloudSave(cloudSave: CloudSaveMetadata): CloudApiError {
   return new CloudApiError("云端已有更新版本，请先下载或确认覆盖", 409, { cloudSave });
 }
 
+async function fetchCloudOperationReceipt(requestId: string): Promise<CloudSaveMetadata | null> {
+  try {
+    const result = await cloudRequest<{
+      receipt?: {
+        status?: string;
+        result?: { cloudSave?: CloudSaveMetadata };
+      };
+    }>(`/operations/${encodeURIComponent(requestId)}`, {}, true);
+    const receipt = result.receipt;
+    return receipt?.status === "succeeded" && receipt.result?.cloudSave
+      ? receipt.result.cloudSave
+      : null;
+  } catch (error) {
+    // 1.0.39 APIs do not expose operation receipts. Preserve rolling-upgrade
+    // compatibility and let exact revision/checksum confirmation remain the
+    // fallback instead of converting an old-server 404 into an upload error.
+    if (error instanceof CloudApiError && error.status === 404) return null;
+    return null;
+  }
+}
+
 async function confirmTimedOutUpload(
-  payload: string,
   expectedRevision: number,
   slot: CloudSaveSlot,
   mode: CloudSaveMode,
-  signal?: AbortSignal,
-): Promise<{ state: "confirmed" | "retry"; cloudSave?: CloudSaveMetadata }> {
+  payloadChecksum: string,
+  payloadBytes: number,
+  requestId?: string,
+): Promise<{ state: "confirmed" | "unobserved"; cloudSave?: CloudSaveMetadata }> {
   let cloudSave: CloudSaveMetadata | null;
   try {
-    cloudSave = await refreshCloudSaveMetadata(slot, signal, mode);
+    cloudSave = await refreshCloudSaveMetadata(slot, undefined, mode);
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    const receiptSave = requestId ? await fetchCloudOperationReceipt(requestId) : null;
+    if (receiptSave && cloudMetadataMatchesPayload(receiptSave, expectedRevision, payloadChecksum, payloadBytes)) {
+      return { state: "confirmed", cloudSave: { ...receiptSave, slot, mode } };
+    }
     throw unknownCloudUploadState();
   }
-  const payloadSummary = summarizeCloudPayload(payload);
   if (cloudSave && cloudSave.revision > expectedRevision) {
-    if (cloudSummaryMatchesPayload(cloudSave, payloadSummary)) return { state: "confirmed", cloudSave };
+    if (cloudMetadataMatchesPayload(cloudSave, expectedRevision, payloadChecksum, payloadBytes)) return { state: "confirmed", cloudSave };
+    const receiptSave = requestId ? await fetchCloudOperationReceipt(requestId) : null;
+    if (receiptSave && cloudMetadataMatchesPayload(receiptSave, expectedRevision, payloadChecksum, payloadBytes)) {
+      return { state: "confirmed", cloudSave: { ...receiptSave, slot, mode } };
+    }
     throw conflictFromCloudSave(cloudSave);
   }
   if ((cloudSave?.revision ?? 0) !== expectedRevision) throw unknownCloudUploadState();
-  return { state: "retry" };
+  const receiptSave = requestId ? await fetchCloudOperationReceipt(requestId) : null;
+  if (receiptSave && cloudMetadataMatchesPayload(receiptSave, expectedRevision, payloadChecksum, payloadBytes)) {
+    return { state: "confirmed", cloudSave: { ...receiptSave, slot, mode } };
+  }
+  return { state: "unobserved" };
 }
 
 export async function uploadCloudSaveWithOptions(
@@ -713,6 +1204,9 @@ export async function uploadCloudSaveWithOptions(
   options: CloudUploadOptions = {},
 ): Promise<CloudSaveMetadata> {
   const mode = options.mode ?? summarizeCloudPayload(payload)?.mode ?? "normal";
+  if (!validCloudExpectedRevision(expectedRevision)) {
+    throw new CloudApiError("云存档预期修订无效", 400, { code: "EXPECTED_REVISION_INVALID" });
+  }
   const uploadStartedAt = performance.now();
   if (!options.verified) {
     const integrity = inspectSaveEnvelopeChecksum(payload);
@@ -725,10 +1219,53 @@ export async function uploadCloudSaveWithOptions(
     }
   }
   if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
-  const rawBody = JSON.stringify({ payload, expectedRevision });
-  const rawBodyBytes = typeof Blob !== "undefined" ? new Blob([rawBody]).size : new TextEncoder().encode(rawBody).byteLength;
-  const payloadBytes = utf8Bytes(payload);
+  const hasWorkerProof = /^[a-f0-9]{64}$/.test(options.payloadSha256 ?? "") &&
+    Number.isSafeInteger(options.payloadByteLength) && options.payloadByteLength! > 0;
+  const payloadBytes = hasWorkerProof ? options.payloadByteLength! : utf8Bytes(payload);
+  if (hasWorkerProof && payload.length > payloadBytes) {
+    throw new CloudApiError("云存档 Worker 字节证明无效", 0, { code: "SAVE_TRANSFER_PROOF_INVALID" });
+  }
+  if (payloadBytes > CLOUD_TRANSFER_CONTRACT.savePayloadLimitBytes) {
+    const capacity = cloudSaveCapacityDetails(payloadBytes);
+    throw new CloudApiError(cloudSaveSizeErrorMessage(capacity), 413, {
+      code: "SAVE_SIZE_TOO_LARGE",
+      payloadBytes,
+      ...capacity,
+    });
+  }
+  const rawBody = payload;
+  const rawBodyBytes = payloadBytes;
   const size = assessSavePayloadSize(payloadBytes);
+  const payloadChecksum = hasWorkerProof
+    ? options.payloadSha256!
+    : await sha256Text(payload);
+  if (payloadBytes > CLOUD_SAVE_LARGE_ENDGAME_BYTES) {
+    try {
+      const plan = await preflightCloudSaveUpload(payloadBytes, payloadChecksum, slot, mode);
+      if (!plan.accepted) {
+        const payloadLimitBytes = typeof plan.limits?.revisionBytes === "number"
+          ? plan.limits.revisionBytes
+          : CLOUD_TRANSFER_CONTRACT.savePayloadLimitBytes;
+        throw new CloudApiError("云存档容量预检未通过；大文件正文尚未发送，本地和云端旧修订均未修改", plan.reason === "revisionBytes" ? 413 : 507, {
+          code: plan.code ?? "CLOUD_QUOTA_EXCEEDED",
+          payloadBytes,
+          originalBytes: payloadBytes,
+          expandedBytes: payloadBytes,
+          payloadLimitBytes,
+          ...(plan.reason && typeof plan.limits?.[plan.reason] === "number"
+            ? { quotaLimitBytes: plan.limits[plan.reason] }
+            : {}),
+          plan,
+        });
+      }
+    } catch (error) {
+      // During API-first rolling upgrades an older server may not expose the
+      // small quota-preflight endpoint yet. Keep its established upload path;
+      // all other preflight failures are authoritative and stop before PUT.
+      if (!(error instanceof CloudApiError && error.status === 404)) throw error;
+    }
+  }
+  if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   let diagnostics: CloudUploadDiagnostics = {
     status: "running",
     stage: "compressing",
@@ -743,6 +1280,7 @@ export async function uploadCloudSaveWithOptions(
     attempts: 0,
     usedCompression: false,
     usedRawFallback: false,
+    capacity: cloudSaveCapacityDetails(payloadBytes),
   };
   const emitDiagnostics = (changes: Partial<CloudUploadDiagnostics> = {}) => {
     diagnostics = { ...diagnostics, ...changes, totalMs: Math.max(0, performance.now() - uploadStartedAt) };
@@ -756,33 +1294,52 @@ export async function uploadCloudSaveWithOptions(
   try {
     stage("compressing");
     const compressionStartedAt = performance.now();
-    const compressed = await compressCloudRequestBody(rawBody, options.signal, options.runtimePlatform);
+    const compressed = await compressCloudRequestBody(rawBody, options.signal, options.runtimePlatform, options.androidGzipSupported, rawBodyBytes);
     emitDiagnostics({
       compressionMs: Math.max(0, performance.now() - compressionStartedAt),
       compressedBytes: compressed?.body.size ?? null,
+      capacity: cloudSaveCapacityDetails(payloadBytes, compressed?.body.size ?? null),
       usedCompression: Boolean(compressed),
       ...(compressed ? {} : {
-        fallbackReason: options.runtimePlatform === "android"
-          ? "android-raw-transport"
-          : "compression-unavailable-timeout-or-not-beneficial",
+        fallbackReason: "compression-unavailable-timeout-or-not-beneficial",
       }),
     });
     if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
     if (!compressed) assertRawCloudRetryAllowed(rawBodyBytes);
 
-    const send = async (body: BodyInit, headers?: Record<string, string>): Promise<CloudSaveMetadata> => {
+    const legacyBody = () => JSON.stringify({ payload, expectedRevision });
+    // A gzip/raw compatibility retry is still the same logical upload. Reuse
+    // one operation id so a lost response cannot create a second revision.
+    // The legacy JSON fallback intentionally carries no protocol-specific id.
+    const requestId = createCloudRequestId();
+
+    const send = async (
+      body: BodyInit,
+      headers?: Record<string, string>,
+      protocol: "direct" | "legacy" = "direct",
+    ): Promise<CloudSaveMetadata> => {
       const rawAttempt = !headers?.["content-encoding"];
       stage("sending");
       emitDiagnostics({ attempts: diagnostics.attempts + 1, usedRawFallback: diagnostics.usedRawFallback || rawAttempt && diagnostics.attempts > 0 });
       stage("waiting");
       const requestStartedAt = performance.now();
       try {
+        const requestBytes = body instanceof Blob ? body.size : typeof body === "string" ? rawBodyBytes : payloadBytes;
         const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot, undefined, mode)}`, {
           method: "PUT",
           body,
-          ...(headers ? { headers } : {}),
+          headers: protocol === "legacy" ? {
+            "content-type": "application/json",
+            ...(headers ?? {}),
+          } : {
+              "content-type": CLOUD_TRANSFER_CONTRACT.directPayloadContentType,
+              [CLOUD_TRANSFER_CONTRACT.expectedRevisionHeader]: String(expectedRevision),
+              [CLOUD_TRANSFER_CONTRACT.requestIdHeader]: requestId,
+              [CLOUD_TRANSFER_CONTRACT.originalBytesHeader]: String(rawBodyBytes),
+              ...(headers ?? {}),
+            },
           signal: options.signal,
-        }, true);
+        }, true, false, Math.max(requestBytes, rawBodyBytes));
         emitDiagnostics({
           status: "success",
           networkMs: diagnostics.networkMs + Math.max(0, performance.now() - requestStartedAt),
@@ -803,7 +1360,8 @@ export async function uploadCloudSaveWithOptions(
 
     const resolveRawRetryFailure = async (retryError: unknown): Promise<CloudSaveMetadata> => {
       if (retryError instanceof CloudApiError && retryError.status === 409) {
-        const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
+        stage("confirming");
+        const finalConfirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes, requestId);
         if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) {
           emitDiagnostics({ status: "success", fallbackReason: "retry-response-lost-server-confirmed" });
           return finalConfirmation.cloudSave;
@@ -811,7 +1369,8 @@ export async function uploadCloudSaveWithOptions(
         throw retryError;
       }
       if (!isUncertainCloudRequestError(retryError)) throw retryError;
-      const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
+      stage("confirming");
+      const finalConfirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes, requestId);
       if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) {
         emitDiagnostics({ status: "success", fallbackReason: "retry-timeout-server-confirmed" });
         return finalConfirmation.cloudSave;
@@ -822,6 +1381,17 @@ export async function uploadCloudSaveWithOptions(
     try {
       return await send(compressed?.body ?? rawBody, compressed?.headers);
     } catch (error) {
+      if (error instanceof CloudApiError && error.status === 400 && error.payload.code === "SAVE_FORMAT_INVALID" && error.payload.directPayloadSupported !== true) {
+        const wrapped = legacyBody();
+        const wrappedBytes = utf8Bytes(wrapped);
+        if (wrappedBytes > CLOUD_TRANSFER_CONTRACT.legacyJsonRequestLimitBytes) throw error;
+        emitDiagnostics({ usedRawFallback: true, fallbackReason: "legacy-api-direct-payload-unsupported" });
+        try {
+          return await send(wrapped, undefined, "legacy");
+        } catch (retryError) {
+          return resolveRawRetryFailure(retryError);
+        }
+      }
       if (compressed && error instanceof CloudApiError && error.status === 400 && error.payload.code === "REQUEST_ENCODING_INVALID") {
         assertRawCloudRetryAllowed(rawBodyBytes);
         emitDiagnostics({ usedRawFallback: true, fallbackReason: "server-rejected-content-encoding" });
@@ -831,19 +1401,16 @@ export async function uploadCloudSaveWithOptions(
           return resolveRawRetryFailure(retryError);
         }
       }
-      if (!isUncertainCloudRequestError(error)) throw error;
-      const confirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
+      const sentRequestWasCancelled = options.signal?.aborted || error instanceof DOMException && error.name === "AbortError";
+      if (!isUncertainCloudRequestError(error) && !sentRequestWasCancelled) throw error;
+      stage("confirming");
+      const confirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes, requestId);
       if (confirmation.state === "confirmed" && confirmation.cloudSave) {
-        emitDiagnostics({ status: "success", fallbackReason: "network-timeout-server-confirmed" });
+        emitDiagnostics({ status: "success", fallbackReason: sentRequestWasCancelled ? "cancelled-server-confirmed" : "network-timeout-server-confirmed" });
         return confirmation.cloudSave;
       }
-      assertRawCloudRetryAllowed(rawBodyBytes);
-      emitDiagnostics({ usedRawFallback: true, fallbackReason: "network-timeout-uncommitted" });
-      try {
-        return await send(rawBody);
-      } catch (retryError) {
-        return resolveRawRetryFailure(retryError);
-      }
+      emitDiagnostics({ fallbackReason: sentRequestWasCancelled ? "cancelled-status-unconfirmed" : "network-status-unconfirmed" });
+      throw unknownCloudUploadState();
     }
   } catch (error) {
     if (diagnostics.status !== "success") {
@@ -854,6 +1421,10 @@ export async function uploadCloudSaveWithOptions(
           ? error.payload.code
           : cancelled ? "ABORTED" : diagnostics.lastErrorCode ?? "CLOUD_UPLOAD_FAILED",
       });
+    }
+    if (error instanceof CloudApiError) {
+      const described = describeCloudUploadError(error, payloadBytes, diagnostics.compressedBytes);
+      if (described.capacity) throw new CloudApiError(described.message, error.status, { ...error.payload, ...described.capacity });
     }
     throw error;
   }
@@ -867,18 +1438,21 @@ export async function compressCloudRequestBody(
   rawBody: string,
   signal?: AbortSignal,
   runtimePlatform: CloudUploadRuntimePlatform = cloudUploadRuntimePlatform(),
+  androidGzipSupported = androidBase64RequestSupported(),
+  knownRawBodyBytes?: number,
 ): Promise<{ body: Blob; headers: Record<string, string> } | null> {
   if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   if (
-    runtimePlatform === "android"
-    || getDesktopBridge()
+    runtimePlatform === "android" && !androidGzipSupported
     || typeof CompressionStream === "undefined"
     || typeof TextEncoder === "undefined"
     || typeof Blob === "undefined"
     || typeof ReadableStream === "undefined"
   ) return null;
-  const rawBytes = new TextEncoder().encode(rawBody);
-  if (rawBytes.byteLength < CLOUD_COMPRESSION_MIN_BYTES) return null;
+  const rawBodyBytes = Number.isSafeInteger(knownRawBodyBytes) && knownRawBodyBytes! >= 0
+    ? knownRawBodyBytes!
+    : utf8Bytes(rawBody);
+  if (rawBodyBytes < CLOUD_COMPRESSION_MIN_BYTES) return null;
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   let rejectControl: (reason?: unknown) => void = () => undefined;
@@ -892,10 +1466,10 @@ export async function compressCloudRequestBody(
   try {
     const compressor = new CompressionStream("gzip");
     const source = typeof Blob.prototype.stream === "function"
-      ? new Blob([rawBytes]).stream()
+      ? new Blob([rawBody]).stream()
       : new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(rawBytes);
+          controller.enqueue(new TextEncoder().encode(rawBody));
           controller.close();
         },
       });
@@ -924,19 +1498,18 @@ export async function compressCloudRequestBody(
     signal?.addEventListener("abort", onAbort, { once: true });
     await Promise.race([readAll, control]);
     if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
-    const compressed = new Uint8Array(compressedBytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      compressed.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    if (compressed.byteLength >= rawBytes.byteLength) return null;
+    if (compressedBytes >= rawBodyBytes) return null;
+    if (
+      runtimePlatform === "android"
+      && rawBodyBytes <= CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES
+      && Math.ceil(compressedBytes * 4 / 3) >= rawBodyBytes
+    ) return null;
     return {
-      body: new Blob([compressed.buffer], { type: "application/json" }),
+      body: new Blob(chunks.map((chunk) => chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer), { type: "application/json" }),
       headers: {
         "content-encoding": "gzip",
-        "x-dsp-save-original-bytes": String(rawBytes.byteLength),
-        "x-dsp-save-compressed-bytes": String(compressed.byteLength),
+        "x-dsp-save-original-bytes": String(rawBodyBytes),
+        "x-dsp-save-compressed-bytes": String(compressedBytes),
       },
     };
   } catch (error) {
@@ -953,7 +1526,14 @@ export async function compressCloudRequestBody(
 }
 
 export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): Promise<CloudSave | null> {
-  const result = await cloudRequest<{ cloudSave: CloudSave | null }>(`/cloud-save${cloudSaveQuery(slot, revision, mode)}`, {}, true);
+  const result = await cloudRequest<{ cloudSave: CloudSave | null }>(
+    `/cloud-save${cloudSaveQuery(slot, revision, mode)}`,
+    {},
+    true,
+    false,
+    0,
+    CLOUD_TRANSFER_CONTRACT.singleSaveResponseLimitBytes,
+  );
   if (!result.cloudSave) return null;
   const payloadMode = summarizeCloudPayload(result.cloudSave.payload)?.mode;
   const metadataMode = result.cloudSave.mode === undefined ? mode : normalizeCloudSaveMode(result.cloudSave.mode);
@@ -965,6 +1545,26 @@ export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot =
     });
   }
   return { ...result.cloudSave, slot, mode };
+}
+
+export async function fetchCloudTransferLimits(): Promise<{
+  cloudQuota: Record<string, unknown>;
+  transferLimits: CloudTransferLimits;
+}> {
+  return cloudRequest("/cloud-save/quota", {}, true);
+}
+
+export async function preflightCloudSaveUpload(
+  size: number,
+  checksum: string,
+  slot: CloudSaveSlot = "main",
+  mode: CloudSaveMode = "normal",
+): Promise<CloudQuotaPreflightPlan> {
+  const result = await cloudRequest<{ plan: CloudQuotaPreflightPlan }>("/cloud-save/quota", {
+    method: "POST",
+    body: JSON.stringify({ size, checksum, slot, mode }),
+  }, true);
+  return result.plan;
 }
 
 export async function fetchCloudSaveHistory(slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): Promise<CloudSaveMetadata[]> {
@@ -989,7 +1589,20 @@ export async function deleteCloudSave(slot: CloudSaveSlot, expectedRevision: num
 
 export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardEntry[]> {
   const result = await cloudRequest<{ entries: CloudLeaderboardEntry[] }>(`/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`, {}, false, true);
-  return result.entries.map((entry) => ({ ...entry, metrics: normalizeLeaderboardMetrics(entry.metrics) }));
+  const normalizeEntry = (entry: CloudLeaderboardEntry): CloudLeaderboardEntry => ({
+    ...entry,
+    metrics: normalizeLeaderboardMetrics(entry.metrics),
+  });
+  return result.entries.map(normalizeEntry);
+}
+
+export async function fetchCloudLeaderboardMe(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardMe> {
+  const result = await cloudRequest<CloudLeaderboardMe>(`/leaderboard/me?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`, {}, true);
+  return {
+    ...result,
+    entry: result.entry ? { ...result.entry, metrics: normalizeLeaderboardMetrics(result.entry.metrics) } : null,
+    serverMetrics: result.serverMetrics ? normalizeLeaderboardMetrics(result.serverMetrics) : null,
+  };
 }
 
 export async function fetchCloudPublicStatus(): Promise<CloudPublicStatus> {
@@ -1021,14 +1634,62 @@ export async function setCloudLeaderboardVisibility(visible: boolean): Promise<C
   return result.user;
 }
 
+function validStationPublicId(publicId: string): boolean {
+  return /^station_[a-f0-9]{32}$/.test(publicId);
+}
+
+export async function fetchPublicStation(publicId: string): Promise<PublicStationResponse> {
+  if (!validStationPublicId(publicId)) throw new CloudApiError("空间站公开地址无效", 404, { code: "STATION_NOT_FOUND" });
+  return cloudRequest<PublicStationResponse>(`/stations/${encodeURIComponent(publicId)}`, {}, hasCloudAuthentication(), true);
+}
+
+export async function fetchCloudStationProfile(): Promise<CloudStationProfile> {
+  return cloudRequest<CloudStationProfile>("/station/me", {}, true);
+}
+
+export async function publishCloudStation(): Promise<CloudStationProfile> {
+  const result = await cloudRequest<Omit<CloudStationProfile, "social">>("/station/publish", {
+    method: "POST",
+    body: "{}",
+  }, true);
+  const current = await fetchCloudStationProfile();
+  return { ...current, ...result };
+}
+
+export async function setCloudStationVisibility(visibility: "public" | "private"): Promise<CloudStationProfile> {
+  await cloudRequest("/station/visibility", {
+    method: "POST",
+    body: JSON.stringify({ visibility }),
+  }, true);
+  return fetchCloudStationProfile();
+}
+
+export async function setCloudStationFavorite(publicId: string, favorite: boolean): Promise<PublicStationSocial> {
+  if (!validStationPublicId(publicId)) throw new CloudApiError("空间站公开地址无效", 404, { code: "STATION_NOT_FOUND" });
+  const result = await cloudRequest<{ social: PublicStationSocial }>(`/stations/${encodeURIComponent(publicId)}/favorite`, {
+    method: favorite ? "POST" : "DELETE",
+    ...(favorite ? { body: "{}" } : {}),
+  }, true);
+  return result.social;
+}
+
+export async function sendCloudStationSignal(publicId: string, signalId: StationSignalId): Promise<PublicStationSocial> {
+  if (!validStationPublicId(publicId)) throw new CloudApiError("空间站公开地址无效", 404, { code: "STATION_NOT_FOUND" });
+  const result = await cloudRequest<{ social: PublicStationSocial }>(`/stations/${encodeURIComponent(publicId)}/signal`, {
+    method: "POST",
+    body: JSON.stringify({ signalId }),
+  }, true);
+  return result.social;
+}
+
 export async function sendCloudFeedback(kind: string, message: string, diagnostics: Record<string, unknown>): Promise<string> {
-  const result = await cloudRequest<{ id: string }>("/feedback", { method: "POST", body: JSON.stringify({ kind, message, diagnostics }) }, Boolean(getCloudToken()));
+  const result = await cloudRequest<{ id: string }>("/feedback", { method: "POST", body: JSON.stringify({ kind, message, diagnostics }) }, hasCloudAuthentication());
   return result.id;
 }
 
 export async function reportCloudError(message: string, diagnostics: Record<string, unknown>): Promise<void> {
   try {
-    await cloudRequest("/errors", { method: "POST", body: JSON.stringify({ kind: "client-error", message, diagnostics }) }, Boolean(getCloudToken()));
+    await cloudRequest("/errors", { method: "POST", body: JSON.stringify({ kind: "client-error", message, diagnostics }) }, hasCloudAuthentication());
   } catch {
     // Error reporting must never cause another user-facing error.
   }

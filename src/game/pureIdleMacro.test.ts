@@ -3,13 +3,14 @@ import { createContentPackRegistry } from "./contentPacks";
 import { createInitialState } from "./engine";
 import { hashGameState } from "./benchmark";
 import {
+  applyPureIdleMacroFinalState,
   advancePureIdleMacroSession,
   createConservativePureIdleMacroSession,
   createPureIdleMacroSession,
-  finalizePureIdleMacroSession,
   PURE_IDLE_MACRO_ALGORITHM_VERSION,
   PURE_IDLE_MACRO_VALIDATION_WALL_SECONDS,
 } from "./pureIdleMacro";
+import { finalizePureIdleMacroSession } from "./pureIdleMacroValidation";
 import { applyPureIdleAffineContract, type PureIdleAffineContract } from "./offlineApproximation";
 import type { GameState } from "./types";
 
@@ -62,6 +63,55 @@ function addWindGeneration(state: GameState, machineCount: number): void {
 }
 
 describe("pure idle macro session", () => {
+  it("binds stop settlement, completed research, and the original pause intent before serialization", () => {
+    const baseline = pureIdleState();
+    baseline.idleSettlement = {
+      currentRunStartedAt: 1_000,
+      currentRunElapsed: 30,
+      lastSettledAt: 30,
+      totalIdleTime: 40,
+      currentRunProduction: { iron_ore: 2 },
+      totalProduction: { iron_ore: 7 },
+    };
+    baseline.totalProduced.iron_ore = 10;
+    const candidate = structuredClone(baseline);
+    candidate.totalProduced.iron_ore = 18;
+    candidate.research.completedTechIds.push("antimatter");
+    candidate.research.selectedTechId = "universe_matrix";
+    candidate.research.queuedTechIds = ["micro_black_hole_containment"];
+    candidate.research.progressByTech.universe_matrix = {
+      electromagnetic_matrix: 100,
+      energy_matrix: 100,
+      structure_matrix: 100,
+      information_matrix: 100,
+      gravity_matrix: 100,
+    };
+    candidate.paused = false;
+    candidate.timeWarp.pendingSimulationSeconds = 12;
+    candidate.timeWarp.pendingWallSeconds = 3;
+
+    const finalized = applyPureIdleMacroFinalState(candidate, 90, {
+      startedPaused: true,
+      baselineIdleSettlement: baseline.idleSettlement,
+      baselineTotalProduced: baseline.totalProduced,
+    });
+
+    expect(finalized).not.toBe(candidate);
+    expect(candidate.research.completedTechIds).not.toContain("universe_matrix");
+    expect(finalized.research.completedTechIds).toContain("universe_matrix");
+    expect(finalized.research.selectedTechId).toBe("micro_black_hole_containment");
+    expect(finalized.paused).toBe(true);
+    expect(finalized.timeWarp).toMatchObject({ pendingSimulationSeconds: 0, pendingWallSeconds: 0 });
+    expect(finalized.idleSettlement).toMatchObject({
+      currentRunStartedAt: null,
+      currentRunElapsed: 90,
+      lastSettledAt: 90,
+      totalIdleTime: 100,
+      currentRunProduction: { iron_ore: 8 },
+      totalProduction: { iron_ore: 13 },
+    });
+  });
+
   it("uses three fixed calibration windows and advances only committed wall time", () => {
     const source = pureIdleState();
     const before = hashGameState(source);
@@ -221,7 +271,7 @@ describe("pure idle macro session", () => {
 
     const result = finalizePureIdleMacroSession(session, 7 * 24 * 60 * 60, createContentPackRegistry());
 
-    expect(result.state.version).toBe(46);
+    expect(result.state.version).toBe(47);
     expect(result.state.timeWarp.enabled).toBe(false);
     expect(result.state.timeWarp.pendingSimulationSeconds).toBe(0);
     expect(result.state.timeWarp.pendingWallSeconds).toBe(0);

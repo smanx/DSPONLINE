@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { selectSettingsCategory } from "./settings-helpers";
 
-const RELEASE_NOTE_ID = "2026-08-09-v1.0.35";
+const RELEASE_NOTE_ID = "2026-08-17-v1.0.46";
 
 async function seedReleaseFactory(page: Page, options: { theme?: "dark" | "light"; locale?: "zh-CN" | "en"; paused?: boolean; mobileUi?: "legacy" | "next" } = {}) {
   await page.addInitScript(({ releaseNoteId, theme, locale, paused, mobileUi }) => {
@@ -221,6 +221,38 @@ test("Harmony-style IME composition survives simulation refreshes and orientatio
   await expect(page.getByRole("dialog", { name: "建造" }).getByLabel("搜索建造项目")).toHaveValue("");
 });
 
+test("star-map search and metadata drafts survive simulation refresh, responsive remounts and workspace reopen", async ({ page }) => {
+  await seedReleaseFactory(page, { paused: false });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openGame(page);
+  await page.getByLabel("打开星图").click();
+  let starMap = page.getByRole("dialog", { name: "星图" });
+  const search = starMap.getByLabel("搜索星球资料");
+  await search.dispatchEvent("compositionstart", { data: "" });
+  await search.fill("绿糖出口");
+  await search.dispatchEvent("compositionupdate", { data: "绿糖出口" });
+  const metadata = starMap.locator(".stellar-metadata-manager");
+  await metadata.locator("summary").click();
+  const note = metadata.getByLabel("备注");
+  await note.dispatchEvent("compositionstart", { data: "" });
+  await note.fill("量子物流中转与绿糖出口");
+  await note.dispatchEvent("compositionupdate", { data: "量子物流中转与绿糖出口" });
+
+  await page.waitForTimeout(1_200);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(search).toHaveValue("绿糖出口");
+  await expect(note).toHaveValue("量子物流中转与绿糖出口");
+  await search.dispatchEvent("compositionend", { data: "绿糖出口" });
+  await note.dispatchEvent("compositionend", { data: "量子物流中转与绿糖出口" });
+
+  await starMap.getByLabel("关闭星图").click();
+  await openHeaderWorkspace(page, "打开星图", /^星图$/);
+  starMap = page.getByRole("dialog", { name: "星图" });
+  await expect(starMap.getByLabel("搜索星球资料")).toHaveValue("绿糖出口");
+  await starMap.locator(".stellar-metadata-manager summary").click();
+  await expect(starMap.locator(".stellar-metadata-manager").getByLabel("备注")).toHaveValue("量子物流中转与绿糖出口");
+});
+
 test("production codex locates every producer, highlights upstream belts and clears cleanly", async ({ page }) => {
   await seedReleaseFactory(page);
   await page.setViewportSize({ width: 1920, height: 1080 });
@@ -299,7 +331,7 @@ test("storage ports and tray deletion controls stay reachable across font and mo
   await page.getByRole("dialog", { name: "物资" }).getByRole("button", { name: "管理", exact: true }).click();
   const tray = page.getByRole("dialog", { name: "管理当前行星物资托盘" });
   await tray.getByRole("button", { name: "全选" }).click();
-  const actions = tray.locator(":scope > section > footer button");
+  const actions = tray.locator(":scope > footer button");
   await expect(actions).toHaveCount(3);
   for (const action of await actions.all()) {
     await expect(action).toBeVisible();
@@ -414,3 +446,4 @@ test("next-version selection, line finder, planet statistics and local settings 
   await page.getByRole("button", { name: "关闭运营中心" }).click();
   await expect(page.locator(".factory-canvas")).toBeVisible();
 });
+

@@ -1,4 +1,4 @@
-import type { BeltConnection, EntityKind, FactoryEntity, ItemId, PlanetId } from "./types";
+import type { BeltConnection, BeltInputPortIndex, EntityKind, FactoryEntity, ItemId, PlanetId } from "./types";
 import type { BeltBundleInfo, PortOccupancy } from "./network";
 
 export interface CanvasEntityTopology {
@@ -19,7 +19,7 @@ export interface FactoryCanvasTopology {
   entities: readonly CanvasEntityTopology[];
   belts: readonly CanvasBeltTopology[];
   connectedInputsByTarget: ReadonlyMap<string, readonly ItemId[]>;
-  targetPortItemsByEntity: ReadonlyMap<string, Readonly<Partial<Record<0 | 1 | 2, ItemId>>>>;
+  targetPortItemsByEntity: ReadonlyMap<string, Readonly<Partial<Record<BeltInputPortIndex, ItemId>>>>;
   occupancy: PortOccupancy;
   bundleByBeltId: ReadonlyMap<string, BeltBundleInfo>;
 }
@@ -67,7 +67,7 @@ export function reconcileFactoryCanvasTopology(
   if (topologyRevision === undefined && previous?.signature === signature) return previous;
 
   const connectedInputsByTarget = new Map<string, ItemId[]>();
-  const targetPortItemsByEntity = new Map<string, Partial<Record<0 | 1 | 2, ItemId>>>();
+  const targetPortItemsByEntity = new Map<string, Partial<Record<BeltInputPortIndex, ItemId>>>();
   const input = new Map<string, Partial<Record<ItemId, number>>>();
   const output = new Map<string, Partial<Record<ItemId, number>>>();
   const bundles = new Map<string, CanvasBeltTopology[]>();

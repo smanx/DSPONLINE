@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const SNAPSHOT_KEY = "dsp-idle-network.save.v1.snapshot.manual.idb-migration";
-const RELEASE_NOTE_ID = "2026-08-09-v1.0.35";
+const RELEASE_NOTE_ID = "2026-08-17-v1.0.46";
 
 test("verified IndexedDB migration removes the legacy localStorage save copy", async ({ page }) => {
   const legacyValue = JSON.stringify({ savedAt: 1_777_777_777_000, kind: "snapshot", reason: "迁移验证" });
@@ -16,7 +16,7 @@ test("verified IndexedDB migration removes the legacy localStorage save copy", a
 
   const persisted = await page.evaluate(async ({ databaseName, storeName, key }) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(databaseName, 1);
+      const request = indexedDB.open(databaseName);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -76,6 +76,31 @@ test("mobile registration preserves sibling fields during IME composition and or
   });
 });
 
+test("production-library search preserves IME composition across responsive redraws", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript((releaseNoteId) => {
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", releaseNoteId);
+    window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
+    window.localStorage.setItem("dsp-idle-network.mobile-ui.v1", "next");
+  }, RELEASE_NOTE_ID);
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  await page.getByRole("button", { name: "更多", exact: true }).click();
+  await page.getByRole("button", { name: /生产资料库/ }).click();
+  const library = page.getByRole("dialog", { name: "生产资料库" });
+  const search = library.getByLabel("搜索配方物品");
+  await search.evaluate((node) => {
+    const input = node as HTMLInputElement;
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "量子" }));
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "量子");
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: "量子", inputType: "insertCompositionText", isComposing: true }));
+  });
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(search).toHaveValue("量子");
+  await search.dispatchEvent("compositionend", { data: "量子" });
+  await expect(search).toHaveValue("量子");
+});
+
 test("verified primary saves use IndexedDB and selected snapshots can be managed in bulk", async ({ page }) => {
   await page.addInitScript((releaseNoteId) => {
     window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", releaseNoteId);
@@ -86,10 +111,12 @@ test("verified primary saves use IndexedDB and selected snapshots can be managed
   await page.goto("/?menu=1&storageMigration=production");
   await page.getByRole("button", { name: /开始游戏/ }).click();
   await expect(page.locator(".factory-canvas")).toBeVisible();
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"))).toBeNull();
   await expect.poll(() => page.evaluate(async () => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("dsp-idle-network.local-saves", 1);
+      const request = indexedDB.open("dsp-idle-network.local-saves");
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -112,14 +139,44 @@ test("verified primary saves use IndexedDB and selected snapshots can be managed
   await operations.getByRole("button", { name: "删除所选" }).click();
   const confirmation = page.getByRole("dialog", { name: /删除2 份所选快照/ });
   await confirmation.getByRole("button", { name: /继续确认/ }).click();
-  await confirmation.getByRole("button", { name: /确认永久删除/ }).click();
+  await page.getByRole("alertdialog", { name: /删除2 份所选快照/ }).getByRole("button", { name: /确认永久删除/ }).click();
   await expect(manualRows).toHaveCount(0);
 
+  const beforePagehideIdentity = await page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    return store.getVerifiedPrimaryLocalSaveIdentity("normal");
+  });
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1") !== null)).toBe(true);
+  // The compatibility (1.0.43) lifecycle path has no durable recovery head
+  // to seal synchronously. If simulation advanced since the last verified
+  // primary, pagehide must retain a small localStorage emergency mirror so a
+  // hard close cannot discard that progress. Startup consumes and clears the
+  // mirror after its writer-chain and checksum checks pass.
+  const pagehideMirror = await page.evaluate(async () => {
+    const coordination = await import("/src/game/localSaveCoordination.ts");
+    const keys = coordination.localSaveEmergencyMirrorKeys("normal");
+    const payload = window.localStorage.getItem(keys.payload);
+    const metadataRaw = window.localStorage.getItem(keys.metadata);
+    return {
+      hasPayload: payload !== null,
+      metadata: metadataRaw ? JSON.parse(metadataRaw) as { mode?: string; saveKey?: string; checksum?: string | null; candidateRevision?: number } : null,
+    };
+  });
+  expect(pagehideMirror.hasPayload).toBe(true);
+  expect(pagehideMirror.metadata).toMatchObject({
+    mode: "normal",
+    saveKey: "dsp-idle-network.save.v1",
+    candidateRevision: expect.any(Number),
+  });
+  if (beforePagehideIdentity && pagehideMirror.metadata) {
+    expect(pagehideMirror.metadata.checksum).not.toBe(beforePagehideIdentity.stateChecksum);
+  }
   await page.reload();
   await expect(page.locator(".start-menu")).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"))).toBeNull();
+  await page.locator(".start-menu-primary").click();
+  await expect(page.locator(".factory-canvas")).toBeVisible();
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-runtime-recovery", "unavailable", { timeout: 15_000 });
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload"))).toBeNull();
 });
 
 test("prominent home language controls fit desktop and 200 percent mobile text", async ({ page }) => {

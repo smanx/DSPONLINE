@@ -3,12 +3,15 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 import {
   backupWindowState,
+  backupStartupGraceElapsed,
+  normalizeBackupStartupGraceMs,
   buildCloudHistoryPrunePlan,
   collectSqliteGovernanceMetrics,
   parseDailyBackupWindow,
   publicCloudHistoryPrunePlan,
   trimCloudHistoryMetadataInPlace,
 } from "./cloud-governance.mjs";
+import { initializeCloudPayloadStore, writeCloudPayload } from "./cloud-payload-store.mjs";
 
 function fixtureData() {
   return {
@@ -18,6 +21,10 @@ function fixtureData() {
     cloudSaveHistory: { user_a: Array.from({ length: 25 }, (_, index) => ({ revision: index + 1 })) },
     cloudSaveSlots: {},
     cloudSaveSlotHistory: {},
+    cloudSavesByMode: {},
+    cloudSaveHistoryByMode: {},
+    cloudSaveSlotsByMode: {},
+    cloudSaveSlotHistoryByMode: {},
   };
 }
 
@@ -34,6 +41,38 @@ test("builds an auditable and stable cloud-history prune preview", () => {
   assert.equal(first.deletionCount, 6);
   assert.deepEqual(first.reasons, { orphanAccount: 1, invalidSlot: 0, expiredRevision: 5 });
   assert.equal(Object.hasOwn(publicCloudHistoryPrunePlan(first), "deletions"), false);
+});
+
+test("retains and trims normal and speedrun histories independently in all four slots", () => {
+  const data = fixtureData();
+  data.cloudSavesByMode.user_a = { speedrun: { revision: 25 } };
+  data.cloudSaveHistoryByMode.user_a = {
+    speedrun: Array.from({ length: 25 }, (_, index) => ({ revision: index + 1 })),
+  };
+  data.cloudSaveSlots.user_a = {};
+  data.cloudSaveSlotHistory.user_a = {};
+  data.cloudSaveSlotsByMode.user_a = { speedrun: {} };
+  data.cloudSaveSlotHistoryByMode.user_a = { speedrun: {} };
+  for (const slot of ["1", "2", "3"]) {
+    data.cloudSaveSlots.user_a[slot] = { revision: 25 };
+    data.cloudSaveSlotHistory.user_a[slot] = Array.from({ length: 25 }, (_, index) => ({ revision: index + 1 }));
+    data.cloudSaveSlotsByMode.user_a.speedrun[slot] = { revision: 25 };
+    data.cloudSaveSlotHistoryByMode.user_a.speedrun[slot] = Array.from({ length: 25 }, (_, index) => ({ revision: index + 1 }));
+  }
+
+  assert.equal(trimCloudHistoryMetadataInPlace(data, 20), 40);
+  const rows = [];
+  for (const slot of ["main", "1", "2", "3"]) {
+    for (let revision = 1; revision <= 25; revision += 1) {
+      rows.push({ userId: "user_a", slot, revision });
+      rows.push({ userId: "user_a", slot: `speedrun:${slot}`, revision });
+    }
+  }
+  const plan = buildCloudHistoryPrunePlan(data, rows, 20);
+  assert.equal(plan.deletionCount, 40);
+  assert.deepEqual(plan.reasons, { orphanAccount: 0, invalidSlot: 0, expiredRevision: 40 });
+  assert.equal(plan.deletions.some((entry) => entry.slot.startsWith("speedrun:") && entry.revision > 5), false);
+  assert.equal(plan.deletions.some((entry) => !entry.slot.startsWith("speedrun:") && entry.revision > 5), false);
 });
 
 test("reports SQLite table, page and revision sizes without exposing payloads", () => {
@@ -55,6 +94,30 @@ test("reports SQLite table, page and revision sizes without exposing payloads", 
   }
 });
 
+test("reports logical and physical payload bytes after content-addressed deduplication", () => {
+  const database = new Database(":memory:");
+  try {
+    database.exec("CREATE TABLE app_state (id INTEGER PRIMARY KEY, payload TEXT); CREATE TABLE cloud_save_payloads (user_id TEXT NOT NULL, slot TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (user_id, slot, revision)) WITHOUT ROWID");
+    initializeCloudPayloadStore(database);
+    database.prepare("INSERT INTO app_state VALUES (1, ?)").run(JSON.stringify(fixtureData()));
+    const payload = JSON.stringify({ state: { version: 46, mode: "normal" } });
+    database.transaction(() => {
+      writeCloudPayload(database, { userId: "user_a", slot: "main", revision: 1, payload });
+      writeCloudPayload(database, { userId: "user_a", slot: "1", revision: 1, payload });
+    })();
+    const metrics = collectSqliteGovernanceMetrics(database, fixtureData());
+    assert.equal(metrics.cloudPayloadRows, 2);
+    assert.equal(metrics.cloudPayloadAliasRows, 2);
+    assert.equal(metrics.cloudPayloadBlobBytes, Buffer.byteLength(payload));
+    assert.equal(metrics.cloudPayloadLogicalBytes, Buffer.byteLength(payload) * 2);
+    assert.equal(metrics.cloudPayloadDeduplicatedBytes, Buffer.byteLength(payload));
+    assert.equal(metrics.cloudPayloadOrphanBlobs, 0);
+    assert.equal(JSON.stringify(metrics).includes(payload), false);
+  } finally {
+    database.close();
+  }
+});
+
 test("supports a daily low-traffic backup window including midnight rollover", () => {
   const daytime = parseDailyBackupWindow("02:00-05:00");
   assert.equal(backupWindowState(daytime, new Date(2026, 7, 9, 3, 0)).withinWindow, true);
@@ -64,4 +127,16 @@ test("supports a daily low-traffic backup window including midnight rollover", (
   assert.equal(state.withinWindow, true);
   assert.equal(state.dayKey, "2026-08-09");
   assert.equal(parseDailyBackupWindow("25:00-26:00"), null);
+});
+
+test("delays restart-time backups until the bounded startup grace has elapsed", () => {
+  const startedAt = Date.parse("2026-08-13T03:00:00+08:00");
+  const grace = normalizeBackupStartupGraceMs(15 * 60 * 1000);
+  assert.equal(backupStartupGraceElapsed(startedAt, startedAt, grace), false);
+  assert.equal(backupStartupGraceElapsed(startedAt, startedAt + grace - 1, grace), false);
+  assert.equal(backupStartupGraceElapsed(startedAt, startedAt + grace, grace), true);
+  assert.equal(backupStartupGraceElapsed(startedAt, startedAt, 0), true);
+  assert.equal(normalizeBackupStartupGraceMs(-1), 0);
+  assert.equal(normalizeBackupStartupGraceMs(10 * 60 * 60 * 1000), 60 * 60 * 1000);
+  assert.equal(normalizeBackupStartupGraceMs(Number.NaN), 15 * 60 * 1000);
 });

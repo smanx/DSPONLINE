@@ -1,7 +1,24 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
+const { PassThrough } = require("node:stream");
 const { createReleaseChannels, optionalHttpsUrl, resolveReleaseChannel } = require("./release-channels.cjs");
+const {
+  contract: cloudTransferContract,
+  exactUint8Array,
+  normalizeRequestHeaders,
+  requestBodyLimit,
+  requestTimeoutMs,
+  validRequestId,
+} = require("./cloud-transport.cjs");
+const {
+  AccountArchiveDownloadRegistry,
+  downloadAccountArchiveToFile,
+  normalizeBearerAuthorization,
+  normalizeRequestId: normalizeAccountArchiveRequestId,
+  sanitizeArchiveFileName,
+  serializeAccountArchiveDownloadError,
+} = require("./account-archive-download.cjs");
 const packageMetadata = require("../package.json");
 
 const isDevelopment = Boolean(process.env.DSP_DESKTOP_DEV_URL);
@@ -19,8 +36,10 @@ const configuredApiBaseUrl = optionalHttpsUrl(
 );
 const apiBaseUrl = configuredApiBaseUrl ? new URL(`${configuredApiBaseUrl}/`) : null;
 const allowedApiMethods = new Set(["GET", "POST", "PUT", "DELETE"]);
-const maximumRequestBytes = 8 * 1024 * 1024;
-const maximumResponseBytes = 32 * 1024 * 1024;
+const MAXIMUM_CONCURRENT_TRANSFER_REQUESTS = 4;
+const maximumLegacyRequestBytes = cloudTransferContract.legacyJsonRequestLimitBytes;
+const maximumSmallRequestBytes = 8 * 1024 * 1024;
+const maximumResponseBytes = cloudTransferContract.singleSaveResponseLimitBytes;
 const DESKTOP_BASE_SCALE = 0.8;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 
@@ -33,6 +52,11 @@ let updateShutdownPromise = null;
 let updateShutdownResolve = null;
 let updateShutdownRequested = false;
 let fontScale = 1;
+const activeApiRequests = new Map();
+const activeAccountArchiveDownloads = new AccountArchiveDownloadRegistry(1);
+const activeAccountArchiveDownloadCompletions = new Set();
+let accountArchiveQuitDrainPromise = null;
+let accountArchiveQuitDrainComplete = false;
 let updateState = {
   state: isDevelopment ? "development" : "idle",
   message: isDevelopment ? "开发环境不检查更新" : channel.url ? "尚未检查" : "此构建未配置更新源",
@@ -131,20 +155,26 @@ async function requestCloudApi(event, request) {
   const target = resolveApiRequestUrl(request?.path);
   const body = request?.body == null ? undefined : request.body;
   if (body != null && typeof body !== "string") throw new Error("API 请求正文无效");
-  if (body && Buffer.byteLength(body, "utf8") > maximumRequestBytes) throw new Error("API 请求正文过大");
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(request?.headers ?? {})) {
-    const normalized = name.toLowerCase();
-    if ((normalized === "content-type" || normalized === "authorization") && typeof value === "string") headers.set(normalized, value);
-  }
+  const bodyBytes = body ? Buffer.byteLength(body, "utf8") : 0;
+  const requestLimit = method === "PUT" && target.pathname.endsWith("/cloud-save")
+    ? maximumLegacyRequestBytes
+    : maximumSmallRequestBytes;
+  if (bodyBytes > requestLimit) throw new Error("API 请求正文过大");
+  const headers = new Headers(normalizeRequestHeaders(request?.headers));
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12_000);
+  const timer = setTimeout(
+    () => controller.abort(),
+    requestTimeoutMs(bodyBytes, request?.expectedResponseBytes, request?.timeoutMs),
+  );
   try {
     const response = await fetch(target, { method, headers, body, redirect: "error", signal: controller.signal });
     const responseLength = Number(response.headers.get("content-length") || 0);
-    if (responseLength > maximumResponseBytes) throw new Error("云服务响应过大");
+    const responseLimit = Number.isFinite(request?.expectedResponseBytes)
+      ? Math.min(maximumResponseBytes, Math.max(0, Math.floor(request.expectedResponseBytes)))
+      : maximumResponseBytes;
+    if (responseLength > responseLimit) throw new Error("云服务响应过大");
     const responseBody = await response.text();
-    if (Buffer.byteLength(responseBody, "utf8") > maximumResponseBytes) throw new Error("云服务响应过大");
+    if (Buffer.byteLength(responseBody, "utf8") > responseLimit) throw new Error("云服务响应过大");
     return {
       ok: response.ok,
       status: response.status,
@@ -154,6 +184,120 @@ async function requestCloudApi(event, request) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function serializedApiError(error) {
+  return {
+    name: error instanceof Error ? error.name : "Error",
+    message: error instanceof Error ? error.message : "桌面云请求失败",
+    ...(error && typeof error === "object" && typeof error.code === "string" ? { code: error.code } : {}),
+  };
+}
+
+function closeTransferPort(port) {
+  try { port.close(); } catch { /* the renderer may already have closed it */ }
+}
+
+function postTransferError(port, error) {
+  try { port.postMessage({ error: serializedApiError(error) }); } catch { /* renderer is gone */ }
+  closeTransferPort(port);
+}
+
+async function waitForResponseAck(record, expectedBytes) {
+  if (record.cancelled) throw Object.assign(new Error("云存档上传已取消"), { name: "AbortError", code: "ABORTED" });
+  await new Promise((resolve, reject) => {
+    const finishResolve = () => {
+      if (record.responseAckTimer) clearTimeout(record.responseAckTimer);
+      resolve();
+    };
+    const finishReject = (error) => {
+      if (record.responseAckTimer) clearTimeout(record.responseAckTimer);
+      reject(error);
+    };
+    record.responseAck = { expectedBytes, resolve: finishResolve, reject: finishReject };
+    record.responseAckTimer = setTimeout(() => {
+      if (record.responseAck?.expectedBytes !== expectedBytes) return;
+      const { reject: rejectAck } = record.responseAck;
+      record.responseAck = null;
+      rejectAck(Object.assign(new Error("桌面云响应分片确认超时"), { name: "AbortError", code: "CLOUD_REQUEST_TIMEOUT" }));
+    }, cloudTransferContract.baseTimeoutMs);
+  });
+}
+
+async function streamTransferResponse(response, request, port, record) {
+  const responseLimit = Number.isFinite(request.expectedResponseBytes)
+    ? Math.min(maximumResponseBytes, Math.max(0, Math.floor(request.expectedResponseBytes)))
+    : maximumResponseBytes;
+  const responseLength = Number(response.headers.get("content-length") || 0);
+  if (responseLength > responseLimit) throw new Error("云服务响应过大");
+  port.postMessage({
+    responseStart: {
+      ok: response.ok,
+      status: response.status,
+      headers: { "content-type": response.headers.get("content-type") || "application/json" },
+    },
+  });
+  let receivedBytes = 0;
+  const reader = response.body?.getReader();
+  if (reader) {
+    try {
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
+        const chunk = exactUint8Array(result.value);
+        receivedBytes += chunk.byteLength;
+        if (receivedBytes > responseLimit) throw new Error("云服务响应过大");
+        port.postMessage({ responseChunk: chunk, receivedBytes });
+        await waitForResponseAck(record, receivedBytes);
+      }
+    } finally {
+      try { reader.releaseLock(); } catch { /* response stream already closed */ }
+    }
+  }
+  if (responseLength > 0 && receivedBytes !== responseLength) throw new Error("云服务响应长度不一致");
+  port.postMessage({ responseEnd: true, totalBytes: receivedBytes });
+  closeTransferPort(port);
+}
+
+async function requestCloudApiTransfer(event, request, port, record) {
+  const headers = normalizeRequestHeaders(request.headers);
+  if (request.bodyByteLength > requestBodyLimit(headers)) throw new Error("API 请求正文过大");
+  const method = typeof request.method === "string" ? request.method.toUpperCase() : "GET";
+  if (!allowedApiMethods.has(method)) throw new Error("API 请求方法无效");
+  const target = resolveApiRequestUrl(request.path);
+  const timeoutMs = requestTimeoutMs(request.bodyByteLength, request.expectedResponseBytes, request.timeoutMs);
+  const timer = setTimeout(() => record.controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(target, {
+      method,
+      headers: new Headers(headers),
+      body: request.bodyByteLength > 0 ? record.requestStream : undefined,
+      ...(request.bodyByteLength > 0 ? { duplex: "half" } : {}),
+      redirect: "error",
+      signal: record.controller.signal,
+    });
+    if (record.cancelled || record.controller.signal.aborted || !activeApiRequests.has(request.requestId)) return;
+    await streamTransferResponse(response, request, port, record);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function cancelAllApiRequests() {
+  for (const record of activeApiRequests.values()) {
+    record.cancelled = true;
+    if (record.intakeTimer) clearTimeout(record.intakeTimer);
+    if (record.responseAckTimer) clearTimeout(record.responseAckTimer);
+    record.controller.abort();
+    record.requestStream.destroy();
+    record.responseAck?.reject(Object.assign(new Error("云存档上传已取消"), { name: "AbortError", code: "ABORTED" }));
+    closeTransferPort(record.port);
+  }
+  activeApiRequests.clear();
+}
+
+function cancelAllAccountArchiveDownloads() {
+  activeAccountArchiveDownloads.cancelAll();
 }
 
 function allowLoadedNavigation(url) {
@@ -217,7 +361,11 @@ function createWindow() {
   });
   mainWindow.on("move", scheduleWindowStateSave);
   mainWindow.on("close", persistWindowState);
-  mainWindow.on("closed", () => { mainWindow = null; });
+  mainWindow.on("closed", () => {
+    cancelAllApiRequests();
+    cancelAllAccountArchiveDownloads();
+    mainWindow = null;
+  });
 
   if (isDevelopment) {
     void mainWindow.loadURL(process.env.DSP_DESKTOP_DEV_URL);
@@ -274,6 +422,193 @@ ipcMain.handle("desktop:set-font-scale", (_event, requestedScale) => {
 });
 
 ipcMain.handle("desktop:api-request", requestCloudApi);
+
+ipcMain.handle("desktop:download-account-archive", async (event, request) => {
+  let requestId = null;
+  let record = null;
+  let completion = null;
+  let resolveCompletion = null;
+  try {
+    if (!trustedSender(event)) throw new Error("账号归档下载来源无效");
+    requestId = normalizeAccountArchiveRequestId(request?.requestId);
+    const headers = normalizeRequestHeaders({ authorization: request?.authorization });
+    const authorization = normalizeBearerAuthorization(headers.authorization);
+    record = activeAccountArchiveDownloads.begin(requestId);
+
+    const suggestedName = sanitizeArchiveFileName(request?.suggestedName);
+    const selection = await dialog.showSaveDialog(mainWindow, {
+      title: "导出 DSP极简网络账号归档",
+      defaultPath: path.join(app.getPath("downloads"), suggestedName),
+      buttonLabel: "保存账号归档",
+      filters: [{ name: "DSP极简网络账号归档", extensions: ["dspaccount.zip"] }],
+      properties: ["showOverwriteConfirmation", "createDirectory"],
+    });
+    if (selection.canceled || !selection.filePath) {
+      return { ok: true, value: { cancelled: true, requestId } };
+    }
+    completion = new Promise((resolve) => { resolveCompletion = resolve; });
+    activeAccountArchiveDownloadCompletions.add(completion);
+    const target = resolveApiRequestUrl("/account/export/archive");
+    const result = await downloadAccountArchiveToFile({
+      url: target,
+      targetPath: selection.filePath,
+      authorization,
+      signal: record.controller.signal,
+    });
+    return {
+      ok: true,
+      value: {
+        cancelled: false,
+        requestId,
+        byteLength: result.byteLength,
+        fileName: result.fileName,
+      },
+    };
+  } catch (error) {
+    return { ok: false, error: serializeAccountArchiveDownloadError(error) };
+  } finally {
+    if (requestId && record) activeAccountArchiveDownloads.finish(requestId, record);
+    resolveCompletion?.();
+    if (completion) activeAccountArchiveDownloadCompletions.delete(completion);
+  }
+});
+
+ipcMain.on("desktop:cancel-account-archive-download", (event, requestId) => {
+  if (!trustedSender(event) || !validRequestId(requestId)) return;
+  activeAccountArchiveDownloads.cancel(requestId);
+});
+
+ipcMain.on("desktop:api-request-transfer", (event, request) => {
+  const port = event.ports?.[0];
+  if (!trustedSender(event) || !port) {
+    if (port) postTransferError(port, new Error("API 调用来源无效"));
+    return;
+  }
+  const requestId = request?.requestId;
+  if (!validRequestId(requestId) || !Number.isSafeInteger(request?.bodyByteLength) || request.bodyByteLength < 0) {
+    postTransferError(port, new Error("API 请求标识或正文长度无效"));
+    return;
+  }
+  if (activeApiRequests.has(requestId)) {
+    postTransferError(port, new Error("API 请求标识重复"));
+    return;
+  }
+  if (activeApiRequests.size >= MAXIMUM_CONCURRENT_TRANSFER_REQUESTS) {
+    postTransferError(port, Object.assign(new Error("桌面云请求过多，请稍后重试"), { code: "CLOUD_REQUEST_BUSY" }));
+    return;
+  }
+  const normalizedTransferHeaders = normalizeRequestHeaders(request?.headers);
+  const declaredBodyLimit = requestBodyLimit(normalizedTransferHeaders);
+  if (request.bodyByteLength > declaredBodyLimit) {
+    postTransferError(port, new Error("API 请求正文过大"));
+    return;
+  }
+  normalizedTransferHeaders[cloudTransferContract.requestIdHeader] = requestId;
+  request = { ...request, headers: normalizedTransferHeaders };
+  const record = {
+    controller: new AbortController(),
+    port,
+    cancelled: false,
+    receivedBody: request.bodyByteLength === 0,
+    receivedBytes: 0,
+    intakeTimer: null,
+    requestStream: new PassThrough({ highWaterMark: cloudTransferContract.ipcChunkBytes }),
+    responseAck: null,
+    responseAckTimer: null,
+  };
+  activeApiRequests.set(requestId, record);
+  const armIntakeTimeout = () => {
+    if (record.intakeTimer) clearTimeout(record.intakeTimer);
+    record.intakeTimer = setTimeout(() => {
+      if (!activeApiRequests.has(requestId) || record.receivedBody) return;
+      record.cancelled = true;
+      record.controller.abort();
+      record.requestStream.destroy();
+      activeApiRequests.delete(requestId);
+      postTransferError(port, Object.assign(new Error("桌面云请求正文接收超时"), { name: "AbortError", code: "CLOUD_REQUEST_TIMEOUT" }));
+    }, cloudTransferContract.baseTimeoutMs);
+  };
+  armIntakeTimeout();
+  port.on("message", (messageEvent) => {
+    const message = messageEvent.data;
+    if (message?.responseAck !== undefined) {
+      if (!record.responseAck || message.responseAck !== record.responseAck.expectedBytes) return;
+      const { resolve } = record.responseAck;
+      record.responseAck = null;
+      resolve();
+      return;
+    }
+    if (message?.requestChunk !== undefined) {
+      if (record.receivedBody) {
+        record.controller.abort();
+        record.requestStream.destroy(new Error("API 请求正文已结束"));
+        return;
+      }
+      let chunk;
+      try { chunk = exactUint8Array(message.requestChunk); } catch (error) {
+        record.controller.abort();
+        record.requestStream.destroy(error);
+        return;
+      }
+      record.receivedBytes += chunk.byteLength;
+      if (chunk.byteLength === 0 || chunk.byteLength > cloudTransferContract.ipcChunkBytes || record.receivedBytes > request.bodyByteLength || message.offset !== record.receivedBytes) {
+        record.controller.abort();
+        record.requestStream.destroy(new Error("API 请求正文长度不一致"));
+        return;
+      }
+      armIntakeTimeout();
+      const acknowledgedBytes = record.receivedBytes;
+      if (record.requestStream.write(Buffer.from(chunk))) port.postMessage({ requestAck: acknowledgedBytes });
+      else record.requestStream.once("drain", () => {
+        if (!record.cancelled) port.postMessage({ requestAck: acknowledgedBytes });
+      });
+      return;
+    }
+    if (message?.requestEnd) {
+      if (message.totalBytes !== request.bodyByteLength || record.receivedBytes !== request.bodyByteLength) {
+        record.controller.abort();
+        record.requestStream.destroy(new Error("API 请求正文长度不一致"));
+        return;
+      }
+      record.receivedBody = true;
+      if (record.intakeTimer) clearTimeout(record.intakeTimer);
+      record.requestStream.end();
+    }
+  });
+  port.once("close", () => {
+    if (!activeApiRequests.has(requestId)) return;
+    record.cancelled = true;
+    if (record.intakeTimer) clearTimeout(record.intakeTimer);
+    if (record.responseAckTimer) clearTimeout(record.responseAckTimer);
+    record.controller.abort();
+    record.requestStream.destroy();
+    record.responseAck?.reject(Object.assign(new Error("云存档上传已取消"), { name: "AbortError", code: "ABORTED" }));
+    activeApiRequests.delete(requestId);
+  });
+  port.start();
+  void requestCloudApiTransfer(event, request, port, record)
+    .catch((error) => {
+      if (!record.cancelled) postTransferError(port, error);
+    })
+    .finally(() => {
+      activeApiRequests.delete(requestId);
+    });
+  if (request.bodyByteLength === 0) record.requestStream.end();
+});
+
+ipcMain.on("desktop:api-request-cancel", (event, requestId) => {
+  if (!trustedSender(event) || !validRequestId(requestId)) return;
+  const record = activeApiRequests.get(requestId);
+  if (!record) return;
+  record.cancelled = true;
+  if (record.intakeTimer) clearTimeout(record.intakeTimer);
+  if (record.responseAckTimer) clearTimeout(record.responseAckTimer);
+  record.controller.abort();
+  record.requestStream.destroy();
+  record.responseAck?.reject(Object.assign(new Error("云存档上传已取消"), { name: "AbortError", code: "ABORTED" }));
+  activeApiRequests.delete(requestId);
+  postTransferError(record.port, Object.assign(new Error("云存档上传已取消"), { name: "AbortError", code: "ABORTED" }));
+});
 
 ipcMain.handle("desktop:check-for-updates", async () => {
   if (!updater || updateState.state === "checking" || updateState.state === "downloading") return updateState;
@@ -368,9 +703,18 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   persistWindowState();
+  cancelAllAccountArchiveDownloads();
   if (updateTimer) clearInterval(updateTimer);
+  if (accountArchiveQuitDrainComplete || activeAccountArchiveDownloadCompletions.size === 0) return;
+  event.preventDefault();
+  if (accountArchiveQuitDrainPromise) return;
+  const pending = [...activeAccountArchiveDownloadCompletions];
+  accountArchiveQuitDrainPromise = Promise.allSettled(pending).finally(() => {
+    accountArchiveQuitDrainComplete = true;
+    app.quit();
+  });
 });
 
 app.on("window-all-closed", () => {

@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
-    <cloud-backup>
-        <exclude domain="root" path="app_webview/Default/Cache" />
-        <exclude domain="root" path="app_webview/Default/Code Cache" />
-        <exclude domain="root" path="app_webview/Default/GPUCache" />
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
+        <!-- The single include is an allowlist: preserve player-authored
+             IndexedDB saves, never device sessions, cookies or exports. -->
+        <include domain="root" path="app_webview/Default/IndexedDB" />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="root" path="app_webview/Default/Cache" />
-        <exclude domain="root" path="app_webview/Default/Code Cache" />
-        <exclude domain="root" path="app_webview/Default/GPUCache" />
+        <include domain="root" path="app_webview/Default/IndexedDB" />
     </device-transfer>
 </data-extraction-rules>

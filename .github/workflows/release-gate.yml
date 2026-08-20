@@ -1,0 +1,110 @@
+name: Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact immutable commit SHA to validate (blank means this workflow commit)
+        required: false
+        type: string
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  attestations: write
+  id-token: write
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      REQUESTED_SHA: ${{ inputs.expected_sha }}
+      SOURCE_DATE_EPOCH: "0"
+    steps:
+      - name: Check out the exact release SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.expected_sha || github.sha }}
+          fetch-depth: 0
+      - name: Resolve the immutable source commit
+        shell: bash
+        run: |
+          release_sha="$(git rev-parse HEAD)"
+          if [[ -n "$REQUESTED_SHA" && "$REQUESTED_SHA" != "$release_sha" ]]; then
+            echo "Requested SHA $REQUESTED_SHA resolved to $release_sha, refusing mixed-source release gate." >&2
+            exit 1
+          fi
+          echo "RELEASE_SHA=$release_sha" >> "$GITHUB_ENV"
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+      - name: Verify source identity and cleanliness
+        run: node scripts/release-gate.mjs verify-source --expected-sha "$RELEASE_SHA" --output artifacts/release-gate/source.json
+      - name: Install locked dependencies
+        run: |
+          npm ci
+          npm --prefix server ci
+      - name: Generate the explicit conditional-skip report
+        run: node scripts/release-gate-skip-report.mjs --output artifacts/release-gate/conditional-skips.json --git-sha "$RELEASE_SHA"
+      - name: Verify deterministic anonymous large fixtures
+        run: node --test scripts/generate-synthetic-save-fixtures.test.mjs scripts/release-gate.test.mjs
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Full Vitest suite
+        run: npm test -- --maxWorkers=1
+      - name: Full server suite with temporary SQLite only
+        run: npm run test:server
+      - name: Operations suite
+        run: npm run test:ops
+      - name: Linux release control plane as root
+        run: sudo --preserve-env=PATH,NODE_PATH env DSP_REQUIRE_LINUX_RELEASE_GATE=1 node --test deploy/linux-release-control.test.mjs
+      - name: Native configuration suite
+        run: npm run test:native
+      - name: License inventory
+        run: npm run licenses:check
+      - name: Production dependency audits
+        run: |
+          npm audit --omit=dev
+          npm --prefix server audit --omit=dev
+      - name: Build production web candidate
+        run: npm run build:web
+      - name: Install Chromium for critical browser lifecycle gates
+        run: npx playwright install --with-deps chrome
+      - name: Critical Playwright save cloud offline and PWA gates
+        run: npm run test:e2e -- --workers=1 --grep "cloud|save|offline|idle|PWA|leaderboard"
+      - name: Production-preview PWA lifecycle gate
+        env:
+          DSP_E2E_USE_PREVIEW: "1"
+        run: npx playwright test tests/e2e/v140-pwa-cache.spec.ts --workers=1
+      - name: Create immutable release manifest
+        run: node deploy/create-release-manifest.mjs --output "artifacts/release-gate/release-manifest-${RELEASE_SHA}.json"
+      - name: Create CycloneDX SBOM
+        run: node scripts/release-gate.mjs sbom --git-sha "$RELEASE_SHA" --output artifacts/release-gate/sbom.cdx.json
+      - name: Create in-toto SLSA-compatible provenance
+        run: node scripts/release-gate.mjs provenance --git-sha "$RELEASE_SHA" --manifest "artifacts/release-gate/release-manifest-${RELEASE_SHA}.json" --sbom artifacts/release-gate/sbom.cdx.json --gate-report artifacts/release-gate/conditional-skips.json --output artifacts/release-gate/provenance.intoto.json
+      - name: Verify provenance subject digests and source binding
+        run: node scripts/release-gate.mjs verify-provenance --input artifacts/release-gate/provenance.intoto.json --expected-sha "$RELEASE_SHA"
+      - name: Attest release-gate evidence
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
+        with:
+          subject-path: artifacts/release-gate/**
+      - name: Upload release-gate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dsp-idle-release-gate-${{ env.RELEASE_SHA }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            artifacts/release-gate/**
+            test-results/**

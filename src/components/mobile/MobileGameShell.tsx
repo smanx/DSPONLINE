@@ -1,6 +1,5 @@
 import { Wrench } from "lucide-react";
 import { trackAnalyticsEvent } from "../../game/analytics";
-import type { FactoryAlert } from "../../game/alerts";
 import type { GameState, PlanetId } from "../../game/types";
 import type { CompactLayoutSnapshot } from "../../hooks/useCompactLayout";
 import type { MobileOverlay, MobileRoute, MobileSheetId, MobileSheetSnap, MobileWorkspaceId } from "../../hooks/useMobileNavigation";
@@ -11,11 +10,12 @@ import { MobileSheets, type MobileCanvasToolActions, type MobileCanvasToolState,
 import { MobileTopBar } from "./MobileTopBar";
 import { MobileWorkspaceHub } from "./MobileWorkspaceHub";
 
-export function MobileGameShell({ enabled, layout, game, alerts, route, overlay, tools, toolActions, factory, factoryActions, hasConstructionCenter, onFactory, onOpenHub, onOpenSheet, onSheetSnap, onOpenWorkspace, onOpenStatistics, onOpenOperations, onOpenGalaxy, onOpenCommandPalette, onBack, onTogglePause, onPlanetChange, onConfirmExit, onDismissExit, onRequestExit, onSwitchLegacy }: {
+export function MobileGameShell({ enabled, layout, game, alertCount, planetAlertCounts, route, overlay, tools, toolActions, factory, factoryActions, hasConstructionCenter, onFactory, onOpenHub, onOpenSheet, onSheetSnap, onOpenWorkspace, onOpenOrbitalStation, onOpenStatistics, onOpenOperations, onOpenGalaxy, onOpenCommandPalette, onBack, onTogglePause, onPlanetChange, onConfirmExit, onDismissExit, onRequestExit, onSwitchLegacy }: {
   enabled: boolean;
   layout: CompactLayoutSnapshot;
   game: GameState;
-  alerts: FactoryAlert[];
+  alertCount: number;
+  planetAlertCounts: Partial<Record<PlanetId, number>>;
   route: MobileRoute;
   overlay: MobileOverlay;
   tools: MobileCanvasToolState;
@@ -28,13 +28,14 @@ export function MobileGameShell({ enabled, layout, game, alerts, route, overlay,
   onOpenSheet: (id: MobileSheetId) => void;
   onSheetSnap: (snap: MobileSheetSnap) => void;
   onOpenWorkspace: (id: MobileWorkspaceId) => void;
+  onOpenOrbitalStation: () => void;
   onOpenStatistics: (tab: StatisticsTab) => void;
   onOpenOperations: (tab: OperationsTab) => void;
   onOpenGalaxy: (tab: "ranking" | "cloud" | "account") => void;
   onOpenCommandPalette: () => void;
   onBack: () => void;
   onTogglePause: () => void;
-  onPlanetChange: (planetId: PlanetId) => void;
+  onPlanetChange: (planetId: PlanetId) => boolean;
   onConfirmExit: () => void;
   onDismissExit: () => void;
   onRequestExit: () => void;
@@ -66,10 +67,10 @@ export function MobileGameShell({ enabled, layout, game, alerts, route, overlay,
   const close = () => onBack();
   return (
     <>
-      <MobileTopBar game={game} route={route} alertCount={alerts.length} onBack={onBack} onOpenPlanet={() => openSheet("planet")} onTogglePause={onTogglePause} onOpenAlerts={() => openOperations("alerts")} />
-      {route.kind === "hub" ? <MobileWorkspaceHub hasConstructionCenter={hasConstructionCenter} onOpenWorkspace={openWorkspace} onOpenStatistics={openStatistics} onOpenOperations={openOperations} onOpenGalaxy={openGalaxy} onOpenCommandPalette={onOpenCommandPalette} onSwitchLegacy={onSwitchLegacy} onRequestExit={onRequestExit} /> : null}
+      <MobileTopBar game={game} route={route} alertCount={alertCount} onBack={onBack} onOpenPlanet={() => openSheet("planet")} onTogglePause={onTogglePause} onOpenAlerts={() => openOperations("alerts")} />
+      {route.kind === "hub" ? <MobileWorkspaceHub hasConstructionCenter={hasConstructionCenter} onOpenWorkspace={openWorkspace} onOpenOrbitalStation={onOpenOrbitalStation} onOpenStatistics={openStatistics} onOpenOperations={openOperations} onOpenGalaxy={openGalaxy} onOpenCommandPalette={onOpenCommandPalette} onSwitchLegacy={onSwitchLegacy} onRequestExit={onRequestExit} onClose={onBack} /> : null}
       {route.kind === "factory" && !overlay ? <button className="mobile-next-tools-command" type="button" onClick={() => openSheet("tools")} title="画布工具" aria-label="打开画布工具"><Wrench size={22} /></button> : null}
-      <MobileSheets game={game} alerts={alerts} overlay={overlay} tools={tools} toolActions={toolActions} factory={factory} factoryActions={factoryActions} onSheetSnap={onSheetSnap} onClose={close} onPlanetChange={onPlanetChange} onOpenStarMap={() => openWorkspace("star-map")} onConfirmExit={onConfirmExit} onDismissExit={onDismissExit} />
+      <MobileSheets game={game} planetAlertCounts={planetAlertCounts} overlay={overlay} tools={tools} toolActions={toolActions} factory={factory} factoryActions={factoryActions} onSheetSnap={onSheetSnap} onClose={close} onPlanetChange={onPlanetChange} onOpenStarMap={() => openWorkspace("star-map")} onConfirmExit={onConfirmExit} onDismissExit={onDismissExit} />
       <MobileBottomNav
         route={route}
         overlay={overlay}

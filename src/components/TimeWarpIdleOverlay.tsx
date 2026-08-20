@@ -16,6 +16,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import type { PureIdleMacroSummary, PureIdleTerminalSnapshot } from "../game/pureIdleMacro";
+import { projectPureIdleTerminalSnapshot } from "../game/pureIdlePresentation";
 import type { PureIdleRecoveryRecord, PureIdleStopReason } from "../game/pureIdleRecovery";
 import type { SaveGameResult } from "../game/storage";
 import type { GameState } from "../game/types";
@@ -34,10 +35,6 @@ function formatDuration(seconds: number): string {
 function signedQuantity(value: number): string {
   const amount = Math.floor(Math.abs(value));
   return `${value >= 0 ? "+" : "-"}${formatQuantityCompact(amount)}`;
-}
-
-function signedPower(value: number): string {
-  return `${value >= 0 ? "+" : "-"}${formatPowerKw(Math.abs(value))}`;
 }
 
 const THROTTLE_REASON_LABELS: Record<TimeWarpThrottleReason, string> = {
@@ -63,27 +60,6 @@ function stateSnapshot(game: GameState): PureIdleTerminalSnapshot {
     sailsInOrbit: Math.max(0, Math.floor(game.dysonSwarm.sailsInOrbit)),
     activityDelivered: Object.fromEntries(Object.entries(game.endgame.constructionActivity.personalDelivered)
       .map(([itemId, amount]) => [itemId, Math.max(0, Math.floor(amount ?? 0))])),
-  };
-}
-
-function projectedSnapshot(summary: PureIdleMacroSummary | null, fallback: PureIdleTerminalSnapshot, elapsed: number): PureIdleTerminalSnapshot {
-  if (!summary) return fallback;
-  const interpolationWallSeconds = Math.max(0, Math.min(30, elapsed - summary.settledWallSeconds));
-  const simulationSeconds = interpolationWallSeconds * Math.max(1, summary.actualMultiplier);
-  const project = (value: number, rate: number) => Math.max(0, value + rate * simulationSeconds);
-  const activityDelivered: Record<string, number> = { ...summary.current.activityDelivered };
-  for (const [itemId, rate] of Object.entries(summary.ratePerSimulationSecond.activityDelivered)) {
-    activityDelivered[itemId] = project(activityDelivered[itemId] ?? 0, rate);
-  }
-  return {
-    dysonGenerationKw: project(summary.current.dysonGenerationKw, summary.ratePerSimulationSecond.dysonGenerationKw),
-    whiteMatrixProduced: project(summary.current.whiteMatrixProduced, summary.ratePerSimulationSecond.whiteMatrixProduced),
-    rocketsLaunched: project(summary.current.rocketsLaunched, summary.ratePerSimulationSecond.rocketsLaunched),
-    sailsAbsorbed: project(summary.current.sailsAbsorbed, summary.ratePerSimulationSecond.sailsAbsorbed),
-    structurePoints: project(summary.current.structurePoints, summary.ratePerSimulationSecond.structurePoints),
-    shellSails: project(summary.current.shellSails, summary.ratePerSimulationSecond.shellSails),
-    sailsInOrbit: project(summary.current.sailsInOrbit, summary.ratePerSimulationSecond.sailsInOrbit),
-    activityDelivered,
   };
 }
 
@@ -157,7 +133,7 @@ export function TimeWarpIdleOverlay({
   );
   const fallback = useMemo(() => stateSnapshot(game), [game]);
   const persistentBaseline = useMemo(() => stateSnapshot(baselineGame), [baselineGame]);
-  const projected = projectedSnapshot(macroSummary, fallback, elapsed);
+  const projected = projectPureIdleTerminalSnapshot(macroSummary, fallback, elapsed);
   const baseline = macroSummary?.baseline ?? persistentBaseline;
   const modeLabel = macroSummary?.mode === "extreme" ? "终局极限模式" : "宏观纯挂机";
   const phaseLabel = macroSummary
@@ -231,7 +207,7 @@ export function TimeWarpIdleOverlay({
         <section className="time-warp-idle-output" aria-label="终局产出">
           <header><span>终局产出</span><small>累计值与本次挂机增量</small></header>
           <div className="time-warp-terminal-grid">
-            <article><Zap size={19} /><span>戴森总发电功率</span><strong>{formatPowerKw(projected.dysonGenerationKw)}</strong><small>本次 {signedPower(projected.dysonGenerationKw - baseline.dysonGenerationKw)}</small></article>
+            <article><Zap size={19} /><span>戴森总发电功率</span><strong>{formatPowerKw(projected.dysonGenerationKw)}</strong><small>已结算快照 · 30 秒更新</small></article>
             <article><Activity size={19} /><span>白矩阵累计上传</span><strong title={formatQuantityExact(projected.whiteMatrixProduced)}>{formatQuantityCompact(projected.whiteMatrixProduced)}</strong><small>本次 {signedQuantity(projected.whiteMatrixProduced - baseline.whiteMatrixProduced)} · {formatQuantityCompact((macroSummary?.ratePerSimulationSecond.whiteMatrixProduced ?? 0) * (macroSummary?.actualMultiplier ?? 1) * 60)}/分钟</small></article>
             <article><Rocket size={19} /><span>小型火箭实际发射</span><strong title={formatQuantityExact(projected.rocketsLaunched)}>{formatQuantityCompact(projected.rocketsLaunched)}</strong><small>本次 {signedQuantity(projected.rocketsLaunched - baseline.rocketsLaunched)}</small></article>
             <article><Sun size={19} /><span>太阳帆吸收</span><strong title={formatQuantityExact(projected.sailsAbsorbed)}>{formatQuantityCompact(projected.sailsAbsorbed)}</strong><small>本次 {signedQuantity(projected.sailsAbsorbed - baseline.sailsAbsorbed)}</small></article>

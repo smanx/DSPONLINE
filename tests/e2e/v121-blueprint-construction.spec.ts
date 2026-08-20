@@ -55,7 +55,7 @@ function seedPendingBlueprintFixture() {
       paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
   };
@@ -190,3 +190,4 @@ test("pending blueprint funding remains usable in the next mobile UI at 200 perc
   await page.locator(".mobile-next-topbar").getByRole("button", { name: /返回工厂/ }).click();
   await expect(page.locator('.react-flow__node[data-id^="entity_"]')).toHaveCount(2);
 });
+

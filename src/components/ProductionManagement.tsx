@@ -37,6 +37,7 @@ import type {
 } from "../game/types";
 import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
+import { StableTextInput } from "./CompositionSafeInput";
 
 const GROUP_LABELS: Record<ProductionManagementGroup, string> = {
   mining: "采矿",
@@ -164,7 +165,7 @@ export function ProductionManagement({ game, onFocusEntity, onFocusBelt, onBulkR
       </section>
 
       <div className="production-management-toolbar">
-        <label className="statistics-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="设备、配方、物品、状态" aria-label="搜索生产设备" /></label>
+        <label className="statistics-search"><Search size={14} /><StableTextInput draftId="production-management-search" value={query} onValueChange={setQuery} placeholder="设备、配方、物品、状态" aria-label="搜索生产设备" /></label>
         <label><span>行星</span><select value={planetFilter} onChange={(event) => setPlanetFilter(event.target.value as PlanetId | "all")} aria-label="筛选生产行星"><option value="all">全星区</option>{snapshot.planets.map((planet) => <option value={planet.planetId} key={planet.planetId}>{getPlanet(planet.planetId).name}</option>)}</select></label>
         <label><span>设备</span><select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value as ProductionManagementGroup | "all")} aria-label="筛选设备类型"><option value="all">全部类型</option>{Object.entries(GROUP_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
         <label><span>状态</span><select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as ProductionManagementState | "all")} aria-label="筛选设备状态"><option value="all">全部状态</option>{Object.entries(STATE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>

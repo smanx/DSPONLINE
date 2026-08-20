@@ -2,7 +2,7 @@
 
 import { completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
 import { applyContentPackRuntimeSnapshot } from "./contentPacks";
-import { advanceOfflineSimulationChunk, type CloudUploadSummary, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
+import { advanceOfflineSimulationChunk, buildBackgroundFinalEnvelope, type CloudUploadSummary, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
 import {
   FAST_OFFLINE_CALIBRATION_SECONDS,
   FAST_OFFLINE_DESKTOP_DEADLINE_MS,
@@ -15,9 +15,16 @@ import {
   selectOfflineWorkerStrategyAfterFastResult,
   type OfflineWorkerSettlementRequestShape,
 } from "./offlineSettlementStrategy";
-import { applyReturningRewardToState, inspectSave, serializeEnvelope } from "./storage";
+import { applyReturningRewardToState, inspectSave, parseTrustedWorkerEnvelope, prepareSaveStateForBackground } from "./storage";
+import { decodeVerifiedSaveTransfer, serializeSaveEnvelopeToTransfer, type SaveTransferVerification } from "./saveTransfer";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
+import { sha256Bytes } from "./payloadDigest";
 import type { GameSettings, GameState } from "./types";
+import {
+  createImmutableWorkerBinaryPayload,
+  workerBinaryPayloadToArrayBuffer,
+  workerBinaryPayloadTransferables,
+} from "./workerBinaryPayload";
 
 let activeId: number | null = null;
 let cancelled = false;
@@ -33,8 +40,8 @@ function nowMs(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
-function post(message: OfflineSimulationWorkerResponse): void {
-  self.postMessage(message);
+function post(message: OfflineSimulationWorkerResponse, transfer: Transferable[] = []): void {
+  self.postMessage(message, transfer);
 }
 
 function mergeUploadSettings(saved: GameSettings, menu?: Partial<GameSettings>): GameSettings {
@@ -54,9 +61,7 @@ function mergeUploadSettings(saved: GameSettings, menu?: Partial<GameSettings>):
   };
 }
 
-function uploadSummary(state: GameState, payload: string, savedAt: number): CloudUploadSummary {
-  const envelope = JSON.parse(payload) as { checksum?: unknown };
-  const stateChecksum = typeof envelope.checksum === "string" ? envelope.checksum : null;
+function uploadSummary(state: GameState, stateChecksum: string, savedAt: number): CloudUploadSummary {
   return {
     mode: state.mode === "speedrun" ? "speedrun" : "normal",
     stateVersion: state.version,
@@ -71,6 +76,46 @@ function uploadSummary(state: GameState, payload: string, savedAt: number): Clou
     computedStateChecksum: stateChecksum,
     integrity: "valid" as const,
   };
+}
+
+function serializeWorkerState(
+  state: GameState,
+  savedAt: number,
+  persistent: boolean,
+  registry: Parameters<typeof prepareSaveStateForBackground>[1],
+) {
+  const serializedState = persistent ? prepareSaveStateForBackground(state, registry) : state;
+  const serialized = serializeSaveEnvelopeToTransfer(serializedState, {
+    formatVersion: 2,
+    kind: "primary",
+    mode: state.mode === "speedrun" ? "speedrun" : "normal",
+    slot: "main",
+    savedAt,
+  });
+  return {
+    serialized,
+    summary: uploadSummary(state, serialized.stateChecksum, savedAt),
+  };
+}
+
+function postCompletedState(
+  requestId: number,
+  state: GameState,
+  totalSeconds: number,
+  registry: Parameters<typeof prepareSaveStateForBackground>[1],
+  approximation?: OfflineApproximationReport,
+): void {
+  const { serialized, summary } = serializeWorkerState(state, Date.now(), false, registry);
+  post({
+    type: "complete",
+    id: requestId,
+    payloadBytes: serialized.bytes,
+    payloadChecksum: serialized.payloadChecksum,
+    byteLength: serialized.byteLength,
+    summary,
+    totalSeconds,
+    ...(approximation ? { approximation } : {}),
+  }, [serialized.bytes]);
 }
 
 self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => {
@@ -109,9 +154,12 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
   try {
     applyContentPackRuntimeSnapshot(request.registry);
     if (request.type === "prepare-upload") {
-      const sourceBytes = new TextEncoder().encode(request.raw).byteLength;
+      const sourceBytes = request.rawBytes.byteLength;
+      let sourceRaw = new TextDecoder("utf-8", { fatal: true }).decode(request.rawBytes);
+      request.rawBytes = new ArrayBuffer(0);
       const inspectStartedAt = nowMs();
-      const inspection = inspectSave(request.raw, request.registry.registry);
+      const inspection = inspectSave(sourceRaw, request.registry.registry);
+      sourceRaw = "";
       const inspectMs = Math.max(0, nowMs() - inspectStartedAt);
       if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "本地存档格式或完整性无效");
       const savedAt = inspection.savedAt ?? request.now;
@@ -120,7 +168,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         : 0;
       const session = createSimulationAdvanceSession(inspection.state, offlineSeconds);
       const offlineStartedAt = nowMs();
-      const runChunk = () => {
+      const runChunk = async () => {
         if (activeId !== request.id || cancelled) {
           post({ type: "cancelled", id: request.id });
           return;
@@ -139,7 +187,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
           const completedSeconds = session.totalSeconds - session.remainingSeconds;
           postProgress(completedSeconds, session.totalSeconds);
           if (session.remainingSeconds > 0) {
-            setTimeout(runChunk, 0);
+            setTimeout(() => void runChunk(), 0);
             return;
           }
         }
@@ -150,18 +198,22 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         currentPhase = "saving";
         postProgress(offlineSeconds, offlineSeconds);
         const serializeStartedAt = nowMs();
-        const payload = serializeEnvelope(state, request.now, "primary", undefined, request.registry.registry);
+        const { serialized, summary } = serializeWorkerState(state, request.now, true, request.registry.registry);
         const serializeMs = Math.max(0, nowMs() - serializeStartedAt);
+        const payloadSha256 = await sha256Bytes(serialized.bytes);
         post({
           type: "upload-complete",
           id: request.id,
-          payload,
-          summary: uploadSummary(state, payload, request.now),
+          payloadBytes: serialized.bytes,
+          payloadChecksum: serialized.payloadChecksum,
+          payloadSha256,
+          byteLength: serialized.byteLength,
+          summary,
           offlineSeconds,
           returningReward: returning.reward.map((entry) => ({ itemId: entry.itemId, amount: entry.amount })),
           diagnostics: {
             sourceBytes,
-            payloadBytes: new TextEncoder().encode(payload).byteLength,
+            payloadBytes: serialized.byteLength,
             totalMs: Math.max(0, nowMs() - operationStartedAt),
             inspectMs,
             offlineMs,
@@ -169,10 +221,122 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
             offlineSeconds,
             skippedOffline: request.skipOffline === true,
           },
-        });
+        }, [serialized.bytes]);
         activeId = null;
       };
-      runChunk();
+      void runChunk();
+      return;
+    }
+    if (request.type === "finalize-background") {
+      const finalizeStartedAt = nowMs();
+      const registry = request.registry.registry;
+      const responseTransport = request.sourceEnvelope instanceof Blob ? "blob" : "array-buffer";
+      applyContentPackRuntimeSnapshot(request.registry);
+      let sourceRaw: string;
+      let sourceState: GameState;
+      try {
+        sourceRaw = decodeVerifiedSaveTransfer(
+          await workerBinaryPayloadToArrayBuffer(request.sourceEnvelope),
+          request.sourceVerification,
+        );
+        sourceState = parseTrustedWorkerEnvelope(sourceRaw, request.sourceVerification, registry, { persistentProjection: false });
+      } catch (error) {
+        throw new Error(error instanceof Error ? error.message : "后台宏 envelope 解码失败，原档与恢复日志保持不变");
+      }
+      if (request.approximate === true && request.normalOfflineSeconds >= 1) {
+        const strategyRequest: OfflineWorkerSettlementRequestShape = {
+          approximate: true,
+          conservativeOnly: false,
+          speedrun: sourceState.speedrun?.enabled === true,
+          seconds: request.normalOfflineSeconds,
+        };
+        let strategy = selectInitialOfflineWorkerStrategy(strategyRequest);
+        let fastSettled = false;
+        if (strategy === "fast") {
+          currentPhase = "macro";
+          const experiment = await runFastOfflineSettlementAsync(sourceState, request.normalOfflineSeconds, {
+            wallSeconds: request.normalOfflineSeconds,
+            deadlineAtMs: nowMs() + Math.max(1_000, request.deadlineMs ?? FAST_OFFLINE_DESKTOP_DEADLINE_MS),
+            shouldCancel: () => activeId !== request.id || cancelled,
+            onPhase: () => { currentPhase = "macro"; },
+            onProgress: (completed, total) => postProgress(completed, total, { algorithmVersion: "fast-30s-v2" }),
+          });
+          if (experiment.status === "approximate" || experiment.status === "bounded-exact") {
+            sourceState = experiment.state;
+            fastSettled = true;
+          } else {
+            strategy = selectOfflineWorkerStrategyAfterFastResult(strategyRequest, experiment);
+          }
+        }
+        if (!fastSettled) {
+          if (strategy === "invalid-source") {
+            throw new Error("后台离线结算源校验失败，原档与恢复日志保持不变");
+          }
+          if (strategy === "conservative-preview") {
+            const conservative = runConservativeOfflineSettlement(
+              sourceState,
+              request.normalOfflineSeconds,
+              request.normalOfflineSeconds,
+              "后台快速结算未通过，使用零校准保守宏观",
+            );
+            if (conservative.status === "conservative") sourceState = conservative.state;
+            else if (conservative.status === "invalid-source") {
+              throw new Error("后台离线保守宏观源失效，原档与恢复日志保持不变");
+            }
+            else {
+              throw new Error(conservative.report?.fallbackReason ?? "后台离线保守宏观候选无效");
+            }
+          } else {
+            const session = createSimulationAdvanceSession(sourceState, request.normalOfflineSeconds);
+            let guard = 0;
+            while (session.remainingSeconds > 0 && !cancelled && (request.deadlineMs === undefined || nowMs() - finalizeStartedAt < request.deadlineMs)) {
+              advanceOfflineSimulationChunk(session, { maximumWindowSeconds: 256 });
+              if (++guard % 16 === 0) postProgress(session.totalSeconds - session.remainingSeconds, session.totalSeconds);
+            }
+            if (session.remainingSeconds > 0) {
+              throw new Error("后台离线精确结算超时，原档与恢复日志保持不变");
+            }
+            sourceState = completeSimulationAdvanceSession(session);
+          }
+        }
+      } else if (request.normalOfflineSeconds >= 1) {
+        const session = createSimulationAdvanceSession(sourceState, request.normalOfflineSeconds);
+        let guard = 0;
+        while (session.remainingSeconds > 0 && !cancelled) {
+          advanceOfflineSimulationChunk(session, { maximumWindowSeconds: 256 });
+          if (++guard % 16 === 0) postProgress(session.totalSeconds - session.remainingSeconds, session.totalSeconds);
+        }
+        if (session.remainingSeconds > 0) {
+          throw new Error("后台离线精确结算中断，原档与恢复日志保持不变");
+        }
+        sourceState = completeSimulationAdvanceSession(session);
+      }
+      if (cancelled) {
+        post({ type: "cancelled", id: request.id });
+        activeId = null;
+        return;
+      }
+      currentPhase = "saving";
+      const { finalEnvelope } = buildBackgroundFinalEnvelope(sourceState, {
+        baseline: request.baseline,
+        highWallSeconds: request.highWallSeconds,
+        normalOfflineSeconds: request.normalOfflineSeconds,
+        registryFingerprint: request.registry.fingerprint,
+        savedAt: request.savedAt,
+      });
+      const responseEnvelope = {
+        ...finalEnvelope,
+        payloadBytes: finalEnvelope.payloadBytes instanceof ArrayBuffer
+          ? createImmutableWorkerBinaryPayload(finalEnvelope.payloadBytes, responseTransport)
+          : finalEnvelope.payloadBytes,
+      };
+      post({
+        type: "finalized-background",
+        id: request.id,
+        finalEnvelope: responseEnvelope,
+        durationMs: Math.max(0, nowMs() - finalizeStartedAt),
+      } satisfies OfflineSimulationWorkerResponse, workerBinaryPayloadTransferables(responseEnvelope.payloadBytes));
+      activeId = null;
       return;
     }
     let approximation: OfflineApproximationReport | undefined;
@@ -183,7 +347,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
       seconds: request.seconds,
     };
     let strategy = selectInitialOfflineWorkerStrategy(strategyRequest);
-    if (strategy === "conservative") {
+    if (strategy === "conservative-preview") {
       const conservativeReason = request.conservativeReason ??
         "Worker 达到现实时间上限后使用零校准保守宏观";
       currentPhase = "conservative";
@@ -211,7 +375,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         algorithmVersion: conservative.report.algorithmVersion,
         degradedReason: conservative.report.fallbackReason,
       });
-      post({ type: "complete", id: request.id, state: conservative.state, totalSeconds: request.seconds, approximation: conservative.report });
+      post({ type: "decision-required", id: request.id, totalSeconds: request.seconds, approximation: { ...conservative.report, settlementStatus: "conservative-preview" } });
       activeId = null;
       return;
     }
@@ -236,21 +400,30 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
       });
       approximation = experiment.report;
       strategy = selectOfflineWorkerStrategyAfterFastResult(strategyRequest, experiment);
-      if (experiment.status === "approximate" || experiment.status === "conservative" || experiment.status === "bounded-exact") {
-        currentPhase = experiment.status === "conservative" ? "conservative"
-          : experiment.status === "bounded-exact" ? "bounded-exact" : "macro";
+      if (experiment.status === "approximate" || experiment.status === "bounded-exact") {
+        currentPhase = experiment.status === "bounded-exact" ? "bounded-exact" : "macro";
         postProgress(request.seconds, request.seconds, {
           algorithmVersion: experiment.report.algorithmVersion,
           degradedReason: experiment.report.fallbackReason,
         });
-        post({ type: "complete", id: request.id, state: experiment.state, totalSeconds: request.seconds, approximation });
+        postCompletedState(request.id, experiment.state, request.seconds, request.registry.registry, approximation);
+        activeId = null;
+        return;
+      }
+      if (experiment.status === "conservative") {
+        currentPhase = "conservative";
+        postProgress(request.seconds, request.seconds, {
+          algorithmVersion: experiment.report.algorithmVersion,
+          degradedReason: experiment.report.fallbackReason,
+        });
+        post({ type: "decision-required", id: request.id, totalSeconds: request.seconds, approximation: { ...experiment.report, settlementStatus: "conservative-preview" } });
         activeId = null;
         return;
       }
       if (strategy === "invalid-source") {
         throw new InvalidOfflineSourceError(experiment.report.fallbackReason ?? "源存档未通过快速结算安全校验");
       }
-      if (strategy === "conservative") {
+      if (strategy === "conservative-preview") {
         currentPhase = "conservative";
         postProgress(FAST_OFFLINE_CALIBRATION_SECONDS, request.seconds, {
           algorithmVersion: experiment.report.algorithmVersion,
@@ -267,7 +440,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
             algorithmVersion: conservative.report.algorithmVersion,
             degradedReason: conservative.report.fallbackReason,
           });
-          post({ type: "complete", id: request.id, state: conservative.state, totalSeconds: request.seconds, approximation: conservative.report });
+          post({ type: "decision-required", id: request.id, totalSeconds: request.seconds, approximation: { ...conservative.report, settlementStatus: "conservative-preview" } });
           activeId = null;
           return;
         }
@@ -301,7 +474,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         setTimeout(runChunk, 0);
         return;
       }
-      post({ type: "complete", id: request.id, state: completeSimulationAdvanceSession(session), totalSeconds: session.totalSeconds, approximation });
+      postCompletedState(request.id, completeSimulationAdvanceSession(session), session.totalSeconds, request.registry.registry, approximation);
       activeId = null;
     };
     runChunk();

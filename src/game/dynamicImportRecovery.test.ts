@@ -5,6 +5,7 @@ import {
   getDynamicImportRecoveryState,
   importWithRecovery,
   isDynamicImportFailure,
+  runtimeErrorDiagnosticCode,
 } from "./dynamicImportRecovery";
 
 describe("dynamic import recovery", () => {
@@ -51,6 +52,12 @@ describe("dynamic import recovery", () => {
 
   it("does not treat ordinary application exceptions as chunk failures", () => {
     expect(isDynamicImportFailure(new Error("配方不存在"))).toBe(false);
+    expect(isDynamicImportFailure(new TypeError("Cannot read properties of undefined (reading 'map')"))).toBe(false);
     expect(isDynamicImportFailure(new Error("ChunkLoadError: loading chunk 4 failed"))).toBe(true);
+  });
+
+  it("keeps runtime diagnostics free of the original error message", () => {
+    expect(runtimeErrorDiagnosticCode(new TypeError("player save payload must not appear here"))).toBe("runtime-type");
+    expect(runtimeErrorDiagnosticCode({ message: "unknown" })).toBe("runtime-error");
   });
 });

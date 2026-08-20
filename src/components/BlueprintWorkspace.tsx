@@ -5,6 +5,8 @@ import { formatQuantityCompact, formatQuantityExact } from "../game/quantityForm
 import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, CanvasRegion, CanvasViewport, GameState, PlanetId, RecipeId } from "../game/types";
 import { Fragment, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useGameDialog } from "./GameDialogProvider";
+import { WorkspaceFrame } from "./WorkspaceFrame";
+import { StableTextArea, StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
 
 function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   const counts = new Map<string, number>();
@@ -19,10 +21,11 @@ function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   return [...counts].map(([name, amount]) => `${name} ×${amount}`);
 }
 
-export function CanvasSelectionTools({ selectionMode, regionMode, lineFindMode, blueprintCount, beltCount, regionCount, canUndo, canRedo, canUndoAutoLayout, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onRegionModeChange, onToggleLineFindMode, onOpenBlueprints, onOpenNetworks, onAutoLayout, onUndoAutoLayout, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
+export function CanvasSelectionTools({ selectionMode, regionMode, lineFindMode, batchConnectionMode, blueprintCount, beltCount, regionCount, canUndo, canRedo, canUndoAutoLayout, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onRegionModeChange, onToggleLineFindMode, onBatchConnectionModeChange, onOpenBlueprints, onOpenNetworks, onAutoLayout, onUndoAutoLayout, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
   selectionMode: boolean;
   regionMode: boolean;
   lineFindMode: boolean;
+  batchConnectionMode: boolean;
   blueprintCount: number;
   beltCount: number;
   regionCount: number;
@@ -34,6 +37,7 @@ export function CanvasSelectionTools({ selectionMode, regionMode, lineFindMode, 
   onModeChange: (enabled: boolean) => void;
   onRegionModeChange: (enabled: boolean) => void;
   onToggleLineFindMode: () => void;
+  onBatchConnectionModeChange: (enabled: boolean) => void;
   onOpenBlueprints: () => void;
   onOpenNetworks: () => void;
   onAutoLayout: () => void;
@@ -53,6 +57,7 @@ export function CanvasSelectionTools({ selectionMode, regionMode, lineFindMode, 
         <button type="button" onClick={onOpenBlueprints} title="打开蓝图库" aria-label="打开蓝图库"><Layers3 size={16} /><em>{blueprintCount}</em></button>
         <button type="button" onClick={onOpenNetworks} title="打开生产网络总览" aria-label="打开生产网络总览"><Route size={16} /><em>{beltCount}</em></button>
         <button className={lineFindMode ? "active" : ""} type="button" onClick={onToggleLineFindMode} title="寻线模式：选中建筑后高亮上下游线路" aria-label="切换寻线模式" aria-pressed={lineFindMode} data-testid="line-find-toggle"><Route size={16} /></button>
+        <button className={batchConnectionMode ? "active" : ""} type="button" onClick={() => onBatchConnectionModeChange(!batchConnectionMode)} title="连续拉线：选择一个输出，再连续选择多个输入，最后统一确认" aria-label="连续拉线模式" aria-pressed={batchConnectionMode} data-testid="batch-connect-toggle"><Truck size={16} /></button>
         <button type="button" onClick={onAutoLayout} title="按物流上下游自动整理当前行星" aria-label="自动整理当前行星布局"><WandSparkles size={16} /></button>
         <button type="button" disabled={!canUndoAutoLayout} onClick={onUndoAutoLayout} title="恢复到最近一次自动整理前的位置" aria-label="撤销最近一次自动整理"><Undo2 size={16} /></button>
         <span className="canvas-selection-tools__separator" />
@@ -156,7 +161,7 @@ export function CanvasRegionEditor({ region, onChange, onRemove, onClose }: {
   return (
     <section className="canvas-region-editor nodrag nopan" aria-label="生产区域设置">
       <Palette size={15} />
-      <label><span>区域名称</span><input key={region.id} defaultValue={region.name} maxLength={28} onBlur={(event) => onChange({ name: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
+      <label><span>区域名称</span><StableTextInput commitOnBlur draftId={`canvas-region-name:${region.id}`} value={region.name} onValueChange={(name) => onChange({ name })} maxLength={28} onBlur={() => clearStableTextDraft(`canvas-region-name:${region.id}`)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
       <label className="canvas-region-editor__color"><span>背景</span><input type="color" value={region.fillColor} onChange={(event) => onChange({ fillColor: event.target.value })} /></label>
       <label className="canvas-region-editor__color"><span>边框</span><input type="color" value={region.borderColor} onChange={(event) => onChange({ borderColor: event.target.value })} /></label>
       <button className="danger" type="button" onClick={onRemove} title="删除生产区域" aria-label="删除生产区域"><Trash2 size={14} /></button>
@@ -495,7 +500,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
   const visibleBlueprints = detailBlueprintId ? game.blueprints.filter((blueprint) => blueprint.id === detailBlueprintId) : game.blueprints;
   const pendingCount = game.constructionQueue.length;
   return (
-    <section className={`blueprint-workspace${mobile ? ` mobile-workspace mobile-blueprints${detailBlueprintId ? " mobile-workspace--detail" : ""}` : ""}`} role="dialog" aria-modal="true" aria-label="蓝图与待建施工">
+    <WorkspaceFrame className={`blueprint-workspace${mobile ? ` mobile-workspace mobile-blueprints${detailBlueprintId ? " mobile-workspace--detail" : ""}` : ""}`} ariaLabel="蓝图与待建施工" onRequestClose={onClose}>
       <header className="blueprint-header">
         <div className="blueprint-title"><i><Layers3 size={20} /></i><div><span>生产网络模板</span><strong>{activeTab === "library" ? "蓝图库" : "待建与补足"}</strong></div></div>
         <div className="blueprint-headline"><span>模板 <strong>{game.blueprints.length}</strong></span><span>施工队列 <strong>{game.constructionQueue.length}</strong></span><span>部署行星 <strong>{getPlanet(game.activePlanetId).name}</strong></span></div>
@@ -527,7 +532,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
       <div className="blueprint-library-shell">
       {importOpen ? <section className="blueprint-import-panel" aria-label="蓝图导入">
         <header><div><Upload size={15} /><span><strong>导入蓝图</strong><small>交换文件会校验当前内容目录中的设备、物品和配方。</small></span></div><button type="button" onClick={() => fileInputRef.current?.click()}><Upload size={13} />选择文件</button></header>
-        <textarea value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="粘贴蓝图交换 JSON" aria-label="粘贴蓝图交换 JSON" />
+        <StableTextArea draftId="blueprint-import-json" value={importText} onValueChange={setImportText} placeholder="粘贴蓝图交换 JSON" aria-label="粘贴蓝图交换 JSON" />
         <footer><span className={importMessage?.startsWith("已导入") ? "ready" : ""}>{importMessage ?? "导出的蓝图可以直接在此粘贴。"}</span><button type="button" disabled={!importText.trim()} onClick={() => importRaw(importText)}><Check size={13} />导入到蓝图库</button></footer>
       </section> : null}
       <div className="blueprint-library">
@@ -544,7 +549,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
             <article className={`blueprint-card${viewMode === "compact" && !detailBlueprintId ? " blueprint-card--compact" : ""}`} key={blueprint.id}>
               <header>
                 <i><Layers3 size={18} /></i>
-                <label><span>蓝图名称</span><input defaultValue={blueprint.name} aria-label={`${blueprint.name}名称`} onBlur={(event) => onRename(blueprint.id, event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
+                <label><span>蓝图名称</span><StableTextInput commitOnBlur draftId={`blueprint-name:${blueprint.id}`} value={blueprint.name} onValueChange={(name) => onRename(blueprint.id, name)} aria-label={`${blueprint.name}名称`} onBlur={() => clearStableTextDraft(`blueprint-name:${blueprint.id}`)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
                 <em>{blueprint.entities.length} 设备 · {blueprint.resourceAnchors?.length ?? 0} 资源锚点 · {blueprint.belts.length} 线路 · {blueprint.externalPorts?.length ?? 0} 外部端口</em>
               </header>
               <div className="blueprint-composition">
@@ -654,6 +659,6 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
           })}
         </div>}
       </section>}
-    </section>
+    </WorkspaceFrame>
   );
 }

@@ -1,6 +1,8 @@
 import path from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import { readCloudPayload } from "./cloud-payload-store.mjs";
 import {
   applyLeaderboardModerationToData,
   publicLeaderboardModerationResolution,
@@ -39,8 +41,7 @@ function readState(database) {
 }
 
 function payloadLoader(database) {
-  const query = database.prepare("SELECT payload FROM cloud_save_payloads WHERE user_id = ? AND slot = 'main' AND revision = ?");
-  return (userId, revision) => query.get(userId, revision)?.payload ?? null;
+  return (userId, revision) => readCloudPayload(database, { userId, slot: "main", revision });
 }
 
 function resolveDatabase(database, displayName) {
@@ -133,7 +134,9 @@ export function runLeaderboardModeration(options) {
   }
 }
 
-const isCli = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+let isCli = false;
+try { isCli = Boolean(process.argv[1]) && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+catch { isCli = false; }
 if (isCli) {
   try {
     console.log(JSON.stringify(runLeaderboardModeration(parseArguments(process.argv.slice(2)))));

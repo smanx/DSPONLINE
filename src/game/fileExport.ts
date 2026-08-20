@@ -5,6 +5,13 @@ export interface TextFileExport {
   title?: string;
 }
 
+interface AndroidTextExportPlugin {
+  exportAndShare(options: Required<Pick<TextFileExport, "contents" | "fileName">> & {
+    mimeType: string;
+    title: string;
+  }): Promise<{ fileName: string; byteLength: number; chooserOpened: true }>;
+}
+
 export function safeExportFileName(value: string): string {
   const normalized = value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-").replace(/\s+/g, " ").trim();
   return (normalized || "dsp-export.json").slice(0, 120);
@@ -13,22 +20,16 @@ export function safeExportFileName(value: string): string {
 export async function exportTextFile({ contents, fileName, mimeType = "application/json", title = "导出 DSP极简网络数据" }: TextFileExport): Promise<"native" | "browser"> {
   const safeName = safeExportFileName(fileName);
   if (__APP_PLATFORM__ === "android") {
-    const { Capacitor } = await import("@capacitor/core");
+    const { Capacitor, registerPlugin } = await import("@capacitor/core");
     if (Capacitor.isNativePlatform()) {
-      const [{ Directory, Encoding, Filesystem }, { Share }] = await Promise.all([
-        import("@capacitor/filesystem"),
-        import("@capacitor/share"),
-      ]);
-      const result = await Filesystem.writeFile({
-        path: `exports/${safeName}`,
-        data: contents,
-        directory: Directory.Cache,
-        encoding: Encoding.UTF8,
-        recursive: true,
+      if (!Capacitor.isPluginAvailable("DspTextExport")) throw new Error("当前 Android 版本不支持安全文件导出");
+      const result = await registerPlugin<AndroidTextExportPlugin>("DspTextExport").exportAndShare({
+        contents,
+        fileName: safeName,
+        mimeType,
+        title,
       });
-      const capability = await Share.canShare();
-      if (!capability.value) throw new Error("当前设备没有可用的文件分享目标");
-      await Share.share({ title, dialogTitle: title, files: [result.uri] });
+      if (!result.chooserOpened) throw new Error("系统保存或分享面板未能打开");
       return "native";
     }
   }

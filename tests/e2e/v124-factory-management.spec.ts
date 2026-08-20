@@ -137,7 +137,7 @@ async function seedManagementFixture(page: Page, options: FixtureOptions = {}) {
       paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     if (mobileUi) window.localStorage.setItem("dsp-idle-network.mobile-ui.v1", mobileUi);
@@ -168,6 +168,12 @@ async function dragConnect(page: Page) {
   await page.mouse.up();
 }
 
+async function selectFactoryNode(page: Page, id: string) {
+  const header = page.locator(`.react-flow__node[data-id="${id}"] .factory-node__header`);
+  await expect(header).toBeVisible();
+  await header.dispatchEvent("click", { button: 0 });
+}
+
 function blueprintFile(name: string, machineCount = 1) {
   return {
     name: `${name}.dspblueprint.json`,
@@ -191,7 +197,7 @@ test("one-hundred-million additions are blocked while a historical safe stack su
   await openFixture(page);
   await page.locator(".react-flow__controls-fitview").click();
 
-  await page.locator('.react-flow__node[data-id="stack_limit"] .factory-node__header').click();
+  await selectFactoryNode(page, "stack_limit");
   const inspector = page.locator(".inspector-panel");
   const target = inspector.getByLabel("建筑堆叠目标数量");
   await expect(target).toHaveValue("100000000");
@@ -202,13 +208,13 @@ test("one-hundred-million additions are blocked while a historical safe stack su
   await expect(inspector.getByRole("alert")).toContainText("1 至 100,000,000");
   await expect(inspector.getByRole("alert")).toContainText("历史超限数量只允许降低");
 
-  await page.locator('.react-flow__node[data-id="stack_history"] .factory-node__header').click();
+  await selectFactoryNode(page, "stack_history");
   await expect(inspector.getByLabel("建筑堆叠目标数量")).toHaveValue("100000001");
   await page.getByLabel("保存并返回主菜单").click();
   await expect(page.locator(".start-menu")).toBeVisible();
   await page.getByRole("button", { name: /继续游戏/ }).click();
   await expect(page.locator('.react-flow__node[data-id="stack_history"]')).toBeVisible();
-  await page.locator('.react-flow__node[data-id="stack_history"] .factory-node__header').click();
+  await selectFactoryNode(page, "stack_history");
   await expect(page.locator(".inspector-panel").getByLabel("建筑堆叠目标数量")).toHaveValue("100000001");
 });
 
@@ -310,12 +316,21 @@ test("item hover actions remain interactive across the portal and open locate an
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "定位铁块生产线" }).click();
   await expect(page.getByRole("status")).toContainText("已定位");
+  await expect(card).toBeHidden();
+  // Locating schedules a 260 ms React Flow viewport animation after 50 ms.
+  // Wait until the reference has stopped moving before opening its portal again;
+  // otherwise a slow runner can emit mouseleave while Playwright crosses to the card.
+  await page.waitForTimeout(400);
 
   await reference.hover();
   card = page.getByRole("dialog", { name: "铁块快捷操作" });
-  await card.getByRole("button", { name: "打开铁块图鉴" }).click();
+  await expect(card).toBeVisible();
+  const openCodex = card.getByRole("button", { name: "打开铁块图鉴" });
+  await expect(openCodex).toBeEnabled();
+  await openCodex.click();
   const codex = page.getByRole("dialog", { name: "生产资料库" });
-  await expect(codex.locator(".recipe-item-header").getByText("铁块", { exact: true })).toBeVisible();
+  await expect(codex).toBeVisible({ timeout: 15_000 });
+  await expect(codex.locator(".recipe-item-header").getByText("铁块", { exact: true })).toBeVisible({ timeout: 15_000 });
 });
 
 test.describe("touch and responsive management", () => {
@@ -396,3 +411,4 @@ test.describe("touch and responsive management", () => {
     });
   }
 });
+

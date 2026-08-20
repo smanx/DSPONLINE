@@ -1,6 +1,6 @@
 import { AlertTriangle, HelpCircle, Info, X } from "lucide-react";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { AccessibleDialog } from "./AccessibleDialog";
 
 export const GAME_DIALOG_CLOSED_EVENT = "dsp-game-dialog-closed";
 
@@ -93,11 +93,6 @@ export function GameDialogProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  useEffect(() => {
-    if (!active) return;
-    window.requestAnimationFrame(() => (active.kind === "prompt" ? inputRef.current : primaryButtonRef.current)?.focus());
-  }, [active]);
-
   const api = useMemo<GameDialogApi>(() => ({
     alert: async (message, options) => { await enqueue<boolean>("alert", message, options); },
     confirm: (message, options) => enqueue<boolean>("confirm", message, options),
@@ -109,21 +104,31 @@ export function GameDialogProvider({ children }: { children: ReactNode }) {
 
   return <GameDialogContext.Provider value={api}>
     {children}
-    {active ? createPortal(<div className="game-dialog-backdrop" role="presentation" onPointerDown={(event) => {
-      if (event.target === event.currentTarget && active.kind !== "alert") finish(active.kind === "prompt" ? null : false);
-    }}>
-      <section className={`game-dialog${active.options.danger ? " game-dialog--danger" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="game-dialog-title" aria-describedby="game-dialog-message" onKeyDown={(event) => {
-        if (event.key === "Escape" && active.kind !== "alert") { event.preventDefault(); finish(active.kind === "prompt" ? null : false); }
-        if (event.key === "Enter" && active.kind === "prompt" && event.target === inputRef.current && !compositionRef.current && !event.nativeEvent.isComposing) { event.preventDefault(); finish(inputValue); }
-      }}>
+    {active ? <AccessibleDialog
+      open
+      className={`game-dialog${active.options.danger ? " game-dialog--danger" : ""}`}
+      layout="bare"
+      // Existing consumers route irreversible confirmations through this API
+      // without always supplying `danger`; keep its long-standing alertdialog
+      // contract while the shared modal now supplies focus containment.
+      role="alertdialog"
+      riskPolicy={active.kind === "alert" ? "explicit" : "dismissible"}
+      ariaLabelledBy="game-dialog-title"
+      ariaDescribedBy="game-dialog-message"
+      title={title}
+      description={active.message}
+      initialFocusRef={active.kind === "prompt" ? inputRef : primaryButtonRef}
+      onRequestClose={() => finish(active.kind === "prompt" ? null : false)}
+    >
         <header><i><Icon size={19} /></i><strong id="game-dialog-title">{title}</strong>{active.kind !== "alert" ? <button type="button" onClick={() => finish(active.kind === "prompt" ? null : false)} aria-label="关闭确认框" title="取消"><X size={17} /></button> : null}</header>
         <p id="game-dialog-message">{active.message}</p>
-        {active.kind === "prompt" ? <input ref={inputRef} value={inputValue} placeholder={active.options.placeholder} onCompositionStart={() => { compositionRef.current = true; }} onCompositionEnd={() => { compositionRef.current = false; }} onChange={(event) => setInputValue(event.target.value)} /> : null}
+        {active.kind === "prompt" ? <input ref={inputRef} value={inputValue} placeholder={active.options.placeholder} onCompositionStart={() => { compositionRef.current = true; }} onCompositionEnd={() => { compositionRef.current = false; }} onChange={(event) => setInputValue(event.target.value)} onKeyDown={(event) => {
+          if (!compositionRef.current && !event.nativeEvent.isComposing && event.key === "Enter") { event.preventDefault(); finish(inputValue); }
+        }} /> : null}
         <footer>
           {active.kind !== "alert" ? <button type="button" onClick={() => finish(active.kind === "prompt" ? null : false)}>{active.options.cancelLabel ?? "取消"}</button> : null}
           <button ref={primaryButtonRef} className={active.options.danger ? "danger" : "primary"} type="button" onClick={() => finish(active.kind === "prompt" ? inputValue : true)}>{active.options.confirmLabel ?? (active.kind === "alert" ? "知道了" : "确认")}</button>
         </footer>
-      </section>
-    </div>, document.body) : null}
+    </AccessibleDialog> : null}
   </GameDialogContext.Provider>;
 }

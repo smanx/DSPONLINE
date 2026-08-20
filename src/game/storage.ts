@@ -4,12 +4,15 @@ import {
   DYSON_STRUCTURE_POWER_KW,
   DEFAULT_STATION_WARPER_TARGET,
   DEFAULT_PLANET_TRAY_ITEM_LIMIT,
+  DEFAULT_PROLIFERATOR_BUFFER_LIMIT,
   MAX_PLANET_TRAY_ITEM_LIMIT,
   MAX_BUILDING_BUFFER_LIMIT,
   MAX_BUILDING_STACK_COUNT,
   MAX_BELT_LANES,
   MAX_CONSTRUCTION_AUTOMATION_TARGET,
+  MAX_PROLIFERATOR_BUFFER_LIMIT,
   MIN_PLANET_TRAY_ITEM_LIMIT,
+  MIN_PROLIFERATOR_BUFFER_LIMIT,
   SOLAR_SAIL_POWER_KW,
   STATION_SLOT_COUNT,
   STATION_WARPER_CAPACITY_PER_BUILDING,
@@ -27,31 +30,78 @@ import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame"
 import { getInfiniteResearchCostBigInt, getInfiniteResearchMaximumLevel } from "./infiniteResearch";
 import { normalizeDecimalIntegerString } from "./quantityFormat";
 import { ACTIVITY_MATERIAL_IDS } from "./activity";
-import { computeSaveStateChecksum, inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
+import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
+import {
+  computeSavePayloadTextChecksum,
+  decodeVerifiedSaveTransfer,
+  serializeSaveEnvelopeToTransfer,
+  type SaveTransferVerification,
+} from "./saveTransfer";
 import { createEmptyGalacticHubNetwork, createEmptySystemSpaceStations } from "./systemSpaceStation";
 import { normalizeHubInteger, SYSTEM_HUB_MAX_DIGITS } from "./systemHubLogistics";
 import { createEmptyQuantumLogisticsNetworkState, normalizeQuantumInteger, normalizeQuantumLogisticsNetworkState, QUANTUM_MAX_INTEGER_DIGITS } from "./quantumLogisticsNetwork";
 import { evaluateSpeedrunMilestones, normalizeSpeedrunState } from "./speedrun";
 import { normalizeIdleSettlementState } from "./idleSettlement";
-import { getActiveContentPackReferences, getMissingContentPackRequirements, loadContentPackRegistry, type ContentPackRegistry } from "./contentPacks";
+import { normalizeOrbitalStationState } from "./orbitalStation";
+import { isSpaceStationFeatureEnabled } from "./spaceStationFeature";
+import { getOrbitalCargoPortItems } from "./stationCargoTerminal";
+import { addStationInteger } from "./stationMath";
+import { getMissingContentPackRequirements, loadContentPackRegistry, type ContentPackRegistry } from "./contentPacks";
+import { projectPersistentSaveState } from "./saveProjection";
 import {
   clearPrimarySaveEmergencyMirror,
+  clearLocalSaveRawPayloadCache,
   flushLocalSaveWrites,
+  getLocalSaveCatalog,
+  getLocalSaveBackend,
   getLocalSaveStorageEstimate,
   getLocalSaveValue,
   hasLocalSaveCapacity,
   listLocalSaveKeys,
+  readLocalSavePayload,
   readPersistedLocalSaveValue,
   reloadLocalSaveCache,
   removeLocalSaveValue,
   setLocalSaveValue,
   writePrimarySaveEmergencyMirror,
+  clearPrimarySaveEmergencyMirrorProof,
+  getLocalSaveWriterStatus,
+  getLocalSaveRevision,
+  getPrimaryLocalSaveRevision,
+  getVerifiedPrimaryLocalSaveIdentity,
+  initializeLocalSaveStore,
+  setLocalSavePayloadWithProof,
   type LocalSaveStorageEstimate,
+  type VerifiedPrimaryLocalSaveIdentity,
 } from "./localSaveStore";
-import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SaveMode, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
+import {
+  serializeAuthoritativeSaveEnvelopeTransferInWorker,
+  serializeAuthoritativeSaveStateTransferInWorker,
+  type AuthoritativeSerializedSavePayload,
+  type AuthoritativeSaveSerializationProgress,
+} from "./authoritativeSaveSerializationClient";
+import type {
+  AuthoritativeSaveCheckpointOverlay,
+  AuthoritativeSaveEnvelopeTransfer,
+  AuthoritativeSaveExpectedStateIdentity,
+} from "./authoritativeSaveSerializationProtocol";
+import type { AuthoritativeSavePersistenceProgress } from "./authoritativeSavePersistenceProtocol";
+import {
+  SIMULATION_RUNTIME_PROTOCOL_VERSION,
+  type SimulationStateBlobTransfer,
+  type SimulationStateTransfer,
+} from "./simulationRuntimeProtocol";
+import { isWorkerBinaryPayload, workerBinaryPayloadByteLength, type WorkerBinaryPayload } from "./workerBinaryPayload";
+import { LocalSaveConflictError, LocalSaveReadOnlyError } from "./localSaveCoordination";
+import type { ActivityMaterialId, BeltConnection, BeltInputPortIndex, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SaveMode, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
 import type { OfflineApproximationReport } from "./offlineApproximation";
-import type { OfflineComplexityReport } from "./offlineComplexity";
+import type { OfflineComplexityReport } from "./offlineComplexityTypes";
+import type { OfflineSettlementFailureKind } from "./offlineSettlementStrategy";
 import type { CloudSaveSummary } from "./cloud";
+import type {
+  SimulationRuntimeStartupRecoveryBinding,
+  SimulationRuntimeStartupRecoveryCandidate,
+} from "./simulationRuntimeStartupRecovery";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -185,6 +235,10 @@ export interface LoadedGame {
   offlineSeconds: number;
   offlineReport: OfflineReport | null;
   recovery?: SaveRecovery;
+  /** Set only after a verified T1 primary and a durable recovery initialize. */
+  runtimeRecovery?: SimulationRuntimeStartupRecoveryBinding;
+  /** T0 candidate carried through deferred offline settlement until T1 saves. */
+  runtimeRecoveryCandidate?: SimulationRuntimeStartupRecoveryCandidate;
 }
 
 export interface DeferredLoadedGame extends LoadedGame {
@@ -198,6 +252,7 @@ export interface SaveRecovery {
 
 export interface OfflineReport {
   seconds: number;
+  settlement?: OfflineSettlementReceipt;
   produced: Array<{ itemId: ItemId; amount: number }>;
   completedTechIds: TechId[];
   structurePointsAdded: number;
@@ -209,6 +264,16 @@ export interface OfflineReport {
   approximation?: OfflineApproximationReport;
   /** Runtime-only diagnosis for the just-completed calculation. */
   complexity?: OfflineComplexityReport;
+}
+
+export interface OfflineSettlementReceipt {
+  status: "exact" | "approximate" | "conservative-skipped";
+  committed: boolean;
+  rewardsSubmitted: boolean;
+  originalSeconds: number;
+  submittedSeconds: number;
+  failureKind?: OfflineSettlementFailureKind;
+  failureReason?: string;
 }
 
 export interface SaveSlotSummary {
@@ -238,7 +303,7 @@ export interface SaveSnapshotSummary {
   issues: string[];
 }
 
-export type SaveGameFailureCode = "quota" | "verification" | "unavailable";
+export type SaveGameFailureCode = "quota" | "verification" | "unavailable" | "read-only" | "conflict";
 
 export interface SaveGameResult {
   success: boolean;
@@ -251,6 +316,10 @@ export interface SaveGameResult {
   /** True when the requested state is already the last verified primary save. */
   skippedUnchanged?: boolean;
   timings?: SaveStageTimings;
+  /** Returned only by explicit authority-replacement saves. */
+  sourceStateTransfer?: SimulationStateTransfer | SimulationStateBlobTransfer;
+  /** Original full envelope ownership, returned for retry/diagnostics. */
+  sourceEnvelopeTransfer?: WorkerBinaryPayload;
 }
 
 export interface SaveStageTimings {
@@ -403,30 +472,30 @@ function legacyChecksumFor(formatVersion: number, state: unknown): string {
   return computeSaveStateChecksum(formatVersion, projected);
 }
 
-function envelopeFor(
+function serializeEnvelopeProjection(
   state: GameState,
   savedAt = Date.now(),
   kind: SaveEnvelope["kind"] = "primary",
   reason?: string,
   contentPackRegistry: ContentPackRegistry = loadContentPackRegistry(),
   slot: SaveSlotId | "main" = "main",
-): SaveEnvelope {
-  // Detach the exact serializable snapshot before hashing. The old shallow
-  // envelope could retain live nested references between checksum generation
-  // and a later stringify performed by a caller.
-  const persistent = JSON.parse(JSON.stringify(persistentState(state, contentPackRegistry))) as GameState;
-  persistent.achievements.unlockedIds = persistent.achievements.unlockedIds.filter(isAchievementId);
-  const envelope: SaveEnvelope = {
+): { raw: string; verification: SaveTransferVerification } {
+  const persistent = prepareSaveStateForBackground(state, contentPackRegistry);
+  const serialized = serializeSaveEnvelopeToTransfer(persistent, {
     formatVersion: SAVE_FORMAT_VERSION,
     kind,
     ...(reason ? { reason } : {}),
     savedAt,
     mode: saveModeForState(state),
     slot,
-    state: persistent,
+  });
+  const verification: SaveTransferVerification = {
+    integrity: serialized.integrity,
+    stateChecksum: serialized.stateChecksum,
+    payloadChecksum: serialized.payloadChecksum,
+    byteLength: serialized.byteLength,
   };
-  envelope.checksum = computeSaveStateChecksum(SAVE_FORMAT_VERSION, persistent);
-  return envelope;
+  return { raw: decodeVerifiedSaveTransfer(serialized.bytes, verification), verification };
 }
 
 export function serializeEnvelope(
@@ -437,11 +506,7 @@ export function serializeEnvelope(
   contentPackRegistry: ContentPackRegistry = loadContentPackRegistry(),
   slot: SaveSlotId | "main" = "main",
 ): string {
-  const raw = JSON.stringify(envelopeFor(state, savedAt, kind, reason, contentPackRegistry, slot));
-  if (inspectSaveEnvelopeChecksum(raw).status !== "valid") {
-    throw new Error("生成的存档未通过完整性自检");
-  }
-  return raw;
+  return serializeEnvelopeProjection(state, savedAt, kind, reason, contentPackRegistry, slot).raw;
 }
 
 export interface BackgroundSaveResult {
@@ -449,21 +514,31 @@ export interface BackgroundSaveResult {
   durationMs: number;
   usedWorker: boolean;
   summary?: CloudSaveSummary;
+  verification: SaveTransferVerification;
+  payloadSha256?: string;
 }
 
 let backgroundSaveRequestId = 0;
 
 /**
- * Prepare the persistent projection once on the main thread, then let a
- * short-lived Worker perform the large checksum/stringify step. The old
- * synchronous serializer remains the fallback for browsers without Worker.
+ * Send one structured-cloned source snapshot to a short-lived Worker. Sparse
+ * projection, checksum, serialization and byte verification all stay off the
+ * UI thread; the synchronous serializer remains the compatibility fallback.
  */
-export function serializeEnvelopeInWorker(state: GameState, savedAt = Date.now(), kind: SaveEnvelope["kind"] = "primary", reason?: string): Promise<BackgroundSaveResult> {
+export function serializeEnvelopeInWorker(
+  state: GameState,
+  savedAt = Date.now(),
+  kind: SaveEnvelope["kind"] = "primary",
+  reason?: string,
+  slot: SaveSlotId | "main" = "main",
+  includePayloadSha256 = false,
+): Promise<BackgroundSaveResult> {
   if (typeof Worker === "undefined") {
     const startedAt = monotonicNow();
-    return Promise.resolve({ raw: serializeEnvelope(state, savedAt, kind, reason), durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
+    const serialized = serializeEnvelopeProjection(state, savedAt, kind, reason, loadContentPackRegistry(), slot);
+    return Promise.resolve({ ...serialized, durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
   }
-  const persistent = prepareSaveStateForBackground(state);
+  const contentPackRegistry = loadContentPackRegistry();
   const id = ++backgroundSaveRequestId;
   return new Promise((resolve) => {
     let worker: Worker;
@@ -471,7 +546,8 @@ export function serializeEnvelopeInWorker(state: GameState, savedAt = Date.now()
       worker = new Worker(new URL("./save.worker.ts", import.meta.url), { type: "module", name: "save-serialization" });
     } catch {
       const startedAt = monotonicNow();
-      resolve({ raw: serializeEnvelope(state, savedAt, kind, reason), durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
+      const serialized = serializeEnvelopeProjection(state, savedAt, kind, reason, loadContentPackRegistry(), slot);
+      resolve({ ...serialized, durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
       return;
     }
     let settled = false;
@@ -483,22 +559,45 @@ export function serializeEnvelopeInWorker(state: GameState, savedAt = Date.now()
     };
     const fallback = () => {
       const startedAt = monotonicNow();
-      finish({ raw: serializeEnvelope(state, savedAt, kind, reason), durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
+      const serialized = serializeEnvelopeProjection(state, savedAt, kind, reason, loadContentPackRegistry(), slot);
+      finish({ ...serialized, durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
     };
     worker.onerror = fallback;
-    worker.onmessage = (event: MessageEvent<{ id: number; raw?: string; durationMs?: number; summary?: CloudSaveSummary; error?: string }>) => {
-      if (event.data.id !== id || !event.data.raw || event.data.error) {
+    worker.onmessage = (event: MessageEvent<{ id: number; bytes?: ArrayBuffer; payloadChecksum?: string; payloadSha256?: string; byteLength?: number; durationMs?: number; summary?: CloudSaveSummary; error?: string }>) => {
+      const { bytes, payloadChecksum, payloadSha256, byteLength, summary } = event.data;
+      if (event.data.id !== id || !(bytes instanceof ArrayBuffer) || !payloadChecksum ||
+        (includePayloadSha256 && !/^[a-f0-9]{64}$/.test(payloadSha256 ?? "")) || !summary?.stateChecksum ||
+        summary.integrity !== "valid" || byteLength !== bytes.byteLength || event.data.error) {
         fallback();
         return;
       }
-      if (inspectSaveEnvelopeChecksum(event.data.raw).status !== "valid") {
+      const verification: SaveTransferVerification = {
+        integrity: "valid",
+        stateChecksum: summary.stateChecksum,
+        payloadChecksum,
+        byteLength,
+      };
+      let raw: string;
+      try {
+        raw = decodeVerifiedSaveTransfer(bytes, verification);
+      } catch {
         fallback();
         return;
       }
-      finish({ raw: event.data.raw, durationMs: Math.max(0, event.data.durationMs ?? 0), usedWorker: true, ...(event.data.summary ? { summary: event.data.summary } : {}) });
+      finish({ raw, verification, ...(payloadSha256 ? { payloadSha256 } : {}), durationMs: Math.max(0, event.data.durationMs ?? 0), usedWorker: true, summary });
     };
     try {
-      worker.postMessage({ id, formatVersion: SAVE_FORMAT_VERSION, savedAt, kind, ...(reason ? { reason } : {}), state: persistent });
+      worker.postMessage({
+        id,
+        formatVersion: SAVE_FORMAT_VERSION,
+        savedAt,
+        kind,
+        slot,
+        ...(reason ? { reason } : {}),
+        state,
+        contentPackRegistry,
+        includePayloadSha256,
+      });
     } catch {
       fallback();
     }
@@ -864,8 +963,8 @@ function normalizedBuildingBufferLimit(value: unknown): number {
 }
 
 function normalizedProliferatorBufferLimit(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 600;
-  return Math.max(1, Math.min(100_000, Math.floor(value)));
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_PROLIFERATOR_BUFFER_LIMIT;
+  return Math.max(MIN_PROLIFERATOR_BUFFER_LIMIT, Math.min(MAX_PROLIFERATOR_BUFFER_LIMIT, Math.floor(value)));
 }
 
 function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
@@ -972,7 +1071,7 @@ function normalizeGalacticHubNetwork(saved: Record<string, any>): GalacticHubNet
 export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegistry = loadContentPackRegistry()): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   // v43 was an unpublished space-station/elevator experiment. Never merge
   // its station inventory or fleet into the quantum pool. A v43 envelope that
   // actually contains those fields is rejected; a clean v43 fixture can still
@@ -994,15 +1093,17 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
   const initial = createInitialState(savedSeed, saved.version < 20);
+  const initialResourceById = saved.version < 13
+    ? new Map(initial.entities.filter((entity) => entity.kind === "vein").map((entity) => [entity.id, entity] as const))
+    : null;
   const galaxy = normalizeGalaxyState(saved.version >= 20 ? saved.galaxy : { seed: initial.galaxy.seed }, saved.version < 20);
-  const entities = saved.entities.map((entity: FactoryEntity) => {
+  const entities = saved.entities.filter((entity: FactoryEntity) =>
+    entity?.buildingId !== "orbital_cargo_terminal" || saved.version >= 47 && saved.mode !== "speedrun").map((entity: FactoryEntity) => {
     // `quantumTarget` was briefly written to every building by an older
     // client. Keep it only for interstellar stations; ordinary buildings
     // must not carry the extension back into the next cloud save.
     const { quantumTarget: _legacyQuantumTarget, ...entityWithoutLegacyQuantumTarget } = entity;
-    const currentResource = saved.version < 13
-      ? initial.entities.find((candidate) => candidate.kind === "vein" && candidate.id === entity.id)
-      : undefined;
+    const currentResource = initialResourceById?.get(entity.id);
     const legacyRelocation = currentResource
       ? { planetId: currentResource.planetId, position: currentResource.position }
       : undefined;
@@ -1019,9 +1120,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     const accumulator = entity.buildingId === "accumulator";
     const energyExchanger = entity.buildingId === "energy_exchanger";
     const materialDeliveryHub = entity.buildingId === "material_delivery_hub";
+    const orbitalCargoTerminal = entity.buildingId === "orbital_cargo_terminal";
     const deliverySlots = materialDeliveryHub ? normalizeMaterialDeliverySlots(entity, saved.version) : undefined;
     const blackHoleConnector = entity.buildingId === "micro_black_hole_connector";
-    const machineCount = persistedNonNegativeInteger(entity.machineCount, `实体 ${entity.id ?? "未知"}.machineCount`);
+    const machineCount = orbitalCargoTerminal ? 1 : persistedNonNegativeInteger(entity.machineCount, `实体 ${entity.id ?? "未知"}.machineCount`);
     const minerCount = persistedNonNegativeInteger(entity.minerCount, `实体 ${entity.id ?? "未知"}.minerCount`);
     const storedEnergyCapacity = accumulator || energyExchanger
       ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * machineCount
@@ -1084,6 +1186,25 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         ? [...new Set(deliverySlots!.flatMap((slot) => slot.itemId ? [slot.itemId] : []))]
         : undefined,
       deliverySlots,
+      orbitalCargoPortItems: orbitalCargoTerminal && saved.version >= 47
+        ? Array.from({ length: 4 }, (_, index) => {
+          const itemId = entity.orbitalCargoPortItems?.[index];
+          return itemId && itemId in ITEMS ? itemId : null;
+        })
+        : undefined,
+      orbitalCargoBinding: orbitalCargoTerminal && saved.version >= 47
+        ? entity.orbitalCargoBinding?.kind === "construction"
+          ? { kind: "construction" as const }
+          : entity.orbitalCargoBinding?.kind === "contract" && typeof entity.orbitalCargoBinding.contractId === "string" && entity.orbitalCargoBinding.contractId.length <= 180
+            ? { kind: "contract" as const, contractId: entity.orbitalCargoBinding.contractId }
+            : null
+        : undefined,
+      orbitalCargoProgress: orbitalCargoTerminal && saved.version >= 47 && typeof entity.orbitalCargoProgress === "number" && Number.isFinite(entity.orbitalCargoProgress)
+        ? Math.max(0, Math.min(0.999999999, entity.orbitalCargoProgress))
+        : orbitalCargoTerminal ? 0 : undefined,
+      orbitalCargoTotalUploaded: orbitalCargoTerminal && saved.version >= 47
+        ? normalizeDecimalIntegerString(entity.orbitalCargoTotalUploaded, "0", 256)
+        : orbitalCargoTerminal ? "0" : undefined,
       stationMode: entity.kind === "station" ? orbitalCollector ? "supply" : entity.stationMode ?? "supply" : entity.stationMode,
       stationTier: interstellarStation ? saved.version >= 43 && entity.stationTier === 2 ? 2 : 1 : undefined,
       stationOperationMode: interstellarStation && saved.version >= 43 && entity.stationTier === 2 && entity.stationOperationMode === "elevator" ? "elevator" : interstellarStation ? "legacy" : undefined,
@@ -1179,7 +1300,43 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     };
   }) as FactoryEntity[];
 
+  const terminalByPlanet = new Map<PlanetId, FactoryEntity>();
+  let duplicateTerminalRefunds = 0;
+  for (let index = entities.length - 1; index >= 0; index -= 1) {
+    const entity = entities[index];
+    if (entity.buildingId !== "orbital_cargo_terminal") continue;
+    const retained = terminalByPlanet.get(entity.planetId);
+    if (!retained) {
+      terminalByPlanet.set(entity.planetId, entity);
+      continue;
+    }
+    for (const [itemId, amount] of Object.entries(entity.inputs) as Array<[ItemId, number]>) {
+      retained.inputs[itemId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(retained.inputs[itemId] ?? 0) + Math.floor(amount ?? 0));
+    }
+    for (const [itemId, amount] of Object.entries(entity.outputs) as Array<[ItemId, number]>) {
+      retained.outputs[itemId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(retained.outputs[itemId] ?? 0) + Math.floor(amount ?? 0));
+    }
+    const retainedPorts = getOrbitalCargoPortItems(retained);
+    for (const itemId of getOrbitalCargoPortItems(entity)) {
+      if (!itemId || retainedPorts.includes(itemId)) continue;
+      const emptyPort = retainedPorts.indexOf(null);
+      if (emptyPort >= 0) retainedPorts[emptyPort] = itemId;
+    }
+    retained.orbitalCargoPortItems = retainedPorts;
+    retained.orbitalCargoTotalUploaded = addStationInteger(retained.orbitalCargoTotalUploaded, entity.orbitalCargoTotalUploaded);
+    duplicateTerminalRefunds += 1;
+    entities.splice(index, 1);
+  }
+
   for (const resource of initial.entities.filter((entity) => entity.kind === "vein")) {
+    // A v20+ save already owns an immutable galaxy resource catalogue. Rebuilding
+    // the baseline with the same seed can legitimately produce a different
+    // generated catalogue (notably for the legacy default seed), so only restore
+    // stable resource entities that the persisted planet profile still declares.
+    // This prevents load/import/cloud restore from silently adding a rare vein.
+    const declaredBySavedGalaxy = resource.resourceId !== undefined &&
+      galaxy.profiles[resource.planetId]?.resourceIds.includes(resource.resourceId);
+    if (saved.version >= 20 && !declaredBySavedGalaxy) continue;
     const equivalentGuaranteedOil = resource.resourceId === "crude_oil" &&
       GUARANTEED_CRUDE_OIL_PLANETS.includes(resource.planetId as typeof GUARANTEED_CRUDE_OIL_PLANETS[number]) &&
       entities.some((entity) => entity.kind === "vein" && entity.planetId === resource.planetId && entity.resourceId === "crude_oil");
@@ -1192,6 +1349,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     const amount = saved.construction?.[buildingId];
     return [buildingId, Math.max(0, Math.floor(typeof amount === "number" ? amount : 0))];
   })) as GameState["construction"];
+  construction.orbital_cargo_terminal = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    (construction.orbital_cargo_terminal ?? 0) + duplicateTerminalRefunds,
+  );
   if (saved.version < 31) {
     const legacySorterRefunds = [
       ["sorter_mk1", "conveyor_belt_mk1"],
@@ -1203,8 +1364,26 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       construction[sorterId] = 0;
     }
   }
+  // Preserve Array.find's historical first-match behavior for malformed saves
+  // with duplicate entity ids. Special targets need their own first matching
+  // indexes because the legacy lookups included the building predicate. Keep
+  // all belt migration lookups O(E+B); a per-belt Array.find would turn a
+  // large factory reload into an E×B scan.
+  const entityById = new Map<string, FactoryEntity>();
+  const materialDeliveryHubById = new Map<string, FactoryEntity>();
+  const orbitalCargoTerminalById = new Map<string, FactoryEntity>();
+  for (const entity of entities) {
+    if (!entityById.has(entity.id)) entityById.set(entity.id, entity);
+    if (entity.buildingId === "material_delivery_hub" && !materialDeliveryHubById.has(entity.id)) {
+      materialDeliveryHubById.set(entity.id, entity);
+    }
+    if (entity.buildingId === "orbital_cargo_terminal" && !orbitalCargoTerminalById.has(entity.id)) {
+      orbitalCargoTerminalById.set(entity.id, entity);
+    }
+  }
   const migratedBelts: BeltConnection[] = Array.isArray(saved.belts) ? saved.belts.map((belt: Record<string, any>) => {
-    const source = entities.find((entity) => entity.id === belt.source);
+    const source = entityById.get(belt.source);
+    const target = entityById.get(belt.target);
     const tier = saved.version >= 8 && validBeltTier(belt.tier) ? belt.tier : 1;
     const rawLanes = Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, nonNegativeInteger(belt.lanes) || 1));
     const lanes = Math.min(MAX_BELT_LANES, rawLanes);
@@ -1232,16 +1411,18 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       totalTransferred: nonNegativeInteger(belt.totalTransferred),
       congestion: Math.min(1, nonNegativeNumber(belt.congestion)),
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
-      targetPortIndex: saved.version >= 34 &&
-        (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2) &&
-        (entities.find((entity) => entity.id === belt.target)?.buildingId === "micro_black_hole_connector" ||
-          saved.version >= 39 && entities.find((entity) => entity.id === belt.target)?.buildingId === "material_delivery_hub")
-        ? belt.targetPortIndex
-        : undefined,
+      targetPortIndex: (() => {
+        const port = belt.targetPortIndex;
+        if (!Number.isInteger(port) || port < 0 || port > 3) return undefined;
+        if (target?.buildingId === "orbital_cargo_terminal" && saved.version >= 47) return port as BeltInputPortIndex;
+        if ((target?.buildingId === "micro_black_hole_connector" && saved.version >= 34 ||
+          target?.buildingId === "material_delivery_hub" && saved.version >= 39) && port <= 2) return port as BeltInputPortIndex;
+        return undefined;
+      })(),
     } as BeltConnection;
   }) : [];
   for (const belt of migratedBelts) {
-    const target = entities.find((entity) => entity.id === belt.target && entity.buildingId === "material_delivery_hub");
+    const target = materialDeliveryHubById.get(belt.target);
     if (!target) continue;
     const slots = target.deliverySlots ?? normalizeMaterialDeliverySlots(target, saved.version);
     const requested = belt.targetPortIndex;
@@ -1259,29 +1440,54 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     target.deliverySlots = slots;
     target.deliveryItemIds = [...new Set(slots.flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
   }
+  for (const belt of migratedBelts) {
+    const target = orbitalCargoTerminalById.get(belt.target);
+    if (!target) continue;
+    const ports = getOrbitalCargoPortItems(target);
+    const requested = belt.targetPortIndex;
+    let resolved = requested !== undefined && (!ports[requested] || ports[requested] === belt.itemId)
+      ? requested
+      : ports.findIndex((itemId) => itemId === belt.itemId);
+    if (resolved < 0) resolved = ports.findIndex((itemId) => itemId === null);
+    if (resolved < 0 || resolved > 3) {
+      belt.targetPortIndex = undefined;
+      continue;
+    }
+    belt.targetPortIndex = resolved as BeltInputPortIndex;
+    if (!ports[resolved]) ports[resolved] = belt.itemId;
+    target.orbitalCargoPortItems = ports;
+  }
   const occupiedBlackHolePorts = new Set<string>();
-  const belts = migratedBelts.filter((belt) => {
-    const source = entities.find((entity) => entity.id === belt.source);
-    const target = entities.find((entity) => entity.id === belt.target);
-    if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId) return false;
+  const belts: BeltConnection[] = [];
+  const rejectedBelts: BeltConnection[] = [];
+  for (const belt of migratedBelts) {
+    const source = entityById.get(belt.source);
+    const target = entityById.get(belt.target);
+    let accepted = Boolean(source && target && source.planetId === target.planetId && belt.planetId === source.planetId);
     // Ordinary machine lines are intentionally preserved even when a loaded
     // recipe currently does not accept their item. They may be a player-owned
     // temporarily disconnected route and have no persisted numbered port to
     // repair. Numbered delivery/black-hole ports below are authoritative and
     // can be validated without guessing player intent.
-    if (target.buildingId === "material_delivery_hub") {
-      if (belt.targetPortIndex === undefined) return false;
-      const slot = target.deliverySlots?.[belt.targetPortIndex];
-      return Boolean(slot && slot.mode !== "disabled" && slot.itemId === belt.itemId);
+    if (accepted && target!.buildingId === "material_delivery_hub") {
+      const slot = belt.targetPortIndex === undefined ? undefined : target!.deliverySlots?.[belt.targetPortIndex];
+      accepted = Boolean(slot && slot.mode !== "disabled" && slot.itemId === belt.itemId);
+    } else if (accepted && target!.buildingId === "orbital_cargo_terminal") {
+      accepted = belt.targetPortIndex !== undefined && target!.orbitalCargoPortItems?.[belt.targetPortIndex] === belt.itemId;
+    } else if (accepted && target!.buildingId !== "micro_black_hole_connector") {
+      accepted = belt.targetPortIndex === undefined;
+    } else if (accepted) {
+      if (belt.targetPortIndex === undefined) {
+        accepted = false;
+      } else {
+        const key = `${target!.id}:${belt.targetPortIndex}`;
+        accepted = !occupiedBlackHolePorts.has(key);
+        if (accepted) occupiedBlackHolePorts.add(key);
+      }
     }
-    if (target.buildingId !== "micro_black_hole_connector") return belt.targetPortIndex === undefined;
-    if (belt.targetPortIndex === undefined) return false;
-    const key = `${target.id}:${belt.targetPortIndex}`;
-    if (occupiedBlackHolePorts.has(key)) return false;
-    occupiedBlackHolePorts.add(key);
-    return true;
-  });
-  for (const belt of migratedBelts.filter((candidate) => !belts.includes(candidate))) {
+    (accepted ? belts : rejectedBelts).push(belt);
+  }
+  for (const belt of rejectedBelts) {
     const constructionId = getBeltConstructionId(belt.tier);
     construction[constructionId] = Math.min(Number.MAX_SAFE_INTEGER, (construction[constructionId] ?? 0) + belt.lanes);
   }
@@ -1499,7 +1705,9 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             x: typeof entity.offset?.x === "number" && Number.isFinite(entity.offset.x) ? entity.offset.x : 0,
             y: typeof entity.offset?.y === "number" && Number.isFinite(entity.offset.y) ? entity.offset.y : 0,
           },
-          machineCount: persistedPositiveInteger(entity.machineCount, `蓝图 ${blueprint.name ?? blueprintIndex + 1} 设备 ${entity.key ?? entityIndex + 1}.machineCount`),
+          machineCount: entity.buildingId === "orbital_cargo_terminal"
+            ? 1
+            : persistedPositiveInteger(entity.machineCount, `蓝图 ${blueprint.name ?? blueprintIndex + 1} 设备 ${entity.key ?? entityIndex + 1}.machineCount`),
           recipeId,
           targetDysonOrbitId: entity.buildingId === "em_rail_ejector" && saved.version >= 41 &&
             typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0 && entity.targetDysonOrbitId.length <= 160
@@ -1525,6 +1733,12 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             ? [...new Set(deliverySlots!.flatMap((slot) => slot.itemId ? [slot.itemId] : []))]
             : undefined,
           deliverySlots,
+          orbitalCargoPortItems: entity.buildingId === "orbital_cargo_terminal" && saved.version >= 47
+            ? Array.from({ length: 4 }, (_, index) => {
+              const itemId = entity.orbitalCargoPortItems?.[index];
+              return typeof itemId === "string" && itemId in ITEMS ? itemId as ItemId : null;
+            })
+            : undefined,
           distributionMode: entity.distributionMode === "priority" ? "priority" as const : entity.distributionMode === "balanced" ? "balanced" as const : undefined,
           fuelItemId,
           energyMode: validEnergyMode(entity.energyMode) ? entity.energyMode : undefined,
@@ -1584,9 +1798,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         if (!keys.has(belt.sourceKey) || !keys.has(belt.targetKey) || typeof belt.itemId !== "string" || !(belt.itemId in ITEMS)) return [];
         const tier = validBeltTier(belt.tier) ? belt.tier : 1;
         const targetTemplate = blueprintEntities.find((entity) => entity.key === belt.targetKey);
-        const targetPortIndex = (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2) &&
-          (targetTemplate?.buildingId === "micro_black_hole_connector" || targetTemplate?.buildingId === "material_delivery_hub")
-          ? belt.targetPortIndex as 0 | 1 | 2
+        const targetPortIndex = (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2 || belt.targetPortIndex === 3) &&
+          (targetTemplate?.buildingId === "orbital_cargo_terminal" && saved.version >= 47 ||
+            belt.targetPortIndex <= 2 && (targetTemplate?.buildingId === "micro_black_hole_connector" || targetTemplate?.buildingId === "material_delivery_hub"))
+          ? belt.targetPortIndex as BeltInputPortIndex
           : undefined;
         const elevatorOutputIndex = (belt.elevatorOutputIndex === 0 || belt.elevatorOutputIndex === 1 || belt.elevatorOutputIndex === 2 || belt.elevatorOutputIndex === 3 || belt.elevatorOutputIndex === 4) &&
           blueprintEntities.some((entity) => entity.key === belt.sourceKey && entity.buildingId === "interstellar_logistics_station" && entity.stationTier === 2)
@@ -1722,6 +1937,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         reservedFleet,
         placedEntityIdsByKey,
         buildingCompletedAt: status === "waiting-fleet" ? nonNegativeNumber(entry.buildingCompletedAt) : undefined,
+        allowExactOverlap: entry.allowExactOverlap === true ? true : undefined,
       }];
     })
     : [];
@@ -1761,6 +1977,11 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     : [];
   const productionHistory: GameState["productionHistory"] = Array.isArray(saved.productionHistory)
     ? saved.productionHistory.slice(-180).flatMap((sample: Record<string, any>) => {
+      // A historical runtime projection could leave an undefined array slot.
+      // JSON turns that slot into null before a later autosave validates the
+      // envelope. History is diagnostic-only, so discard malformed samples
+      // instead of rejecting an otherwise valid factory save.
+      if (!isRecord(sample)) return [];
       const elapsedSeconds = nonNegativeNumber(sample.elapsedSeconds);
       if (elapsedSeconds <= 0) return [];
       return [{
@@ -2106,6 +2327,24 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   // Missing mode values are never promoted to ranked play. Legacy saves stay
   // readable, but only an explicit speedrun marker can preserve that mode.
   const mode: SaveMode = saved.mode === "speedrun" ? "speedrun" : "normal";
+  const totalProduced = integerRecord(saved.totalProduced);
+  const spaceStationFeatureEnabled = isSpaceStationFeatureEnabled();
+  const targetVersion = spaceStationFeatureEnabled || saved.version >= 47 ? 47 : 46;
+  const orbitalStation = normalizeOrbitalStationState(saved.version >= 47 || spaceStationFeatureEnabled ? (saved.version >= 47 ? saved.orbitalStation : undefined) : undefined, {
+    mode,
+    universeMatrixProduced: totalProduced.universe_matrix ?? 0,
+  });
+  orbitalStation.layout.featuredAchievementIds = orbitalStation.layout.featuredAchievementIds.filter((achievementId) =>
+    unlockedAchievementIds.includes(achievementId));
+  const acceptedContractIds = new Set(orbitalStation.contractBoard.accepted.map((contract) => contract.id));
+  for (const entity of entities) {
+    if (entity.buildingId !== "orbital_cargo_terminal" || !entity.orbitalCargoBinding) continue;
+    if (entity.orbitalCargoBinding.kind === "construction") {
+      if (!["eligible", "core-building", "dock-building", "showcase-building"].includes(orbitalStation.status)) entity.orbitalCargoBinding = null;
+    } else if (!acceptedContractIds.has(entity.orbitalCargoBinding.contractId)) {
+      entity.orbitalCargoBinding = null;
+    }
+  }
   const idleSettlement = normalizeIdleSettlementState(saved.idleSettlement);
   const speedrun = mode === "speedrun"
     ? normalizeSpeedrunState(saved.speedrun)
@@ -2122,7 +2361,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   const migrated = {
     ...initial,
     ...saved,
-    version: 46,
+    version: targetVersion,
     mode,
     activePlanetId,
     entities,
@@ -2134,7 +2373,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     construction,
     constructionAutomation,
     portableFleet,
-    totalProduced: integerRecord(saved.totalProduced),
+    totalProduced,
     research: {
       selectedTechId,
       pausedTechId,
@@ -2183,6 +2422,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     systemSpaceStations,
     galacticHubNetwork,
     quantumLogisticsNetwork,
+    orbitalStation,
     timeWarp,
     endgame,
   } as GameState;
@@ -2198,45 +2438,14 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   return syncCampaignProgress(repairedSpeedrun, { grantRewards: saved.version >= 18 });
 }
 
-function persistentState(state: GameState, contentPackRegistry: ContentPackRegistry = loadContentPackRegistry()): GameState {
-  const { runtimeFlow: _runtimeFlow, ...quantumLogisticsNetwork } = state.quantumLogisticsNetwork;
-  const persistentEntities = state.entities.map((entity) => {
-    if (entity.buildingId === "interstellar_logistics_station") return entity;
-    const { quantumTarget: _legacyQuantumTarget, ...withoutLegacyQuantumTarget } = entity;
-    return withoutLegacyQuantumTarget;
-  });
-  const sanitizeBlueprint = (blueprint: BlueprintDefinition): BlueprintDefinition => ({
-    ...blueprint,
-    entities: blueprint.entities.map((entity) => {
-      const { quantumTarget: _legacyQuantumTarget, operationEnabledOnDeploy: _legacyOperation, ...withoutLegacyFields } = entity;
-      if (entity.buildingId === "interstellar_logistics_station") return { ...withoutLegacyFields, quantumTarget: entity.quantumTarget === true };
-      if (entity.buildingId === "micro_black_hole_connector") return typeof entity.operationEnabledOnDeploy === "boolean"
-        ? { ...withoutLegacyFields, operationEnabledOnDeploy: entity.operationEnabledOnDeploy }
-        : withoutLegacyFields;
-      return withoutLegacyFields;
-    }),
-  });
-  return {
-    ...state,
-    mode: saveModeForState(state),
-    idleSettlement: normalizeIdleSettlementState(state.idleSettlement),
-    // Production curves are runtime diagnostics. Keeping them in every local
-    // recovery point multiplies save size without affecting factory progress.
-    productionHistory: [],
-    contentPacks: getActiveContentPackReferences(contentPackRegistry),
-    entities: persistentEntities,
-    blueprints: state.blueprints.map(sanitizeBlueprint),
-    blueprintVersions: state.blueprintVersions.map((snapshot) => ({ ...snapshot, definition: sanitizeBlueprint(snapshot.definition) })),
-    planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...state.tray } },
-    quantumLogisticsNetwork,
-  };
-}
-
 /** Detach runtime-only fields before handing a snapshot to the save Worker. */
-export function prepareSaveStateForBackground(state: GameState): GameState {
-  const prepared = JSON.parse(JSON.stringify(persistentState(state))) as GameState;
-  prepared.achievements.unlockedIds = prepared.achievements.unlockedIds.filter(isAchievementId);
-  return prepared;
+export function prepareSaveStateForBackground(
+  state: GameState,
+  contentPackRegistry: ContentPackRegistry = loadContentPackRegistry(),
+): GameState {
+  // postMessage performs the one authoritative structured clone synchronously.
+  // Avoid creating another full JSON clone on the UI thread before that copy.
+  return projectPersistentSaveState(state, contentPackRegistry);
 }
 
 function buildOfflineReport(before: GameState, after: GameState, seconds: number): OfflineReport {
@@ -2257,6 +2466,13 @@ function buildOfflineReport(before: GameState, after: GameState, seconds: number
   });
   return {
     seconds,
+    settlement: {
+      status: "exact",
+      committed: true,
+      rewardsSubmitted: true,
+      originalSeconds: seconds,
+      submittedSeconds: seconds,
+    },
     produced,
     completedTechIds: after.research.completedTechIds.filter((techId) => !beforeTechIds.has(techId)),
     structurePointsAdded: Math.max(0, after.dysonSphere.structurePoints - before.dysonSphere.structurePoints),
@@ -2387,8 +2603,12 @@ export function inspectSave(raw: string, contentPackRegistry?: ContentPackRegist
   if (typeof envelope.checksum === "string" && envelope.checksum.length > 0) {
     recordedChecksum = envelope.checksum;
     computedChecksum = computeSaveStateChecksum(formatVersion, envelope.state);
-    const legacyExpected = legacyChecksumFor(formatVersion, envelope.state);
-    checksum = envelope.checksum === computedChecksum || envelope.checksum === legacyExpected ? "valid" : "invalid";
+    // Current envelopes overwhelmingly use the exact state checksum. The
+    // legacy compatibility projection clones the complete state, so only pay
+    // that cost after the current checksum has actually failed.
+    checksum = envelope.checksum === computedChecksum || envelope.checksum === legacyChecksumFor(formatVersion, envelope.state)
+      ? "valid"
+      : "invalid";
   } else {
     issues.push("旧版存档没有完整性校验，导入后会自动补写");
   }
@@ -2489,6 +2709,54 @@ export function inspectSave(raw: string, contentPackRegistry?: ContentPackRegist
   };
 }
 
+/**
+ * Parse a payload that has already passed decodeVerifiedSaveTransfer. The
+ * transferable byte hash makes the Worker-produced envelope authoritative, so
+ * this path performs one JSON parse plus the normal version migration without
+ * recomputing the same 20+ MB state checksum on the UI thread.
+ */
+export function parseTrustedWorkerEnvelope(
+  raw: string,
+  verification: SaveTransferVerification,
+  contentPackRegistry: ContentPackRegistry = loadContentPackRegistry(),
+  options: { persistentProjection?: boolean } = {},
+): GameState {
+  if (verification.integrity !== "valid" || !verification.stateChecksum) {
+    throw new Error("Worker 存档缺少完整性证明");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Worker 存档无法解析");
+  }
+  if (!isRecord(parsed) || parsed.formatVersion !== SAVE_FORMAT_VERSION ||
+    !isRecord(parsed.state) || parsed.checksum !== verification.stateChecksum) {
+    throw new Error("Worker 存档信封与完整性证明不一致");
+  }
+  if (parsed.mode !== "normal" && parsed.mode !== "speedrun") throw new Error("Worker 存档模式无效");
+  if (parsed.slot !== "main" && parsed.slot !== 1 && parsed.slot !== 2 && parsed.slot !== 3) {
+    throw new Error("Worker 存档槽位无效");
+  }
+  const requiredPacks = Array.isArray(parsed.state.contentPacks)
+    ? parsed.state.contentPacks.filter((entry: unknown) => isRecord(entry) && typeof entry.id === "string" && typeof entry.version === "string") as Array<{ id: string; version: string }>
+    : [];
+  const missingPacks = getMissingContentPackRequirements(requiredPacks, contentPackRegistry);
+  if (missingPacks.length > 0) throw new MissingContentPacksError(missingPacks);
+  if (options.persistentProjection === false) {
+    const state = parsed.state as unknown as GameState;
+    if (state.mode !== parsed.mode || !Number.isFinite(state.version) ||
+      !Array.isArray(state.entities) || !Array.isArray(state.belts) ||
+      !isRecord(state.research) || !isRecord(state.timeWarp) || !isRecord(state.dysonSphere)) {
+      throw new Error("Worker 运行态结构或模式校验失败");
+    }
+    return state;
+  }
+  const state = migrateGame(parsed.state, contentPackRegistry);
+  if (!state || state.mode !== parsed.mode) throw new Error("Worker 存档迁移或模式校验失败");
+  return state;
+}
+
 export interface SaveRepairResult {
   success: boolean;
   raw: string | null;
@@ -2551,20 +2819,106 @@ function parseDeferredEnvelope(raw: string): DeferredLoadedGame | null {
   return { state, savedAt, offlineSeconds, offlineReport: null };
 }
 
-export function finalizeDeferredOfflineGame(loaded: DeferredLoadedGame, advancedState: GameState): LoadedGame {
+export function loadInspectedGameDeferredOffline(
+  inspection: SaveInspection,
+  mode: SaveMode = "normal",
+  source: SaveRecovery["source"] = "primary",
+): DeferredLoadedGame | null {
+  if (!inspection.valid || !inspection.state || inspection.mode !== mode || saveModeForState(inspection.state) !== mode) return null;
+  const state = inspection.state;
+  const savedAt = inspection.savedAt ?? Date.now();
+  const loaded: DeferredLoadedGame = {
+    state,
+    savedAt,
+    offlineSeconds: !state.paused
+      ? Math.min(getOfflineSimulationLimitSeconds(state), Math.max(0, (Date.now() - savedAt) / 1000))
+      : 0,
+    offlineReport: null,
+  };
+  if (source !== "primary") loaded.recovery = {
+    source,
+    issues: [source === "backup" ? "主存档校验失败，已回退到最近一次有效备份" : "主存档不可用，已回退到自动快照"],
+  };
+  return loaded;
+}
+
+export function finalizeDeferredOfflineGame(
+  loaded: DeferredLoadedGame,
+  advancedState: GameState,
+  details: { approximation?: OfflineApproximationReport; complexity?: OfflineComplexityReport } = {},
+): LoadedGame {
   if (loaded.offlineSeconds < 1) {
-    return { state: loaded.state, offlineSeconds: 0, offlineReport: null, recovery: loaded.recovery };
+    return {
+      state: loaded.state,
+      offlineSeconds: 0,
+      offlineReport: null,
+      recovery: loaded.recovery,
+      ...(loaded.runtimeRecoveryCandidate ? { runtimeRecoveryCandidate: loaded.runtimeRecoveryCandidate } : {}),
+    };
   }
   const returning = applyReturningReward(advancedState, loaded.savedAt, loaded.offlineSeconds);
   const report = buildOfflineReport(loaded.state, returning.state, loaded.offlineSeconds);
+  if (details.approximation) report.approximation = details.approximation;
+  if (details.complexity) report.complexity = details.complexity;
+  report.settlement = {
+    status: details.approximation?.settlementStatus === "approximate" ? "approximate" : "exact",
+    committed: true,
+    rewardsSubmitted: true,
+    originalSeconds: loaded.offlineSeconds,
+    submittedSeconds: loaded.offlineSeconds,
+  };
   if (returning.reward.length > 0) report.returningReward = returning.reward;
-  return { state: returning.state, offlineSeconds: loaded.offlineSeconds, offlineReport: report, recovery: loaded.recovery };
+  return {
+    state: returning.state,
+    offlineSeconds: loaded.offlineSeconds,
+    offlineReport: report,
+    recovery: loaded.recovery,
+    ...(loaded.runtimeRecoveryCandidate ? { runtimeRecoveryCandidate: loaded.runtimeRecoveryCandidate } : {}),
+  };
+}
+
+export function skipDeferredOfflineGame(
+  loaded: DeferredLoadedGame,
+  reason: string,
+  failureKind: OfflineSettlementFailureKind,
+  preview?: OfflineApproximationReport,
+  complexity?: OfflineComplexityReport,
+): LoadedGame {
+  if (loaded.state.mode === "speedrun" || loaded.state.speedrun?.enabled) {
+    throw new Error("速通存档必须完成精确离线结算，不能跳过收益并推进计时");
+  }
+  // Explicitly confirmed skip is the sole clock-only settlement path. It
+  // consumes the pending interval while preserving every production,
+  // inventory, cache, research and Dyson field byte-for-byte.
+  const skippedState = {
+    ...loaded.state,
+    elapsedSeconds: loaded.state.elapsedSeconds + loaded.offlineSeconds,
+  };
+  const report = buildOfflineReport(loaded.state, skippedState, loaded.offlineSeconds);
+  report.settlement = {
+    status: "conservative-skipped",
+    committed: true,
+    rewardsSubmitted: false,
+    originalSeconds: loaded.offlineSeconds,
+    submittedSeconds: loaded.offlineSeconds,
+    failureKind,
+    failureReason: reason,
+  };
+  if (preview) report.approximation = { ...preview, settlementStatus: "conservative-skipped" };
+  if (complexity) report.complexity = complexity;
+  return {
+    state: skippedState,
+    offlineSeconds: loaded.offlineSeconds,
+    offlineReport: report,
+    recovery: loaded.recovery,
+    ...(loaded.runtimeRecoveryCandidate ? { runtimeRecoveryCandidate: loaded.runtimeRecoveryCandidate } : {}),
+  };
 }
 
 /**
- * Discard a pending offline interval without applying simulation or rewards.
- * The caller must persist this unchanged state before entering the game so a
- * later reload does not immediately offer the same abandoned interval again.
+ * Return a transient view of the source state without applying simulation or
+ * rewards. Do not persist or enter this result: menu cancellation must discard
+ * the loaded copy so savedAt and the pending offline interval remain intact.
  */
 export function cancelDeferredOfflineGame(loaded: DeferredLoadedGame): LoadedGame {
   return { state: loaded.state, offlineSeconds: 0, offlineReport: null, recovery: loaded.recovery };
@@ -2694,14 +3048,27 @@ function failedSave(
   return { success: false, code, message, bytes, removedAutomaticSnapshots };
 }
 
+function localCoordinationFailure(error: unknown, bytes?: number, removedAutomaticSnapshots = 0): SaveGameResult | null {
+  if (error instanceof LocalSaveConflictError) {
+    return failedSave("conflict", `${error.message}（冲突 ${error.conflictId}）`, bytes, removedAutomaticSnapshots);
+  }
+  if (error instanceof LocalSaveReadOnlyError) {
+    return failedSave("read-only", error.message, bytes, removedAutomaticSnapshots);
+  }
+  return null;
+}
+
 export function saveGame(state: GameState, options: { emergencyMirror?: boolean } = {}): SaveGameResult {
   const savedAt = Date.now();
   const mode = saveModeForState(state);
   const primaryKey = primarySaveKey(mode);
   const backupKey = backupSaveKey(mode);
   let raw: string;
+  let serializedVerification: SaveTransferVerification | null = null;
   try {
-    raw = serializeEnvelope(state, savedAt);
+    const serialized = serializeEnvelopeProjection(state, savedAt);
+    raw = serialized.raw;
+    serializedVerification = serialized.verification;
   } catch {
     return failedSave("unavailable", "无法生成本地主存档，请立即导出当前进度");
   }
@@ -2715,8 +3082,8 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
       return failedSave("unavailable", "无法保留模式迁移前的原始存档，已取消写入", bytes, removedAutomaticSnapshots);
     }
     removedAutomaticSnapshots += prepareAutomaticSnapshotsForPrimarySave(mode);
-  } catch {
-    return failedSave("unavailable", "本地存储当前不可用，请立即导出当前进度", bytes, removedAutomaticSnapshots);
+  } catch (error) {
+    return localCoordinationFailure(error, bytes, removedAutomaticSnapshots) ?? failedSave("unavailable", "本地存储当前不可用，请立即导出当前进度", bytes, removedAutomaticSnapshots);
   }
 
   const writeAndVerify = (): boolean => {
@@ -2732,12 +3099,14 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
     verified = writeAndVerify();
   } catch (error) {
     if (!isQuotaExceededError(error)) {
-      return failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
+      return localCoordinationFailure(error, bytes, removedAutomaticSnapshots) ?? failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
     }
     try {
       removedAutomaticSnapshots += removeAutomaticSnapshotsForQuotaRetry(mode);
       verified = writeAndVerify();
     } catch (retryError) {
+      const coordination = localCoordinationFailure(retryError, bytes, removedAutomaticSnapshots);
+      if (coordination) return coordination;
       const code: SaveGameFailureCode = isQuotaExceededError(retryError) ? "quota" : "unavailable";
       const message = code === "quota"
         ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。"
@@ -2750,17 +3119,28 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
     return failedSave("verification", "本地主存档写入校验失败，当前进度尚未保存。请立即导出存档。", bytes, removedAutomaticSnapshots);
   }
 
-  if (options.emergencyMirror) {
+  // A lifecycle callback can run even when the authoritative checkpoint has
+  // not changed since the last verified primary. In that case an emergency
+  // mirror would only duplicate the same state (and can be mistaken for an
+  // unfinished save on the next boot). Compare the state proof, rather than
+  // savedAt/payload bytes: a fresh timestamp is not a gameplay change.
+  const verifiedPrimary = getVerifiedPrimaryLocalSaveIdentity(mode);
+  const emergencyMirrorNeeded = !verifiedPrimary ||
+    !serializedVerification || verifiedPrimary.stateChecksum !== serializedVerification.stateChecksum;
+  if (options.emergencyMirror && emergencyMirrorNeeded) {
     // Page lifecycle handlers cannot await IndexedDB. A single primary-save
     // mirror is imported and removed after verified IndexedDB startup.
     writePrimarySaveEmergencyMirror(raw);
+  } else if (options.emergencyMirror) {
+    clearPrimarySaveEmergencyMirror(raw);
   }
 
   let backupSaved = false;
-  if (previous && inspectSave(previous).valid) {
+  const previousProof = previous ? inspectEnvelopeForBackup(previous) : null;
+  if (previousProof) {
     try {
-      setLocalSaveValue(backupKey, previous);
-      backupSaved = getLocalSaveValue(backupKey) === previous;
+      setLocalSaveValue(backupKey, previousProof.raw);
+      backupSaved = getLocalSaveValue(backupKey) === previousProof.raw;
     } catch {
       // The verified primary save has priority over its optional previous-version backup.
     }
@@ -2779,12 +3159,329 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
   };
 }
 
-async function verifyPersistedEnvelope(key: string, expectedRaw: string): Promise<boolean> {
+async function verifyPersistedEnvelope(
+  key: string,
+  expectedRaw: string,
+  workerVerification?: SaveTransferVerification,
+  exactEnvelopeProof?: ExactEnvelopeProof,
+): Promise<boolean> {
   await flushLocalSaveWrites();
   const stored = await readPersistedLocalSaveValue(key);
   if (stored !== expectedRaw) return false;
+  // The exact string read-back is the same byte sequence that the worker
+  // already hashed. Avoid parsing the full 20+ MB state again on the UI thread.
+  if (workerVerification?.integrity === "valid" || exactEnvelopeProof?.raw === expectedRaw) return true;
   const inspection = inspectSave(stored);
   return inspection.valid && inspection.checksum === "valid";
+}
+
+interface ExactEnvelopeProof {
+  raw: string;
+  checksumValid: boolean;
+}
+
+function inspectEnvelopeForBackup(raw: string): ExactEnvelopeProof | null {
+  const inspection = inspectSave(raw);
+  // Do not retain inspection.state while IndexedDB flushes a large backup.
+  // Structural validity has already been proven; exact raw identity plus the
+  // scalar checksum result is all durable read-back verification needs.
+  return inspection.valid ? { raw, checksumValid: inspection.checksum === "valid" } : null;
+}
+
+function authoritativePersistenceFailure(
+  result: { ok: false; reason: string; message: string },
+  bytes?: number,
+  removedAutomaticSnapshots = 0,
+): SaveGameResult {
+  const code: SaveGameFailureCode = result.reason === "quota"
+    ? "quota"
+    : result.reason === "lease-lost"
+      ? "read-only"
+      : result.reason === "cas-mismatch"
+        ? "conflict"
+        : result.reason === "invalid" || result.reason === "readback-failed"
+          ? "verification"
+          : "unavailable";
+  return failedSave(code, result.message, bytes, removedAutomaticSnapshots);
+}
+
+/**
+ * The proof path must not hydrate a current large primary merely to decide
+ * whether it is an old pre-mode save. A valid catalog can prove both envelope
+ * and state carried the explicit ordinary-mode marker; uncertain/legacy
+ * catalog entries deliberately take the older path so their exact migration
+ * backup contract is retained.
+ */
+function primaryCanUseProofBoundTransfer(mode: SaveMode): boolean {
+  if (mode !== "normal") return true;
+  const primaryKey = primarySaveKey(mode);
+  const catalog = getLocalSaveCatalog(primaryKey);
+  if (!catalog) return !listLocalSaveKeys().includes(primaryKey);
+  return catalog.integrity === "valid" && catalog.mode === "normal" && catalog.modeExplicit === true;
+}
+
+/**
+ * Authoritative primary-save path for callers that already own a transferable
+ * simulation state buffer. No UI-thread payload decode, JSON.parse, FNV,
+ * TextEncoder, or raw string cache is used; the save/persistence Workers own
+ * those operations and return only small proofs plus restored buffers.
+ */
+export async function saveGameVerifiedFromStateTransfer(
+  state: GameState,
+  stateTransfer: SimulationStateTransfer,
+  options: {
+    onProgress?: (progress: AuthoritativeSaveSerializationProgress | { stage: string; bytes?: number }) => void;
+    checkpointOverlay?: AuthoritativeSaveCheckpointOverlay;
+  } = {},
+): Promise<SaveGameResult> {
+  try {
+    await initializeLocalSaveStore();
+  } catch (error) {
+    const coordination = localCoordinationFailure(error);
+    if (coordination) return coordination;
+    return failedSave("unavailable", error instanceof Error ? error.message : "本地主存档初始化失败");
+  }
+  if (!primaryCanUseProofBoundTransfer(saveModeForState(state))) {
+    // The v46 mode migration owns an immutable copy of the previous bytes.
+    // It is a rare, deliberate compatibility fallback; current catalogued
+    // large saves never reach it and therefore avoid a UI-thread payload read.
+    return saveGameVerifiedOnce(state);
+  }
+  const totalStartedAt = monotonicNow();
+  const savedAt = Date.now();
+  const mode = saveModeForState(state);
+  const primaryKey = primarySaveKey(mode);
+  let removedAutomaticSnapshots = 0;
+  try {
+    const serialized = await serializeAuthoritativeSaveStateTransferInWorker(stateTransfer, {
+      savedAt,
+      expectedStateIdentity: {
+        mode: state.mode,
+        version: state.version,
+        activePlanetId: state.activePlanetId,
+        entityCount: state.entities.length,
+        beltCount: state.belts.length,
+        elapsedSeconds: state.elapsedSeconds,
+      },
+      onProgress: options.onProgress,
+      ...(options.checkpointOverlay ? { checkpointOverlay: options.checkpointOverlay } : {}),
+    });
+    const snapshotScanStartedAt = monotonicNow();
+    removedAutomaticSnapshots += prepareAutomaticSnapshotsForPrimarySave(mode);
+    const snapshotScanMs = Math.max(0, monotonicNow() - snapshotScanStartedAt);
+    try {
+      await flushLocalSaveWrites();
+    } catch {
+      // Snapshot cleanup is best effort. A quota retry below makes a stronger
+      // recovery attempt after the deletion queue has settled.
+    }
+    const capacityStartedAt = monotonicNow();
+    let capacityMs = 0;
+    const writer = getLocalSaveWriterStatus();
+    if (writer.role !== "primary") return failedSave("read-only", writer.reason, serialized.proof.byteLength);
+    const expectedRevision = getPrimaryLocalSaveRevision(mode);
+    const commitInput = {
+      key: primaryKey,
+      bytes: serialized.bytes,
+      proof: serialized.proof,
+      seed: serialized.catalogSeed,
+      expectedRevision,
+      fence: { ownerId: writer.writerId, fencingToken: writer.fencingToken },
+    };
+    options.onProgress?.({ stage: "writing-idb", bytes: serialized.proof.byteLength });
+    const persistenceProgress = (progress: AuthoritativeSavePersistenceProgress) => options.onProgress?.(progress);
+    let committed = await setLocalSavePayloadWithProof(commitInput, persistenceProgress);
+    if (!committed.result.ok && committed.result.reason === "quota") {
+      removedAutomaticSnapshots += removeAutomaticSnapshotsForQuotaRetry(mode);
+      // Snapshot removal uses the legacy coordinated queue. Do not send a
+      // second proof commit until that cleanup has become durable, otherwise a
+      // quota retry can race the deletion it relies on.
+      await flushLocalSaveWrites();
+      committed = await setLocalSavePayloadWithProof(commitInput, persistenceProgress);
+      capacityMs = Math.max(capacityMs, monotonicNow() - capacityStartedAt);
+    }
+    if (!committed.result.ok) {
+      return authoritativePersistenceFailure(committed.result, serialized.proof.byteLength, removedAutomaticSnapshots);
+    }
+    clearPrimarySaveEmergencyMirrorProof(mode, committed.result.proof.savedAt, committed.result.proof.stateChecksum);
+    const automaticSnapshotStartedAt = monotonicNow();
+    try {
+      scheduleAutomaticSnapshotFromStateTransfer(
+        state,
+        stateTransfer,
+        mode,
+        options.checkpointOverlay,
+        getVerifiedPrimaryLocalSaveIdentity(mode),
+      );
+    } catch {
+      // A recovery point may fail independently without downgrading a primary
+      // whose proof-bound write and read-back already succeeded.
+    }
+    const automaticSnapshotMs = Math.max(0, monotonicNow() - automaticSnapshotStartedAt);
+    options.onProgress?.({ stage: "complete", bytes: serialized.proof.byteLength });
+    return {
+      success: true,
+      message: "主存档已保存",
+      savedAt: committed.result.proof.savedAt,
+      bytes: committed.result.proof.byteLength,
+      removedAutomaticSnapshots,
+      backupSaved: committed.result.proof.backupSaved,
+      timings: {
+        totalMs: Math.max(0, monotonicNow() - totalStartedAt),
+        serializeMs: serialized.durationMs,
+        snapshotScanMs,
+        capacityMs,
+        primaryWriteMs: committed.result.proof.idbWriteMs,
+        backupMs: committed.result.proof.backupVerifyMs,
+        automaticSnapshotMs,
+      },
+    };
+  } catch (error) {
+    const coordination = localCoordinationFailure(error);
+    if (coordination) return coordination;
+    return failedSave("unavailable", error instanceof Error ? error.message : "authoritative 主存档写入失败", undefined, removedAutomaticSnapshots);
+  }
+}
+
+/**
+ * Proof-bound primary save for a full envelope produced by another trusted
+ * Worker (currently pure-idle finalization). The save Worker revalidates the
+ * source envelope, derives the persistent sparse projection and returns a raw
+ * GameState transfer for the normal simulation Worker to adopt. No full state
+ * or payload is decoded on the UI thread, and the automatic snapshot is
+ * intentionally deferred until after that authority rebase.
+ */
+export async function saveGameVerifiedFromEnvelopeTransfer(
+  envelopeTransfer: AuthoritativeSaveEnvelopeTransfer,
+  expectedStateIdentity: AuthoritativeSaveExpectedStateIdentity,
+  options: {
+    onProgress?: (progress: AuthoritativeSaveSerializationProgress | { stage: string; bytes?: number }) => void;
+  } = {},
+): Promise<SaveGameResult> {
+  let removedAutomaticSnapshots = 0;
+  let serialized: AuthoritativeSerializedSavePayload<WorkerBinaryPayload> | null = null;
+  const withReturnedOwnership = (result: SaveGameResult): SaveGameResult => ({
+    ...result,
+    ...(isWorkerBinaryPayload(serialized?.sourceStateTransfer)
+      ? { sourceStateTransfer: serialized.sourceStateTransfer instanceof ArrayBuffer
+        ? {
+          protocolVersion: SIMULATION_RUNTIME_PROTOCOL_VERSION,
+          byteLength: serialized.sourceStateTransfer.byteLength,
+          buffer: serialized.sourceStateTransfer,
+        }
+        : {
+          protocolVersion: SIMULATION_RUNTIME_PROTOCOL_VERSION,
+          byteLength: serialized.sourceStateTransfer.size,
+          blob: serialized.sourceStateTransfer,
+        } }
+      : {}),
+    ...(isWorkerBinaryPayload(envelopeTransfer.buffer) && workerBinaryPayloadByteLength(envelopeTransfer.buffer) > 0
+      ? { sourceEnvelopeTransfer: envelopeTransfer.buffer }
+      : isWorkerBinaryPayload(serialized?.sourceEnvelopeTransfer)
+        ? { sourceEnvelopeTransfer: serialized.sourceEnvelopeTransfer }
+        : {}),
+  });
+  try {
+    await initializeLocalSaveStore();
+  } catch (error) {
+    const coordination = localCoordinationFailure(error);
+    if (coordination) return withReturnedOwnership(coordination);
+    return withReturnedOwnership(failedSave("unavailable", error instanceof Error ? error.message : "本地主存档初始化失败"));
+  }
+  const mode = expectedStateIdentity.mode;
+  if (!primaryCanUseProofBoundTransfer(mode)) {
+    return withReturnedOwnership(failedSave(
+      "verification",
+      "当前主存档目录尚未完成 1.0.44 校验升级，已保留纯挂机恢复日志并阻止 UI 线程回退保存",
+    ));
+  }
+  const totalStartedAt = monotonicNow();
+  const savedAt = Date.now();
+  const primaryKey = primarySaveKey(mode);
+  try {
+    serialized = await serializeAuthoritativeSaveEnvelopeTransferInWorker(envelopeTransfer, {
+      savedAt,
+      expectedStateIdentity,
+      onProgress: options.onProgress,
+    });
+    const snapshotScanStartedAt = monotonicNow();
+    removedAutomaticSnapshots += prepareAutomaticSnapshotsForPrimarySave(mode);
+    const snapshotScanMs = Math.max(0, monotonicNow() - snapshotScanStartedAt);
+    try {
+      await flushLocalSaveWrites();
+    } catch {
+      // Snapshot cleanup remains best effort; quota receives one exact retry.
+    }
+    const capacityStartedAt = monotonicNow();
+    let capacityMs = 0;
+    const writer = getLocalSaveWriterStatus();
+    if (writer.role !== "primary") return withReturnedOwnership(failedSave("read-only", writer.reason, serialized.proof.byteLength));
+    const expectedRevision = getPrimaryLocalSaveRevision(mode);
+    const commitInput = {
+      key: primaryKey,
+      bytes: serialized.bytes,
+      proof: serialized.proof,
+      seed: serialized.catalogSeed,
+      expectedRevision,
+      fence: { ownerId: writer.writerId, fencingToken: writer.fencingToken },
+    };
+    options.onProgress?.({ stage: "writing-idb", bytes: serialized.proof.byteLength });
+    const persistenceProgress = (progress: AuthoritativeSavePersistenceProgress) => options.onProgress?.(progress);
+    let committed = await setLocalSavePayloadWithProof(commitInput, persistenceProgress);
+    if (!committed.result.ok && committed.result.reason === "quota") {
+      removedAutomaticSnapshots += removeAutomaticSnapshotsForQuotaRetry(mode);
+      await flushLocalSaveWrites();
+      committed = await setLocalSavePayloadWithProof(commitInput, persistenceProgress);
+      capacityMs = Math.max(capacityMs, monotonicNow() - capacityStartedAt);
+    }
+    if (!committed.result.ok) {
+      return withReturnedOwnership(authoritativePersistenceFailure(
+        committed.result,
+        serialized.proof.byteLength,
+        removedAutomaticSnapshots,
+      ));
+    }
+    clearPrimarySaveEmergencyMirrorProof(mode, committed.result.proof.savedAt, committed.result.proof.stateChecksum);
+    options.onProgress?.({ stage: "complete", bytes: serialized.proof.byteLength });
+    return withReturnedOwnership({
+      success: true,
+      message: "纯挂机权威主存档已保存，等待模拟 Worker 接管",
+      savedAt: committed.result.proof.savedAt,
+      bytes: committed.result.proof.byteLength,
+      removedAutomaticSnapshots,
+      backupSaved: committed.result.proof.backupSaved,
+      timings: {
+        totalMs: Math.max(0, monotonicNow() - totalStartedAt),
+        serializeMs: serialized.durationMs,
+        snapshotScanMs,
+        capacityMs,
+        primaryWriteMs: committed.result.proof.idbWriteMs,
+        backupMs: committed.result.proof.backupVerifyMs,
+        automaticSnapshotMs: 0,
+      },
+    });
+  } catch (error) {
+    const coordination = localCoordinationFailure(error);
+    if (coordination) return withReturnedOwnership(coordination);
+    return withReturnedOwnership(failedSave(
+      "unavailable",
+      error instanceof Error ? error.message : "纯挂机权威 envelope 保存失败",
+      serialized?.proof.byteLength,
+      removedAutomaticSnapshots,
+    ));
+  }
+}
+
+function matchesWorkerVerification(
+  raw: string,
+  summary: CloudSaveSummary | undefined,
+  verification: SaveTransferVerification | undefined,
+): summary is CloudSaveSummary & { mode: SaveMode; integrity: "valid"; stateChecksum: string } {
+  if (!summary || (summary.mode !== "normal" && summary.mode !== "speedrun") || summary.integrity !== "valid" ||
+    typeof summary.stateChecksum !== "string" || summary.stateChecksum.length === 0 ||
+    !verification || verification.integrity !== "valid" || verification.stateChecksum !== summary.stateChecksum) return false;
+  const measured = computeSavePayloadTextChecksum(raw);
+  return measured.byteLength === verification.byteLength && measured.checksum === verification.payloadChecksum;
 }
 
 /**
@@ -2793,24 +3490,36 @@ async function verifyPersistedEnvelope(key: string, expectedRaw: string): Promis
  * recovery point while the user is waiting for a cloud upload. The exact raw
  * value is still read back from IndexedDB before success is reported.
  */
-export async function saveVerifiedPayload(raw: string, options: { verified?: boolean; deferBackup?: boolean; mode?: SaveMode } = {}): Promise<SaveGameResult> {
-  const inspection = inspectSave(raw);
-  if (!inspection.valid || !inspection.state || inspection.checksum !== "valid") {
+export async function saveVerifiedPayload(
+  raw: string,
+  options: {
+    verified?: boolean;
+    deferBackup?: boolean;
+    mode?: SaveMode;
+    workerSummary?: CloudSaveSummary;
+    workerVerification?: SaveTransferVerification;
+  } = {},
+): Promise<SaveGameResult> {
+  const trustedWorkerPayload = options.verified === true &&
+    matchesWorkerVerification(raw, options.workerSummary, options.workerVerification);
+  const inspection = trustedWorkerPayload ? null : inspectSave(raw);
+  if (!trustedWorkerPayload && (!inspection?.valid || !inspection.state || inspection.checksum !== "valid")) {
     return failedSave("verification", "后台生成的存档完整性校验失败，请重试", utf8ByteLength(raw));
   }
-  if (options.mode !== undefined && inspection.mode !== options.mode) {
+  const payloadMode = trustedWorkerPayload ? options.workerSummary!.mode! : inspection!.mode;
+  if (options.mode !== undefined && payloadMode !== options.mode) {
     return failedSave(
       "verification",
-      `存档模式不匹配：不能把${inspection.mode === "speedrun" ? "速通" : "普通"}存档写入${options.mode === "speedrun" ? "速通" : "普通"}主档`,
+      `存档模式不匹配：不能把${payloadMode === "speedrun" ? "速通" : "普通"}存档写入${options.mode === "speedrun" ? "速通" : "普通"}主档`,
       utf8ByteLength(raw),
     );
   }
   const startedAt = monotonicNow();
   const bytes = utf8ByteLength(raw);
-  const mode = options.mode ?? inspection.mode;
+  const mode = options.mode ?? payloadMode;
   const primaryKey = primarySaveKey(mode);
   const backupKey = backupSaveKey(mode);
-  const previous = getLocalSaveValue(primaryKey);
+  const previous = await readPersistedLocalSaveValue(primaryKey);
   const capacity = await hasLocalSaveCapacity(primaryKey, raw);
   if (!capacity.ok) return failedSave("quota", "本地存储空间不足，当前进度尚未保存。请先管理快照或导出存档。", bytes);
   if (!await preserveLegacyModeMigrationBackup(previous, mode)) {
@@ -2835,10 +3544,11 @@ export async function saveVerifiedPayload(raw: string, options: { verified?: boo
       }
     }
     clearPrimarySaveEmergencyMirror(raw);
+    clearLocalSaveRawPayloadCache();
     return {
       success: true,
       message: "主存档已保存",
-      savedAt: Date.now(),
+    savedAt: trustedWorkerPayload ? options.workerSummary!.savedAt : inspection!.savedAt ?? Date.now(),
       bytes,
       backupSaved,
       timings: {
@@ -2853,6 +3563,8 @@ export async function saveVerifiedPayload(raw: string, options: { verified?: boo
     };
   } catch (error) {
     await recoverLocalSaveCache();
+    const coordination = localCoordinationFailure(error, bytes);
+    if (coordination) return coordination;
     return failedSave(
       isQuotaExceededError(error) ? "quota" : "unavailable",
       isQuotaExceededError(error) ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。" : "本地主存档写入失败，请立即导出当前进度",
@@ -2879,23 +3591,35 @@ async function recoverLocalSaveCache(): Promise<void> {
  * an exact read-back plus envelope checksum validation. Optional backups and
  * automatic snapshots are deliberately attempted after the primary commit.
  */
-async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
+async function saveGameVerifiedOnce(
+  state: GameState,
+  stateTransfer?: SimulationStateTransfer,
+  options: { deferBackup?: boolean } = {},
+): Promise<SaveGameResult> {
+  if (stateTransfer) return saveGameVerifiedFromStateTransfer(state, stateTransfer);
   const totalStartedAt = monotonicNow();
   const serializeStartedAt = totalStartedAt;
   const savedAt = Date.now();
   const mode = saveModeForState(state);
   const primaryKey = primarySaveKey(mode);
   const backupKey = backupSaveKey(mode);
+  // A catalog-bound identity was established by an earlier verified primary
+  // commit. Autosave can use it to move the old payload into a background
+  // backup job without parsing that multi-megabyte body on the UI thread.
+  const previousPrimaryIdentity = getVerifiedPrimaryLocalSaveIdentity(mode);
   let raw: string;
+  let workerVerification: SaveTransferVerification | undefined;
   try {
-    raw = (await serializeEnvelopeInWorker(state, savedAt)).raw;
+    const serialized = await serializeEnvelopeInWorker(state, savedAt);
+    raw = serialized.raw;
+    workerVerification = serialized.verification;
   } catch {
     return failedSave("unavailable", "无法生成本地主存档，请立即导出当前进度");
   }
   const serializeMs = Math.max(0, monotonicNow() - serializeStartedAt);
 
   const bytes = utf8ByteLength(raw);
-  const previous = getLocalSaveValue(primaryKey);
+  const previous = await readPersistedLocalSaveValue(primaryKey);
   const snapshotScanStartedAt = monotonicNow();
   let removedAutomaticSnapshots = prepareAutomaticSnapshotsForPrimarySave(mode);
   const snapshotScanMs = Math.max(0, monotonicNow() - snapshotScanStartedAt);
@@ -2920,7 +3644,7 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
 
   const commitPrimary = async (): Promise<boolean> => {
     setLocalSaveValue(primaryKey, raw);
-    return verifyPersistedEnvelope(primaryKey, raw);
+    return verifyPersistedEnvelope(primaryKey, raw, workerVerification);
   };
 
   const primaryWriteStartedAt = monotonicNow();
@@ -2930,7 +3654,7 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
   } catch (error) {
     if (!isQuotaExceededError(error)) {
       await recoverLocalSaveCache();
-      return failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
+      return localCoordinationFailure(error, bytes, removedAutomaticSnapshots) ?? failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
     }
     try {
       removedAutomaticSnapshots += removeAutomaticSnapshotsForQuotaRetry(mode);
@@ -2938,6 +3662,8 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
       verified = await commitPrimary();
     } catch (retryError) {
       await recoverLocalSaveCache();
+      const coordination = localCoordinationFailure(retryError, bytes, removedAutomaticSnapshots);
+      if (coordination) return coordination;
       const code: SaveGameFailureCode = isQuotaExceededError(retryError) ? "quota" : "unavailable";
       return failedSave(
         code,
@@ -2959,12 +3685,29 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
 
   const backupStartedAt = monotonicNow();
   let backupSaved = false;
-  if (previous && inspectSave(previous).valid) {
+  const canDeferPreviousBackup = options.deferBackup === true && previousPrimaryIdentity !== null;
+  const previousProof = !canDeferPreviousBackup && previous ? inspectEnvelopeForBackup(previous) : null;
+  if (previousProof) {
     try {
-      setLocalSaveValue(backupKey, previous);
-      backupSaved = await verifyPersistedEnvelope(backupKey, previous);
+      setLocalSaveValue(backupKey, previousProof.raw);
+      // The full inspection above is bound to `previous`; the durable exact
+      // read-back proves IndexedDB persisted those same bytes. Preserve the
+      // old result contract where a checksum-missing legacy backup is copied
+      // but does not report backupSaved=true.
+      const persistedExactly = await verifyPersistedEnvelope(backupKey, previousProof.raw, undefined, previousProof);
+      backupSaved = previousProof.checksumValid && persistedExactly;
     } catch {
       // The already verified primary remains authoritative.
+    }
+  } else if (canDeferPreviousBackup && previous !== null && previousPrimaryIdentity) {
+    const currentPrimaryIdentity = getVerifiedPrimaryLocalSaveIdentity(mode);
+    if (currentPrimaryIdentity) {
+      scheduleDeferredPrimaryBackup({
+        mode,
+        raw: previous,
+        previousIdentity: previousPrimaryIdentity,
+        expectedPrimaryIdentity: currentPrimaryIdentity,
+      });
     }
   }
   const backupMs = Math.max(0, monotonicNow() - backupStartedAt);
@@ -2975,6 +3718,9 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
   } catch {
     // Recovery points never downgrade a successful primary commit.
   }
+  // The verified primary/backup are durable; retaining their full text would
+  // duplicate a large factory in the UI heap until the next reload.
+  clearLocalSaveRawPayloadCache();
   const automaticSnapshotMs = Math.max(0, monotonicNow() - automaticSnapshotStartedAt);
   return {
     success: true,
@@ -2996,14 +3742,122 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
 }
 
 interface PendingPrimarySave {
+  mode: SaveMode;
   state: GameState;
+  stateTransfer?: SimulationStateTransfer;
+  checkpointOverlay?: AuthoritativeSaveCheckpointOverlay;
+  deferBackup?: boolean;
   waiters: Array<(result: SaveGameResult) => void>;
 }
 
 let activePrimarySave: Promise<void> | null = null;
+let activePrimaryRequest: PendingPrimarySave | null = null;
 const pendingPrimarySaves = new Map<SaveMode, PendingPrimarySave>();
-let lastVerifiedPrimaryState: GameState | null = null;
-let lastVerifiedPrimaryResult: SaveGameResult | null = null;
+interface VerifiedPrimarySaveMemo {
+  state: GameState;
+  result: SaveGameResult;
+  identity: VerifiedPrimaryLocalSaveIdentity | null;
+}
+const lastVerifiedPrimaryByMode = new Map<SaveMode, VerifiedPrimarySaveMemo>();
+
+function sameVerifiedPrimaryIdentity(
+  left: VerifiedPrimaryLocalSaveIdentity,
+  right: VerifiedPrimaryLocalSaveIdentity,
+): boolean {
+  return left.key === right.key && left.mode === right.mode && left.revision === right.revision &&
+    left.savedAt === right.savedAt && left.stateChecksum === right.stateChecksum &&
+    left.payloadChecksum === right.payloadChecksum && left.byteLength === right.byteLength;
+}
+
+function verifiedIdentityMatchesResult(
+  identity: VerifiedPrimaryLocalSaveIdentity,
+  result: SaveGameResult,
+): boolean {
+  return result.success && result.savedAt === identity.savedAt && result.bytes === identity.byteLength;
+}
+
+interface DeferredPrimaryBackupJob {
+  mode: SaveMode;
+  raw: string;
+  previousIdentity: VerifiedPrimaryLocalSaveIdentity;
+  expectedPrimaryIdentity: VerifiedPrimaryLocalSaveIdentity;
+}
+
+const deferredPrimaryBackups = new Map<SaveMode, DeferredPrimaryBackupJob>();
+let deferredPrimaryBackupTimer: ReturnType<typeof setTimeout> | null = null;
+let activeDeferredPrimaryBackupMode: SaveMode | null = null;
+
+function scheduleDeferredPrimaryBackup(job: DeferredPrimaryBackupJob): void {
+  // A newer primary save supersedes any pending copy for this mode. Its own
+  // previous payload is the only useful backup once it has been verified.
+  deferredPrimaryBackups.set(job.mode, job);
+  scheduleDeferredPrimaryBackupProcessor();
+}
+
+function scheduleDeferredPrimaryBackupProcessor(delayMs = 0): void {
+  if (deferredPrimaryBackupTimer !== null || activeDeferredPrimaryBackupMode !== null || deferredPrimaryBackups.size === 0) return;
+  deferredPrimaryBackupTimer = globalThis.setTimeout(() => {
+    deferredPrimaryBackupTimer = null;
+    void processDeferredPrimaryBackup();
+  }, delayMs);
+}
+
+async function processDeferredPrimaryBackup(): Promise<void> {
+  // Primary writes win over optional recovery copies. This also guarantees
+  // that a rapid 30-second autosave cadence cannot form a backup backlog.
+  if (activePrimarySave || activePrimaryRequest || pendingPrimarySaves.size > 0) {
+    scheduleDeferredPrimaryBackupProcessor(50);
+    return;
+  }
+  const next = deferredPrimaryBackups.entries().next();
+  if (next.done) return;
+  const [mode, job] = next.value;
+  deferredPrimaryBackups.delete(mode);
+  activeDeferredPrimaryBackupMode = mode;
+  try {
+    const currentPrimary = getVerifiedPrimaryLocalSaveIdentity(mode);
+    if (!currentPrimary || !sameVerifiedPrimaryIdentity(currentPrimary, job.expectedPrimaryIdentity)) return;
+    // The old payload came from a catalog-bound verified primary under the
+    // same writer lease. Keep its exact raw identity for read-back while
+    // avoiding a second full JSON.parse/checksum pass on the UI thread.
+    const previousProof: ExactEnvelopeProof = { raw: job.raw, checksumValid: true };
+    const backupKey = backupSaveKey(mode);
+    setLocalSaveValue(backupKey, job.raw);
+    const persistedExactly = await verifyPersistedEnvelope(backupKey, job.raw, undefined, previousProof);
+    if (!persistedExactly) await recoverLocalSaveCache();
+  } catch {
+    // A verified primary is already durable. Backup creation is best effort
+    // and must never turn a completed autosave into a visible failure.
+  } finally {
+    clearLocalSaveRawPayloadCache();
+    activeDeferredPrimaryBackupMode = null;
+    scheduleDeferredPrimaryBackupProcessor();
+  }
+}
+
+function unchangedPrimarySaveResult(mode: SaveMode, state: GameState): SaveGameResult | null {
+  const memo = lastVerifiedPrimaryByMode.get(mode);
+  if (!memo || memo.state !== state || !memo.result.success) return null;
+  if (!memo.identity) {
+    if (getLocalSaveBackend() === "indexeddb" || getLocalSaveValue(primarySaveKey(mode)) === null) {
+      lastVerifiedPrimaryByMode.delete(mode);
+      return null;
+    }
+    clearLocalSaveRawPayloadCache();
+    return { ...memo.result, skippedUnchanged: true, message: "主存档未变化，跳过重复保存" };
+  }
+  const currentIdentity = getVerifiedPrimaryLocalSaveIdentity(mode);
+  if (!currentIdentity || !sameVerifiedPrimaryIdentity(currentIdentity, memo.identity)) {
+    lastVerifiedPrimaryByMode.delete(mode);
+    return null;
+  }
+  // A menu load temporarily retains the selected raw envelope so the legacy
+  // synchronous loader can consume it. If the verified-primary memo proves
+  // that no write is necessary, release that otherwise unbounded duplicate
+  // just as the successful write paths do.
+  clearLocalSaveRawPayloadCache();
+  return { ...memo.result, skippedUnchanged: true, message: "主存档未变化，跳过重复保存" };
+}
 
 function ensurePrimarySaveProcessor(): void {
   if (activePrimarySave || pendingPrimarySaves.size === 0) return;
@@ -3013,25 +3867,37 @@ function ensurePrimarySaveProcessor(): void {
       if (next.done) break;
       const [mode, request] = next.value;
       pendingPrimarySaves.delete(mode);
+      activePrimaryRequest = request;
       let result: SaveGameResult;
       try {
-        result = await saveGameVerifiedOnce(request.state);
+        result = request.stateTransfer
+          ? await saveGameVerifiedFromStateTransfer(request.state, request.stateTransfer, {
+            ...(request.checkpointOverlay ? { checkpointOverlay: request.checkpointOverlay } : {}),
+          })
+          : await saveGameVerifiedOnce(request.state, undefined, { deferBackup: request.deferBackup === true });
       } catch {
         result = failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度");
       }
-      request.waiters.forEach((waiter) => waiter(result));
       if (result.success) {
-        lastVerifiedPrimaryState = request.state;
-        lastVerifiedPrimaryResult = result;
-      } else if (lastVerifiedPrimaryState === request.state) {
-        lastVerifiedPrimaryState = null;
-        lastVerifiedPrimaryResult = null;
+        const identity = getVerifiedPrimaryLocalSaveIdentity(mode);
+        if (identity && verifiedIdentityMatchesResult(identity, result)) {
+          lastVerifiedPrimaryByMode.set(mode, { state: request.state, result, identity });
+        } else if (getLocalSaveBackend() !== "indexeddb" && getLocalSaveValue(primarySaveKey(mode)) !== null) {
+          lastVerifiedPrimaryByMode.set(mode, { state: request.state, result, identity: null });
+        } else {
+          lastVerifiedPrimaryByMode.delete(mode);
+        }
+      } else if (lastVerifiedPrimaryByMode.get(mode)?.state === request.state) {
+        lastVerifiedPrimaryByMode.delete(mode);
       }
+      request.waiters.forEach((waiter) => waiter(result));
+      if (activePrimaryRequest === request) activePrimaryRequest = null;
     }
   };
   const inFlight = run();
   activePrimarySave = inFlight;
   void inFlight.finally(() => {
+    activePrimaryRequest = null;
     if (activePrimarySave === inFlight) activePrimarySave = null;
     ensurePrimarySaveProcessor();
   });
@@ -3043,21 +3909,76 @@ function ensurePrimarySaveProcessor(): void {
  * result of the committed request. This prevents autosave, visibility and
  * native lifecycle events from creating a save backlog.
  */
-export function saveGameVerified(state: GameState): Promise<SaveGameResult> {
+export function saveGameVerified(
+  state: GameState,
+  stateTransfer?: SimulationStateTransfer,
+  checkpointOverlay?: AuthoritativeSaveCheckpointOverlay,
+  options: { deferBackup?: boolean; force?: boolean } = {},
+): Promise<SaveGameResult> {
+  let ownedStateTransfer: SimulationStateTransfer | undefined;
+  if (stateTransfer) {
+    if (!(stateTransfer.buffer instanceof ArrayBuffer) || stateTransfer.buffer.byteLength === 0 ||
+      stateTransfer.byteLength !== stateTransfer.buffer.byteLength) {
+      return Promise.resolve(failedSave("verification", "权威检查点 transfer 已失效，未写入主存档"));
+    }
+    try {
+      // Adopt ownership before any initialization, dedupe or queue wait. The
+      // caller can now clear its ref immediately without an attached large
+      // buffer lingering in two coordinators. Replaced/unchanged requests may
+      // discard this owned buffer, but can never reuse the caller's transfer.
+      ownedStateTransfer = structuredClone(stateTransfer, { transfer: [stateTransfer.buffer] });
+    } catch (error) {
+      return Promise.resolve(failedSave(
+        "verification",
+        error instanceof Error ? error.message : "无法接管权威检查点 transfer",
+      ));
+    }
+  }
   return new Promise((resolve) => {
     const mode = saveModeForState(state);
-    // Lifecycle hooks can request the same immutable state several times while
-    // paused. Avoid serializing and writing it again after a verified commit.
-    if (lastVerifiedPrimaryState === state && lastVerifiedPrimaryResult?.success && getLocalSaveValue(primarySaveKey(mode)) !== null) {
-      resolve({ ...lastVerifiedPrimaryResult, skippedUnchanged: true, message: "主存档未变化，跳过重复保存" });
+    if (activePrimaryRequest?.mode === mode && activePrimaryRequest.state === state) {
+      if (options.deferBackup !== true) activePrimaryRequest.deferBackup = false;
+      const pending = pendingPrimarySaves.get(mode);
+      if (pending) {
+        pendingPrimarySaves.delete(mode);
+        activePrimaryRequest.waiters.push(...pending.waiters);
+      }
+      activePrimaryRequest.waiters.push(resolve);
       return;
     }
     const pending = pendingPrimarySaves.get(mode);
     if (pending) {
-      pending.state = state;
+      if (pending.state !== state) {
+        pending.state = state;
+        pending.deferBackup = options.deferBackup === true;
+        if (ownedStateTransfer) {
+          pending.stateTransfer = ownedStateTransfer;
+          if (checkpointOverlay) pending.checkpointOverlay = checkpointOverlay;
+          else delete pending.checkpointOverlay;
+        } else {
+          delete pending.stateTransfer;
+          delete pending.checkpointOverlay;
+        }
+      } else if (ownedStateTransfer && !pending.stateTransfer) {
+        pending.stateTransfer = ownedStateTransfer;
+        if (checkpointOverlay) pending.checkpointOverlay = checkpointOverlay;
+      }
+      if (options.deferBackup !== true) pending.deferBackup = false;
       pending.waiters.push(resolve);
     } else {
-      pendingPrimarySaves.set(mode, { state, waiters: [resolve] });
+      const unchanged = options.force === true ? null : unchangedPrimarySaveResult(mode, state);
+      if (unchanged) {
+        resolve(unchanged);
+        return;
+      }
+      pendingPrimarySaves.set(mode, {
+        mode,
+        state,
+        ...(ownedStateTransfer ? { stateTransfer: ownedStateTransfer } : {}),
+        ...(checkpointOverlay ? { checkpointOverlay } : {}),
+        ...(options.deferBackup === true ? { deferBackup: true } : {}),
+        waiters: [resolve],
+      });
     }
     ensurePrimarySaveProcessor();
   });
@@ -3093,22 +4014,25 @@ export async function saveGameSlotVerified(slotId: SaveSlotId, state: GameState)
   const savedAt = Date.now();
   const mode = saveModeForState(state);
   const key = saveSlotKey(slotId, mode);
-  let raw: string;
+  let raw: string | undefined;
   try {
-    raw = serializeEnvelope(state, savedAt, "slot", undefined, loadContentPackRegistry(), slotId);
+    const serialized = await serializeEnvelopeInWorker(state, savedAt, "slot", undefined, slotId);
+    raw = serialized.raw;
     const capacity = await hasLocalSaveCapacity(key, raw);
     if (!capacity.ok) {
       return failedSave("quota", "本地存储空间不足，槽位尚未保存。请先管理快照或导出存档。", utf8ByteLength(raw));
     }
     invalidateSaveSummaryCache(key);
     setLocalSaveValue(key, raw);
-    if (!await verifyPersistedEnvelope(key, raw)) {
+    if (!await verifyPersistedEnvelope(key, raw, serialized.verification)) {
       await recoverLocalSaveCache();
       return failedSave("verification", `本地槽位 ${slotId} 写入校验失败`, utf8ByteLength(raw));
     }
     return { success: true, message: `本地槽位 ${slotId} 已保存`, savedAt, bytes: utf8ByteLength(raw) };
   } catch (error) {
     await recoverLocalSaveCache();
+    const coordination = localCoordinationFailure(error, typeof raw === "string" ? utf8ByteLength(raw) : undefined);
+    if (coordination) return coordination;
     return failedSave(
       isQuotaExceededError(error) ? "quota" : "unavailable",
       isQuotaExceededError(error) ? "本地存储空间不足，槽位尚未保存。" : `本地槽位 ${slotId} 写入失败`,
@@ -3119,6 +4043,16 @@ export async function saveGameSlotVerified(slotId: SaveSlotId, state: GameState)
 export function loadGameSlot(slotId: SaveSlotId, mode: SaveMode = "normal"): LoadedGame | null {
   try {
     const raw = getLocalSaveValue(saveSlotKey(slotId, mode));
+    const loaded = raw ? parseEnvelope(raw, true) : null;
+    return loaded && saveModeForState(loaded.state) === mode ? loaded : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadGameSlotFromPersistence(slotId: SaveSlotId, mode: SaveMode = "normal"): Promise<LoadedGame | null> {
+  try {
+    const raw = await readLocalSavePayload(saveSlotKey(slotId, mode));
     const loaded = raw ? parseEnvelope(raw, true) : null;
     return loaded && saveModeForState(loaded.state) === mode ? loaded : null;
   } catch {
@@ -3151,6 +4085,20 @@ export function exportGameSlot(slotId: SaveSlotId, mode: SaveMode = "normal"): s
   }
 }
 
+export async function exportGameSlotFromPersistence(slotId: SaveSlotId, mode: SaveMode = "normal"): Promise<string | null> {
+  try {
+    const raw = await readLocalSavePayload(saveSlotKey(slotId, mode));
+    if (!raw) return null;
+    const inspection = inspectSave(raw);
+    const parsed = JSON.parse(raw) as Partial<SaveEnvelope>;
+    return inspection.valid && inspection.state && inspection.mode === mode && (parsed.slot === undefined || inspection.slot === slotId)
+      ? serializeEnvelope(inspection.state, inspection.savedAt ?? Date.now(), "slot", undefined, loadContentPackRegistry(), slotId)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function clearGameSlot(slotId: SaveSlotId, mode: SaveMode = "normal"): void {
   removeLocalSaveValue(saveSlotKey(slotId, mode));
 }
@@ -3168,6 +4116,35 @@ export async function clearGameSlotVerified(slotId: SaveSlotId, mode: SaveMode =
   }
 }
 
+function catalogPlanetId(value: string): PlanetId {
+  return PLANET_LIST.some((planet) => planet.id === value) ? value as PlanetId : "home";
+}
+
+function catalogIntegrity(status: "valid" | "missing" | "invalid"): SaveIntegrityStatus {
+  return status === "valid" ? "valid" : status === "missing" ? "legacy" : "corrupt";
+}
+
+function catalogSlotSummary(key: string, slotId: SaveSlotId, mode: SaveMode): SaveSlotSummary | null {
+  const catalog = getLocalSaveCatalog(key);
+  if (!catalog) return null;
+  const modeMatches = catalog.mode === mode;
+  const slotMatches = catalog.slot === slotId;
+  return {
+    slotId,
+    mode,
+    savedAt: catalog.savedAt,
+    elapsedSeconds: catalog.elapsedSeconds,
+    completedTechCount: catalog.completedTechCount,
+    structurePoints: catalog.structurePoints,
+    activePlanetId: catalogPlanetId(catalog.activePlanetId),
+    integrity: catalogIntegrity(catalog.integrity),
+    valid: catalog.integrity !== "invalid" && modeMatches && slotMatches,
+    issues: !modeMatches ? ["存档模式与槽位命名空间不一致"] :
+      !slotMatches ? ["存档槽位标记与实际槽位不一致"] :
+        catalog.integrity === "invalid" ? ["存档完整性校验失败"] : [],
+  };
+}
+
 export function getSaveSlotSummaries(mode: SaveMode = "normal"): SaveSlotSummary[] {
   const keys = ([1, 2, 3] as SaveSlotId[]).map((slotId) => saveSlotKey(slotId, mode));
   pruneSaveSummaryCache(keys, "slots");
@@ -3175,7 +4152,10 @@ export function getSaveSlotSummaries(mode: SaveMode = "normal"): SaveSlotSummary
     const key = saveSlotKey(slotId, mode);
     try {
       const raw = getLocalSaveValue(key);
-      if (!raw) return [];
+      if (!raw) {
+        const catalog = catalogSlotSummary(key, slotId, mode);
+        return catalog ? [catalog] : [];
+      }
       const cached = saveSummaryCache.get(key);
       if (cached?.raw === raw) return [cached.summary as SaveSlotSummary];
       const inspection = inspectSave(raw);
@@ -3240,8 +4220,31 @@ function storedSnapshotEntries(mode: SaveMode = "normal"): StoredSnapshotEntry[]
   }
   return keys.flatMap((key) => {
     try {
+      const catalog = getLocalSaveCatalog(key);
+      if (catalog?.integrity === "valid" && catalog.mode === mode && catalog.kind === "snapshot") {
+        // Cataloged snapshots never need their potentially 35+ MiB payload
+        // hydrated merely for retention/cadence decisions. The historical
+        // productionHistory cleanup flag is only relevant to uncataloged
+        // legacy recovery points handled below.
+        return [{
+          key,
+          savedAt: catalog.savedAt,
+          elapsedSeconds: catalog.elapsedSeconds,
+          automatic: !catalog.reason || catalog.reason === "自动快照",
+          hasPersistedProductionHistory: false,
+        } satisfies StoredSnapshotEntry];
+      }
       const raw = getLocalSaveValue(key);
-      if (!raw) return [];
+      if (!raw) {
+        if (!catalog) return [];
+        return [{
+          key,
+          savedAt: catalog.savedAt,
+          elapsedSeconds: catalog.elapsedSeconds,
+          automatic: !catalog.reason || catalog.reason === "自动快照",
+          hasPersistedProductionHistory: false,
+        } satisfies StoredSnapshotEntry];
+      }
       const cached = snapshotMetadataCache.get(key);
       if (cached?.raw === raw) return cached.entry ? [cached.entry] : [];
       const parsed = JSON.parse(raw) as unknown;
@@ -3314,11 +4317,18 @@ function removeAutomaticSnapshotsForQuotaRetry(mode: SaveMode = "normal"): numbe
   return removeStoredSnapshots(oldestFirst);
 }
 
-function nextSnapshotSequence(mode: SaveMode = "normal"): number {
-  const sequenceKey = snapshotSequenceKey(mode);
-  const previous = Number(getLocalSaveValue(sequenceKey) ?? 0);
-  const next = Number.isFinite(previous) ? Math.max(0, Math.floor(previous)) + 1 : 1;
-  setLocalSaveValue(sequenceKey, String(next));
+const snapshotSequenceAllocation = new Map<SaveMode, { savedAt: number; sequence: number }>();
+
+function nextSnapshotSequence(mode: SaveMode, savedAt: number): number {
+  const prefix = `${snapshotSavePrefix(mode)}.${savedAt}-`;
+  const persistedMaximum = listSnapshotKeys(mode).reduce((maximum, key) => {
+    if (!key.startsWith(prefix)) return maximum;
+    const sequence = Number(key.slice(prefix.length));
+    return Number.isSafeInteger(sequence) && sequence >= 0 ? Math.max(maximum, sequence) : maximum;
+  }, 0);
+  const allocated = snapshotSequenceAllocation.get(mode);
+  const next = Math.max(persistedMaximum, allocated?.savedAt === savedAt ? allocated.sequence : 0) + 1;
+  snapshotSequenceAllocation.set(mode, { savedAt, sequence: next });
   return next;
 }
 
@@ -3336,8 +4346,151 @@ async function maybeSaveAutomaticSnapshotVerified(state: GameState, mode = saveM
   }
 }
 
+/**
+ * Create a due automatic recovery point from the restored checkpoint buffer.
+ * The payload remains in Workers: the UI only selects a snapshot key and
+ * supplies the already-verified state identity for the proof binding.
+ */
+interface DeferredAutomaticSnapshotJob {
+  mode: SaveMode;
+  stateTransfer: SimulationStateTransfer;
+  checkpointOverlay: AuthoritativeSaveCheckpointOverlay | undefined;
+  primaryIdentity: VerifiedPrimaryLocalSaveIdentity;
+  expectedStateIdentity: {
+    mode: SaveMode;
+    version: number;
+    activePlanetId: PlanetId;
+    entityCount: number;
+    beltCount: number;
+    elapsedSeconds: number;
+  };
+}
+
+const deferredAutomaticSnapshots = new Map<SaveMode, DeferredAutomaticSnapshotJob>();
+let deferredAutomaticSnapshotTimer: ReturnType<typeof setTimeout> | null = null;
+let activeAutomaticSnapshotMode: SaveMode | null = null;
+
+function scheduleDeferredAutomaticSnapshotProcessor(delayMs = 0): void {
+  if (deferredAutomaticSnapshotTimer !== null || activeAutomaticSnapshotMode !== null || deferredAutomaticSnapshots.size === 0) return;
+  deferredAutomaticSnapshotTimer = globalThis.setTimeout(() => {
+    deferredAutomaticSnapshotTimer = null;
+    void processDeferredAutomaticSnapshot();
+  }, delayMs);
+}
+
+function scheduleAutomaticSnapshotFromStateTransfer(
+  state: GameState,
+  stateTransfer: SimulationStateTransfer,
+  mode: SaveMode,
+  checkpointOverlay: AuthoritativeSaveCheckpointOverlay | undefined,
+  primaryIdentity: VerifiedPrimaryLocalSaveIdentity | null,
+): void {
+  const latest = latestAutomaticSnapshotSummary(mode);
+  if (latest && state.elapsedSeconds >= latest.elapsedSeconds && state.elapsedSeconds - latest.elapsedSeconds < AUTO_SNAPSHOT_MIN_SECONDS) return;
+  if (!primaryIdentity || !(stateTransfer.buffer instanceof ArrayBuffer) || stateTransfer.buffer.byteLength === 0) return;
+  const snapshotTransfer = structuredClone(stateTransfer, { transfer: [stateTransfer.buffer] });
+  deferredAutomaticSnapshots.set(mode, {
+    mode,
+    stateTransfer: snapshotTransfer,
+    checkpointOverlay,
+    primaryIdentity,
+    expectedStateIdentity: {
+      mode: state.mode,
+      version: state.version,
+      activePlanetId: state.activePlanetId,
+      entityCount: state.entities.length,
+      beltCount: state.belts.length,
+      elapsedSeconds: state.elapsedSeconds,
+    },
+  });
+  scheduleDeferredAutomaticSnapshotProcessor();
+}
+
+async function processDeferredAutomaticSnapshot(): Promise<void> {
+  if (activeAutomaticSnapshotMode !== null || deferredAutomaticSnapshots.size === 0) return;
+  if (activePrimarySave || activePrimaryRequest || pendingPrimarySaves.size > 0) {
+    scheduleDeferredAutomaticSnapshotProcessor(50);
+    return;
+  }
+  const next = deferredAutomaticSnapshots.entries().next();
+  if (next.done) return;
+  const [mode, job] = next.value;
+  deferredAutomaticSnapshots.delete(mode);
+  activeAutomaticSnapshotMode = mode;
+  try {
+    const currentIdentity = getVerifiedPrimaryLocalSaveIdentity(mode);
+    if (!currentIdentity || !sameVerifiedPrimaryIdentity(currentIdentity, job.primaryIdentity)) return;
+    const latest = latestAutomaticSnapshotSummary(mode);
+    if (latest && job.expectedStateIdentity.elapsedSeconds >= latest.elapsedSeconds &&
+      job.expectedStateIdentity.elapsedSeconds - latest.elapsedSeconds < AUTO_SNAPSHOT_MIN_SECONDS) return;
+    const savedAt = Date.now();
+    const serialized = await serializeAuthoritativeSaveStateTransferInWorker(job.stateTransfer, {
+      savedAt,
+      kind: "snapshot",
+      slot: "main",
+      reason: "自动快照",
+      expectedStateIdentity: job.expectedStateIdentity,
+      ...(job.checkpointOverlay ? { checkpointOverlay: job.checkpointOverlay } : {}),
+    });
+    // A new primary request wins while the snapshot has not been dispatched.
+    // The proof queue repeats this admission check at its final synchronous
+    // boundary; an IDB transaction already in progress remains atomic.
+    if (activePrimarySave || activePrimaryRequest || pendingPrimarySaves.size > 0) return;
+    const identityAfterSerialization = getVerifiedPrimaryLocalSaveIdentity(mode);
+    if (!identityAfterSerialization || !sameVerifiedPrimaryIdentity(identityAfterSerialization, job.primaryIdentity)) return;
+    const sequence = nextSnapshotSequence(mode, savedAt);
+    const id = `${savedAt}-${sequence}`;
+    const key = `${snapshotSavePrefix(mode)}.${id}`;
+    const writer = getLocalSaveWriterStatus();
+    if (writer.role !== "primary") return;
+    const committed = await setLocalSavePayloadWithProof({
+      key,
+      bytes: serialized.bytes,
+      proof: serialized.proof,
+      seed: serialized.catalogSeed,
+      expectedRevision: getLocalSaveRevision(key),
+      fence: { ownerId: writer.writerId, fencingToken: writer.fencingToken },
+      preserveBackup: false,
+    }, undefined, () => {
+      if (activePrimarySave || activePrimaryRequest || pendingPrimarySaves.size > 0) return false;
+      const admittedIdentity = getVerifiedPrimaryLocalSaveIdentity(mode);
+      return Boolean(admittedIdentity && sameVerifiedPrimaryIdentity(admittedIdentity, job.primaryIdentity));
+    });
+    if (!committed.result.ok) return;
+    invalidateSaveSummaryCache(key);
+    snapshotMetadataCache.delete(key);
+    trimAutomaticSnapshots(AUTOMATIC_SAVE_SNAPSHOT_LIMIT, mode);
+    await flushLocalSaveWrites();
+  } catch {
+    // Automatic recovery points remain best effort. The verified primary and
+    // its catalog/revision proof are never downgraded by this background job.
+  } finally {
+    activeAutomaticSnapshotMode = null;
+    scheduleDeferredAutomaticSnapshotProcessor();
+  }
+}
+
 function getSnapshotSummaryForKey(key: string, raw = getLocalSaveValue(key), mode: SaveMode = "normal"): SaveSnapshotSummary | null {
-  if (!raw) return null;
+  if (!raw) {
+    const catalog = getLocalSaveCatalog(key);
+    if (!catalog) return null;
+    const modeMatches = catalog.mode === mode;
+    return {
+      id: key.startsWith(`${snapshotSavePrefix(mode)}.`)
+        ? key.slice(`${snapshotSavePrefix(mode)}.`.length)
+        : key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.`.length),
+      mode,
+      savedAt: catalog.savedAt,
+      elapsedSeconds: catalog.elapsedSeconds,
+      completedTechCount: catalog.completedTechCount,
+      structurePoints: catalog.structurePoints,
+      activePlanetId: catalogPlanetId(catalog.activePlanetId),
+      reason: catalog.reason ?? "自动快照",
+      integrity: catalogIntegrity(catalog.integrity),
+      valid: catalog.integrity !== "invalid" && modeMatches,
+      issues: !modeMatches ? ["快照模式与命名空间不一致"] : catalog.integrity === "invalid" ? ["快照完整性校验失败"] : [],
+    };
+  }
   const cached = saveSummaryCache.get(key);
   if (cached?.raw === raw) return cached.summary as SaveSnapshotSummary;
   const inspection = inspectSave(raw);
@@ -3375,7 +4528,7 @@ export function saveGameSnapshot(state: GameState, reason = "自动快照"): Sav
   try {
     const mode = saveModeForState(state);
     const savedAt = Date.now();
-    const sequence = nextSnapshotSequence(mode);
+    const sequence = nextSnapshotSequence(mode, savedAt);
     const id = `${savedAt}-${sequence}`;
     const key = `${snapshotSavePrefix(mode)}.${id}`;
     const raw = serializeEnvelope(state, savedAt, "snapshot", reason);
@@ -3392,11 +4545,12 @@ export function saveGameSnapshot(state: GameState, reason = "自动快照"): Sav
 export async function saveGameSnapshotVerified(state: GameState, reason = "自动快照"): Promise<SaveSnapshotSummary | null> {
   const mode = saveModeForState(state);
   const savedAt = Date.now();
-  const sequence = nextSnapshotSequence(mode);
+  const sequence = nextSnapshotSequence(mode, savedAt);
   const id = `${savedAt}-${sequence}`;
   const key = `${snapshotSavePrefix(mode)}.${id}`;
   try {
-    const raw = serializeEnvelope(state, savedAt, "snapshot", reason);
+    const serialized = await serializeEnvelopeInWorker(state, savedAt, "snapshot", reason);
+    const raw = serialized.raw;
     const capacity = await hasLocalSaveCapacity(key, raw);
     if (!capacity.ok) return null;
     invalidateSaveSummaryCache(key);
@@ -3404,8 +4558,23 @@ export async function saveGameSnapshotVerified(state: GameState, reason = "自�
     setLocalSaveValue(key, raw);
     if (reason === "自动快照") trimAutomaticSnapshots(AUTOMATIC_SAVE_SNAPSHOT_LIMIT, mode);
     await flushLocalSaveWrites();
-    if (!await verifyPersistedEnvelope(key, raw)) return null;
-    return getSnapshotSummaryForKey(key, raw, mode);
+    if (!await verifyPersistedEnvelope(key, raw, serialized.verification)) return null;
+    if (!serialized.summary) return getSnapshotSummaryForKey(key, raw, mode);
+    const summary = {
+      id,
+      mode,
+      savedAt: serialized.summary.savedAt,
+      elapsedSeconds: serialized.summary.elapsedSeconds,
+      completedTechCount: serialized.summary.completedTechCount,
+      structurePoints: serialized.summary.structurePoints,
+      activePlanetId: serialized.summary.activePlanetId as PlanetId,
+      reason,
+      integrity: "valid",
+      valid: true,
+      issues: [],
+    } satisfies SaveSnapshotSummary;
+    saveSummaryCache.set(key, { raw, summary });
+    return summary;
   } catch {
     await recoverLocalSaveCache();
     return null;
@@ -3418,8 +4587,7 @@ export function getSaveSnapshotSummaries(mode: SaveMode = "normal"): SaveSnapsho
   return keys.flatMap((key) => {
     try {
       const raw = getLocalSaveValue(key);
-      if (!raw) return [];
-      const summary = getSnapshotSummaryForKey(key, raw, mode);
+      const summary = getSnapshotSummaryForKey(key, raw ?? undefined, mode);
       return summary ? [summary] : [];
     } catch {
       return [];
@@ -3499,7 +4667,7 @@ export function getLocalSaveSummaryMetrics(): LocalSaveSummaryMetrics {
   let snapshotCount = 0;
   for (const key of keys) {
     const raw = getLocalSaveValue(key);
-    if (raw !== null) totalBytes += utf8ByteLength(raw);
+    totalBytes += raw !== null ? utf8ByteLength(raw) : getLocalSaveCatalog(key)?.byteLength ?? 0;
     if (key.startsWith(`${SAVE_SLOT_KEY_PREFIX}.`)) slotCount += 1;
     if (key.startsWith(`${SAVE_SNAPSHOT_KEY_PREFIX}.`)) snapshotCount += 1;
   }
@@ -3510,6 +4678,18 @@ export function loadSaveSnapshot(id: string, mode: SaveMode = "normal"): GameSta
   try {
     const raw = getLocalSaveValue(`${snapshotSavePrefix(mode)}.${id}`) ??
       (mode === "normal" ? getLocalSaveValue(`${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`) : null);
+    const state = raw ? parseEnvelope(raw, false)?.state ?? null : null;
+    return state && saveModeForState(state) === mode ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadSaveSnapshotFromPersistence(id: string, mode: SaveMode = "normal"): Promise<GameState | null> {
+  try {
+    const key = `${snapshotSavePrefix(mode)}.${id}`;
+    const raw = await readLocalSavePayload(key) ??
+      (mode === "normal" ? await readLocalSavePayload(`${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`) : null);
     const state = raw ? parseEnvelope(raw, false)?.state ?? null : null;
     return state && saveModeForState(state) === mode ? state : null;
   } catch {

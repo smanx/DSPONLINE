@@ -83,7 +83,7 @@ test("creates, transports and restores an authenticated encrypted SQLite backup"
   });
   assert.equal(report.ok, true);
   assert.equal(report.sourceSchemaVersion, 3);
-  assert.equal(report.restoredSchemaVersion, 7);
+  assert.equal(report.restoredSchemaVersion, 8);
   assert.equal(report.records.users, 1);
   assert.equal(report.records.cloudSaves, 1);
   assert.equal(report.records.submissions, 1);

@@ -1,26 +1,59 @@
 import type { ContentPackRuntimeSnapshot } from "./contentPacks";
 import {
   PURE_IDLE_MACRO_OPERATION_DEADLINE_MS,
+  type PureIdleMacroFinalStateOptions,
   type PureIdleMacroMode,
   type PureIdleMacroSummary,
 } from "./pureIdleMacro";
-import type { PureIdleMacroWorkerRequest, PureIdleMacroWorkerResponse } from "./pureIdleMacro.worker";
-import type { GameState } from "./types";
+import type {
+  PureIdleMacroFinalEnvelopeTransfer,
+  PureIdleMacroFinalizedIdentity,
+  PureIdleMacroWorkerRequest,
+  PureIdleMacroWorkerResponse,
+} from "./pureIdleMacroProtocol";
+import type { GameState, IdleSettlementState, ItemId } from "./types";
+import { decodeVerifiedSaveTransfer } from "./saveTransfer";
+import { parseTrustedWorkerEnvelope } from "./storage";
+import {
+  isWorkerBinaryPayload,
+  workerBinaryPayloadByteLength,
+  workerBinaryPayloadToArrayBuffer,
+} from "./workerBinaryPayload";
+import type { WorkerBinaryPayload } from "./workerBinaryPayload";
 
 export interface PureIdleMacroFinalResult {
   state: GameState;
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
   summary: PureIdleMacroSummary;
   rawBytes: number;
   durationMs: number;
 }
 
+export interface PureIdleMacroFinalEnvelopeResult {
+  summary: PureIdleMacroSummary;
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
+  rawBytes: number;
+  durationMs: number;
+}
+
+export type { PureIdleMacroFinalEnvelopeTransfer, PureIdleMacroFinalizedIdentity } from "./pureIdleMacroProtocol";
+
 export type PureIdleMacroProgress = Extract<PureIdleMacroWorkerResponse, { type: "progress" }>;
 export type PureIdleMacroClientFailureCode = "deadline" | "worker-crash" | "operation" | "closed";
 
 export class PureIdleMacroClientError extends Error {
-  constructor(public readonly code: PureIdleMacroClientFailureCode, message: string) {
+  public readonly recoverable: boolean;
+  public readonly finalEnvelope?: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>;
+
+  constructor(
+    public readonly code: PureIdleMacroClientFailureCode,
+    message: string,
+    options: { recoverable?: boolean; finalEnvelope?: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload> } = {},
+  ) {
     super(message);
     this.name = "PureIdleMacroClientError";
+    this.recoverable = options.recoverable ?? false;
+    this.finalEnvelope = options.finalEnvelope;
   }
 }
 
@@ -42,6 +75,24 @@ export interface PureIdleMacroClientOptions {
   operationDeadlineMs?: number;
 }
 
+export interface PureIdleMacroFinalizeOptions {
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  terminal?: boolean;
+  binaryTransport?: "array-buffer" | "blob";
+}
+
+export interface PureIdleMacroInitializeOptions {
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  forceConservativeReason?: string;
+  startedPaused?: boolean;
+  baselineIdleSettlement?: IdleSettlementState;
+  baselineTotalProduced?: Partial<Record<ItemId, number>>;
+  /** Internal convenience shape; the wire request remains three flat fields. */
+  terminalState?: PureIdleMacroFinalStateOptions;
+}
+
 export class PureIdleMacroClient {
   private worker: Worker;
   private nextId = 0;
@@ -49,6 +100,7 @@ export class PureIdleMacroClient {
   private closed = false;
   private readonly onProgress?: (progress: PureIdleMacroProgress) => void;
   private readonly operationDeadlineMs: number;
+  private initializedRegistryFingerprint: string | null = null;
 
   constructor(options: PureIdleMacroClientOptions = {}) {
     this.onProgress = options.onProgress;
@@ -70,13 +122,15 @@ export class PureIdleMacroClient {
         return;
       }
       if (event.data.type === "error") {
-        request.reject(new PureIdleMacroClientError("operation", event.data.message));
+        request.reject(new PureIdleMacroClientError("operation", event.data.message, {
+          recoverable: event.data.recoverable,
+        }));
         return;
       }
       request.resolve(event.data);
     };
     this.worker.onerror = () => this.failAll(
-      new PureIdleMacroClientError("worker-crash", "纯挂机 Worker 崩溃，恢复日志仍保持有效"),
+      new PureIdleMacroClientError("worker-crash", "纯挂机 Worker 崩溃，恢复日志仍保持有效", { recoverable: true }),
     );
   }
 
@@ -127,6 +181,7 @@ export class PureIdleMacroClient {
         this.failAll(new PureIdleMacroClientError(
           "deadline",
           `${request.type === "initialize" ? "启动校准" : request.type === "advance" ? "宏观结算" : "停止校验"}达到现实时间上限`,
+          { recoverable: true },
         ), true);
       }, deadlineMs + 250);
       this.pending.set(id, {
@@ -150,16 +205,24 @@ export class PureIdleMacroClient {
     state: GameState,
     mode: PureIdleMacroMode,
     registry: ContentPackRuntimeSnapshot,
-    options: { signal?: AbortSignal; deadlineMs?: number; forceConservativeReason?: string } = {},
+    options: PureIdleMacroInitializeOptions = {},
   ): Promise<PureIdleMacroSummary> {
+    this.initializedRegistryFingerprint = null;
+    const terminalState = options.terminalState ?? normalizeTerminalStateOptions(options);
     const response = await this.request({
       type: "initialize",
       state,
       mode,
       registry,
       forceConservativeReason: options.forceConservativeReason,
+      ...(terminalState ? {
+        startedPaused: terminalState.startedPaused,
+        baselineIdleSettlement: terminalState.baselineIdleSettlement,
+        baselineTotalProduced: terminalState.baselineTotalProduced,
+      } : {}),
     }, options);
     if (response.type !== "ready") throw new PureIdleMacroClientError("operation", "纯挂机 Worker 没有返回校准结果");
+    this.initializedRegistryFingerprint = registry.fingerprint;
     return response.summary;
   }
 
@@ -172,18 +235,67 @@ export class PureIdleMacroClient {
     return response.summary;
   }
 
-  async finalize(
+  async finalizeEnvelope(
     targetWallSeconds: number,
-    options: { signal?: AbortSignal; deadlineMs?: number } = {},
-  ): Promise<PureIdleMacroFinalResult> {
-    const response = await this.request({ type: "finalize", targetWallSeconds }, options);
+    options: PureIdleMacroFinalizeOptions = {},
+  ): Promise<PureIdleMacroFinalEnvelopeResult> {
+    const response = await this.request({
+      type: "finalize",
+      targetWallSeconds,
+      ...(options.terminal ? { terminal: true } : {}),
+      ...(options.binaryTransport ? { binaryTransport: options.binaryTransport } : {}),
+    }, options);
     if (response.type !== "finalized") throw new PureIdleMacroClientError("operation", "纯挂机 Worker 没有返回最终存档");
+    const finalEnvelope = validatedFinalEnvelopeProtocol(
+      response.finalEnvelope,
+      response.summary,
+      this.initializedRegistryFingerprint,
+    );
     return {
-      state: response.state,
       summary: response.summary,
-      rawBytes: response.rawBytes,
+      finalEnvelope,
+      rawBytes: finalEnvelope.verification.byteLength,
       durationMs: response.durationMs,
     };
+  }
+
+  async finalize(
+    targetWallSeconds: number,
+    options: PureIdleMacroFinalizeOptions = {},
+  ): Promise<PureIdleMacroFinalResult> {
+    const result = await this.finalizeEnvelope(targetWallSeconds, options);
+    const { finalEnvelope } = result;
+    let raw: string;
+    try {
+      raw = decodeVerifiedSaveTransfer(
+        await workerBinaryPayloadToArrayBuffer(finalEnvelope.payloadBytes),
+        finalEnvelope.verification,
+      );
+    } catch (error) {
+      throw new PureIdleMacroClientError(
+        "operation",
+        error instanceof Error ? error.message : "纯挂机 Worker 最终存档字节校验失败",
+      );
+    }
+    try {
+      const state = parseTrustedWorkerEnvelope(raw, finalEnvelope.verification, undefined, { persistentProjection: false });
+      if (!matchesFinalizedIdentity(state, finalEnvelope.identity) ||
+        result.summary.algorithmVersion !== finalEnvelope.identity.algorithmVersion ||
+        result.summary.settledWallSeconds !== finalEnvelope.identity.settledWallSeconds ||
+        result.summary.settledSimulationSeconds !== finalEnvelope.identity.settledSimulationSeconds) {
+        throw new Error("纯挂机 Worker 结果摘要与重载状态不一致");
+      }
+      return {
+        state,
+        ...result,
+      };
+    } catch (error) {
+      throw new PureIdleMacroClientError(
+        "operation",
+        error instanceof Error ? error.message : "纯挂机 Worker 最终存档无法重载",
+        { recoverable: true, finalEnvelope },
+      );
+    }
   }
 
   cancel(message = "纯挂机计算已取消"): void {
@@ -193,4 +305,68 @@ export class PureIdleMacroClient {
   close(): void {
     this.failAll(new PureIdleMacroClientError("closed", "纯挂机 Worker 已终止"));
   }
+}
+
+function validChecksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{8}$/.test(value);
+}
+
+function normalizeTerminalStateOptions(
+  options: PureIdleMacroInitializeOptions,
+): PureIdleMacroFinalStateOptions | undefined {
+  const hasTerminalState = options.startedPaused !== undefined ||
+    options.baselineIdleSettlement !== undefined || options.baselineTotalProduced !== undefined;
+  if (!hasTerminalState) return undefined;
+  if (typeof options.startedPaused !== "boolean" || !options.baselineIdleSettlement ||
+    !options.baselineTotalProduced) {
+    throw new PureIdleMacroClientError("operation", "纯挂机 initialize 终止态基线不完整");
+  }
+  return {
+    startedPaused: options.startedPaused,
+    baselineIdleSettlement: options.baselineIdleSettlement,
+    baselineTotalProduced: options.baselineTotalProduced,
+  };
+}
+
+function validatedFinalEnvelopeProtocol(
+  finalEnvelope: PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload>,
+  summary: PureIdleMacroSummary,
+  initializedRegistryFingerprint: string | null,
+): PureIdleMacroFinalEnvelopeTransfer<WorkerBinaryPayload> {
+  const verification = finalEnvelope?.verification;
+  const identity = finalEnvelope?.identity;
+  if (!summary || typeof summary.algorithmVersion !== "string" || summary.algorithmVersion.length === 0 ||
+    !Number.isFinite(summary.settledWallSeconds) || summary.settledWallSeconds < 0 ||
+    !Number.isFinite(summary.settledSimulationSeconds) || summary.settledSimulationSeconds < 0 ||
+    !isWorkerBinaryPayload(finalEnvelope?.payloadBytes) || verification?.integrity !== "valid" ||
+    !Number.isSafeInteger(verification.byteLength) || verification.byteLength < 0 ||
+    verification.byteLength !== workerBinaryPayloadByteLength(finalEnvelope.payloadBytes) ||
+    !validChecksum(verification.payloadChecksum) || !validChecksum(verification.stateChecksum) ||
+    !identity || identity.stateChecksum !== verification.stateChecksum ||
+    !Number.isSafeInteger(identity.stateVersion) || identity.stateVersion <= 0 ||
+    (identity.mode !== "normal" && identity.mode !== "speedrun") ||
+    typeof identity.activePlanetId !== "string" || identity.activePlanetId.length === 0 ||
+    !Number.isSafeInteger(identity.entityCount) || identity.entityCount < 0 ||
+    !Number.isSafeInteger(identity.beltCount) || identity.beltCount < 0 ||
+    !Number.isFinite(identity.elapsedSeconds) || identity.elapsedSeconds < 0 ||
+    typeof identity.algorithmVersion !== "string" || identity.algorithmVersion.length === 0 ||
+    !Number.isFinite(identity.settledWallSeconds) || identity.settledWallSeconds < 0 ||
+    !Number.isFinite(identity.settledSimulationSeconds) || identity.settledSimulationSeconds < 0 ||
+    typeof identity.registryFingerprint !== "string" || identity.registryFingerprint.length === 0 ||
+    initializedRegistryFingerprint === null || identity.registryFingerprint !== initializedRegistryFingerprint ||
+    summary.algorithmVersion !== identity.algorithmVersion ||
+    summary.settledWallSeconds !== identity.settledWallSeconds ||
+    summary.settledSimulationSeconds !== identity.settledSimulationSeconds) {
+    throw new PureIdleMacroClientError("operation", "纯挂机 Worker 最终 envelope 回执不完整");
+  }
+  return finalEnvelope;
+}
+
+function matchesFinalizedIdentity(state: GameState, identity: PureIdleMacroFinalizedIdentity): boolean {
+  return state.version === identity.stateVersion &&
+    state.mode === identity.mode &&
+    state.activePlanetId === identity.activePlanetId &&
+    state.entities.length === identity.entityCount &&
+    state.belts.length === identity.beltCount &&
+    state.elapsedSeconds === identity.elapsedSeconds;
 }

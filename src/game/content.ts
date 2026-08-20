@@ -523,6 +523,11 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     speed: 1, inputCapacity: 900, outputCapacity: 0, accepts: "any",
     description: "提供 3 个独立输入接口，送达的物品会立即进入所在行星的物资托盘。",
   },
+  orbital_cargo_terminal: {
+    id: "orbital_cargo_terminal", name: "轨道货运终端", shortName: "轨道终端", kind: "storage",
+    powerDemandKw: 50_000, speed: 1, inputCapacity: 1_000_000, outputCapacity: 0, accepts: "any", megastructure: true,
+    description: "全星系空间站的行星物资入口。四个稳定输入口共享每分钟 20,000 件上传能力，每颗已殖民行星最多一座。",
+  },
   storage_tank: {
     id: "storage_tank", name: "储液罐", shortName: "储液罐", kind: "storage",
     speed: 1, inputCapacity: 1200, outputCapacity: 1200, accepts: "fluid",
@@ -775,6 +780,7 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "conveyor_belt_mk3", name: "传送带 Mk.III", outputAmount: 3, requiredTechId: "super_magnetic_logistics", costs: [{ itemId: "graphene", amount: 2 }, { itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "super_magnetic_ring", amount: 1 }] },
   { buildingId: "storage_mk1", name: "小型储物仓", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 4 }] },
   { buildingId: "material_delivery_hub", name: "物资配送枢纽", outputAmount: 1, requiredTechId: "material_delivery_logistics", costs: [{ itemId: "steel", amount: 40 }, { itemId: "titanium_ingot", amount: 20 }, { itemId: "processor", amount: 10 }, { itemId: "electric_motor", amount: 10 }] },
+  { buildingId: "orbital_cargo_terminal", name: "轨道货运终端", outputAmount: 1, requiredTechId: "universe_matrix", costs: [{ itemId: "titanium_alloy", amount: 500 }, { itemId: "frame_material", amount: 200 }, { itemId: "quantum_chip", amount: 200 }, { itemId: "processor", amount: 500 }] },
   { buildingId: "splitter_4way", name: "四向分流器", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 3 }, { itemId: "gear", amount: 2 }, { itemId: "circuit_board", amount: 1 }] },
   { buildingId: "storage_tank", name: "储液罐", outputAmount: 1, requiredTechId: "high_efficiency_plasma_control", costs: [{ itemId: "iron_ingot", amount: 8 }, { itemId: "stone_brick", amount: 4 }, { itemId: "glass", amount: 4 }] },
   { buildingId: "oil_extractor", name: "原油萃取站", outputAmount: 1, requiredTechId: "high_efficiency_plasma_control", costs: [{ itemId: "steel", amount: 12 }, { itemId: "stone_brick", amount: 12 }, { itemId: "circuit_board", amount: 6 }, { itemId: "plasma_exciter", amount: 4 }] },
@@ -1606,6 +1612,7 @@ export const TECHNOLOGY_LIST = Object.values(TECHNOLOGIES).filter((technology) =
 
 export const FUEL_ENERGY_MJ: Partial<Record<ItemId, number>> = {
   coal: 2.7,
+  fire_ice: 4.8,
   crude_oil: 4,
   energetic_graphite: 6.3,
   refined_oil: 4.4,

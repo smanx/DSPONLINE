@@ -1,6 +1,9 @@
 import { AlertTriangle, BookOpen, BookMarked, CheckCircle2, ChevronLeft, ChevronRight, List, Monitor, RotateCcw, Search, Smartphone, Target, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import "../styles/tutorial.css";
+import { StableTextInput } from "./CompositionSafeInput";
+import { WorkspaceFrame } from "./WorkspaceFrame";
+import { readTutorialProgress, writeTutorialProgress } from "../game/tutorialProgress";
 
 type TutorialSection = {
   id: string;
@@ -12,9 +15,6 @@ type TutorialSection = {
   mistakes: string[];
   recovery: string;
 };
-
-const TUTORIAL_VERSION = "1.0.15";
-const PROGRESS_KEY = `dspidle:tutorial-progress:${TUTORIAL_VERSION}`;
 
 const SECTIONS: TutorialSection[] = [
   { id: "canvas", title: "认识画布", goal: "学会移动、缩放和选择工厂。", prerequisites: "进入任意工厂星球。", steps: ["鼠标左键拖动画布；手机用一根手指拖动。", "滚轮或双指捏合缩放，双击可聚焦画布（如果设置中开启）。", "点击建筑、传送带或空白处查看选择状态；再次点击顶部工作区按钮可关闭工作区。"], success: "你能把工厂移动到屏幕中央，并打开一个建筑检查器。", mistakes: ["拖动建筑而不是画布。", "手机第二根手指加入后仍继续拖建筑。"], recovery: "松开所有手指后点击空白处，再用画布边缘拖动；双指会接管缩放。" },
@@ -54,14 +54,9 @@ function TutorialVisual({ mobile }: { mobile: boolean }) {
 export function TutorialWorkspace({ open, mobile, initialSectionId, onClose }: { open: boolean; mobile?: boolean; initialSectionId?: string; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState(initialSectionId && SECTIONS.some((section) => section.id === initialSectionId) ? initialSectionId : SECTIONS[0].id);
-  const [completed, setCompleted] = useState<Set<string>>(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(PROGRESS_KEY) ?? "[]");
-      return new Set(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : []);
-    } catch { return new Set(); }
-  });
+  const [completed, setCompleted] = useState<Set<string>>(() => readTutorialProgress(localStorage));
   useEffect(() => {
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify([...completed]));
+    writeTutorialProgress(localStorage, completed);
   }, [completed]);
   useEffect(() => {
     if (initialSectionId && SECTIONS.some((section) => section.id === initialSectionId)) setActiveId(initialSectionId);
@@ -71,11 +66,11 @@ export function TutorialWorkspace({ open, mobile, initialSectionId, onClose }: {
   const active = SECTIONS.find((section) => section.id === activeId) ?? visible[0] ?? SECTIONS[0];
   const mark = () => setCompleted((current) => new Set(current).add(active.id));
   const reset = () => { setCompleted(new Set()); setActiveId(SECTIONS[0].id); };
-  return <section className={`tutorial-workspace${mobile ? " tutorial-workspace--mobile" : ""}`} role="dialog" aria-modal="true" aria-label="新手教程">
-    <header className="tutorial-header"><div><span>DSP极简网络 · v{TUTORIAL_VERSION}</span><strong>从零开始的完整教程</strong></div><div className="tutorial-header-actions"><span className="tutorial-progress"><CheckCircle2 size={14} />{completed.size}/{SECTIONS.length}</span><button type="button" onClick={onClose} aria-label="关闭新手教程" title="关闭新手教程"><X size={18} /></button></div></header>
+  return <WorkspaceFrame className={`tutorial-workspace${mobile ? " tutorial-workspace--mobile" : ""}`} ariaLabel="新手教程" onRequestClose={onClose}>
+    <header className="tutorial-header"><div><span>DSP极简网络 · v{__APP_VERSION__}</span><strong>从零开始的完整教程</strong></div><div className="tutorial-header-actions"><span className="tutorial-progress"><CheckCircle2 size={14} />{completed.size}/{SECTIONS.length}</span><button type="button" onClick={onClose} aria-label="关闭新手教程" title="关闭新手教程"><X size={18} /></button></div></header>
     <div className="tutorial-layout">
-      <aside className="tutorial-index"><label className="tutorial-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索教程" aria-label="搜索教程" /></label><div className="tutorial-index-heading"><span><List size={14} />目录</span><button type="button" onClick={reset} title="重置阅读进度"><RotateCcw size={13} /></button></div><nav>{visible.map((section) => <button className={`${active.id === section.id ? "active " : ""}${completed.has(section.id) ? "complete" : ""}`} type="button" key={section.id} onClick={() => setActiveId(section.id)}><i>{completed.has(section.id) ? <CheckCircle2 size={15} /> : <span>{SECTIONS.indexOf(section) + 1}</span>}</i><span>{section.title}</span></button>)}</nav><section className="tutorial-glossary"><header><BookMarked size={14} />术语表</header>{GLOSSARY.map(([term, definition]) => <details key={term}><summary>{term}</summary><p>{definition}</p></details>)}</section></aside>
+      <aside className="tutorial-index"><label className="tutorial-search"><Search size={15} /><StableTextInput draftId="tutorial-search" value={query} onValueChange={setQuery} placeholder="搜索教程" aria-label="搜索教程" /></label><div className="tutorial-index-heading"><span><List size={14} />目录</span><button type="button" onClick={reset} title="重置阅读进度"><RotateCcw size={13} /></button></div><nav>{visible.map((section) => <button className={`${active.id === section.id ? "active " : ""}${completed.has(section.id) ? "complete" : ""}`} type="button" key={section.id} onClick={() => setActiveId(section.id)}><i>{completed.has(section.id) ? <CheckCircle2 size={15} /> : <span>{SECTIONS.indexOf(section) + 1}</span>}</i><span>{section.title}</span></button>)}</nav><section className="tutorial-glossary"><header><BookMarked size={14} />术语表</header>{GLOSSARY.map(([term, definition]) => <details key={term}><summary>{term}</summary><p>{definition}</p></details>)}</section></aside>
       <article className="tutorial-article"><div className="tutorial-article-heading"><div><small>第 {SECTIONS.indexOf(active) + 1} 节 / {SECTIONS.length}</small><h1>{active.title}</h1><p>{active.goal}</p></div><Target size={22} /></div><section className="tutorial-facts"><div><strong>目标</strong><span>{active.goal}</span></div><div><strong>前置条件</strong><span>{active.prerequisites}</span></div></section><div className="tutorial-steps"><h2>具体步骤</h2><ol>{active.steps.map((step) => <li key={step}>{step}</li>)}</ol></div><div className="tutorial-visuals"><TutorialVisual mobile={false} /><TutorialVisual mobile /></div><section className="tutorial-result"><h2><CheckCircle2 size={17} />成功表现</h2><p>{active.success}</p></section><section className="tutorial-errors"><h2><AlertTriangle size={17} />常见错误</h2><ul>{active.mistakes.map((mistake) => <li key={mistake}>{mistake}</li>)}</ul><p><strong>恢复方法：</strong>{active.recovery}</p></section><footer className="tutorial-article-footer"><button type="button" onClick={() => { const index = SECTIONS.indexOf(active); if (index > 0) setActiveId(SECTIONS[index - 1].id); }} disabled={SECTIONS.indexOf(active) <= 0}><ChevronLeft size={16} />上一节</button><button className={completed.has(active.id) ? "complete" : "primary"} type="button" onClick={mark}>{completed.has(active.id) ? <CheckCircle2 size={16} /> : <Target size={16} />}{completed.has(active.id) ? "已完成" : "标记本节完成"}</button><button type="button" onClick={() => { const index = SECTIONS.indexOf(active); if (index < SECTIONS.length - 1) setActiveId(SECTIONS[index + 1].id); }} disabled={SECTIONS.indexOf(active) >= SECTIONS.length - 1}>下一节<ChevronRight size={16} /></button></footer></article>
     </div>
-  </section>;
+  </WorkspaceFrame>;
 }

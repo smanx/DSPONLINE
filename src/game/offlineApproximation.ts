@@ -19,6 +19,9 @@ import {
   createResearchMacroLedgerFromSnapshots,
   type ResearchMacroLedger,
 } from "./researchMacro";
+import { FAST_OFFLINE_CALIBRATION_SECONDS } from "./offlineSettlementConstants";
+
+export { FAST_OFFLINE_CALIBRATION_SECONDS } from "./offlineSettlementConstants";
 
 /**
  * This flag is deliberately a device preference.  It is not part of
@@ -46,7 +49,7 @@ export interface OfflineApproximationReport {
   /** Diagnostic only; ordinary inventory/cache drift does not reject fast-30s-v1. */
   maxNonCriticalError?: number;
   /** Explicit v2 completion semantics; fallback no longer implies unbounded replay. */
-  settlementStatus?: "approximate" | "conservative" | "bounded-exact" | "invalid-source" | "cancelled";
+  settlementStatus?: "approximate" | "conservative" | "conservative-preview" | "conservative-skipped" | "bounded-exact" | "invalid-source" | "cancelled" | "failed";
   /** Real Worker computation time, separate from simulated duration. */
   wallClockMs?: number;
   /** True when the real-time calibration budget forced a conservative result. */
@@ -152,7 +155,6 @@ const MIN_CALIBRATION_SECONDS = 5;
 const MAX_CALIBRATION_SECONDS = 10;
 const VALIDATION_SECONDS = 5;
 /** The fast offline contract deliberately spends exactly thirty simulation seconds on calibration. */
-export const FAST_OFFLINE_CALIBRATION_SECONDS = 30;
 const FAST_OFFLINE_CALIBRATION_SLICE_SECONDS = 10;
 const FAST_OFFLINE_VALIDATION_SECONDS = 5;
 export const FAST_OFFLINE_ALGORITHM_VERSION = "fast-30s-v2";
@@ -592,6 +594,7 @@ export function getOfflineApproximationBlocker(state: GameState, seconds: number
   const dynamicBuildings = new Set([
     "orbital_collector", "ray_receiver", "artificial_star", "em_rail_ejector", "vertical_launching_silo",
     "construction_center", "galactic_material_exporter", "micro_black_hole_connector", "space_station_construction_launcher",
+    "orbital_cargo_terminal",
     "thermal_power_plant", "mini_fusion_power_plant", "energy_exchanger", "accumulator",
   ]);
   if (state.entities.some((entity) => entity.buildingId && dynamicBuildings.has(entity.buildingId))) return "存在戴森、物流或巨构边界";

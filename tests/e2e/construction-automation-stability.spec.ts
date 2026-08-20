@@ -198,7 +198,7 @@ test("stopping pure idle terminates an unresponsive slice and restores interacti
   const timeWarpEntityId = timeWarpEntity.id;
   await page.addInitScript(() => {
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-17-v1.0.46");
     const NativeWorker = window.Worker;
     const tracker = { delayTimeWarp: false, delayedRequests: 0, terminatedWorkers: 0, createdWorkers: 0 };
     Object.assign(window, { __timeWarpStopTracker: tracker });
@@ -339,3 +339,4 @@ test("stopping pure idle terminates an unresponsive slice and restores interacti
   await page.getByTitle("生产统计").click();
   await expect(page.getByRole("dialog", { name: "生产统计" })).toBeVisible();
 });
+

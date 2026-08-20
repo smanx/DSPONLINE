@@ -54,6 +54,7 @@ import type {
   TechId,
 } from "../game/types";
 import { ItemGlyph } from "./ItemReference";
+import { StableTextInput } from "./CompositionSafeInput";
 import "../styles/codex.css";
 
 export type CodexSection = "items" | "buildings" | "logistics" | "energy" | "planets" | "dyson" | "research";
@@ -91,8 +92,8 @@ function ItemButton({ itemId, suffix, onSelect }: { itemId: ItemId; suffix?: str
   return <button className="codex-item-button" type="button" onClick={() => onSelect(itemId)}><ItemGlyph itemId={itemId} /><span>{getItem(itemId).name}</span>{suffix ? <strong>{suffix}</strong> : null}</button>;
 }
 
-function CatalogSearch({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
-  return <label className="codex-search"><Search size={15} /><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>;
+function CatalogSearch({ draftId, value, onChange, placeholder }: { draftId: string; value: string; onChange: (value: string) => void; placeholder: string }) {
+  return <label className="codex-search"><Search size={15} /><StableTextInput draftId={draftId} value={value} onValueChange={onChange} placeholder={placeholder} /></label>;
 }
 
 function BuildingIndex({ buildings, selectedId, query, onQuery, onSelect }: {
@@ -104,7 +105,7 @@ function BuildingIndex({ buildings, selectedId, query, onQuery, onSelect }: {
 }) {
   const term = query.trim().toLocaleLowerCase("zh-CN");
   const visible = buildings.filter((building) => !term || `${building.name} ${building.shortName} ${building.description} ${BUILDING_KIND_LABELS[building.kind]}`.toLocaleLowerCase("zh-CN").includes(term));
-  return <aside className="codex-index"><CatalogSearch value={query} onChange={onQuery} placeholder="搜索建筑、用途或类型" /><small>{visible.length} 项设施</small><div>{visible.map((building) => {
+  return <aside className="codex-index"><CatalogSearch draftId="codex-building-search" value={query} onChange={onQuery} placeholder="搜索建筑、用途或类型" /><small>{visible.length} 项设施</small><div>{visible.map((building) => {
     const construction = getConstructionDefinition(building.id);
     return <button className={building.id === selectedId ? "active" : ""} type="button" key={building.id} onClick={() => onSelect(building.id)}><i><Factory size={17} /></i><span><strong>{building.name}</strong><small>{BUILDING_KIND_LABELS[building.kind]}{building.tier ? ` · Mk.${building.tier}` : ""}</small></span><em>{construction?.requiredTechId ? getTechnology(construction.requiredTechId)?.name : "基础"}</em></button>;
   })}</div></aside>;
@@ -196,7 +197,7 @@ function ResearchSection({ game, selectedId, detailOnly, onSelect, onSelectItem 
   const term = query.trim().toLocaleLowerCase("zh-CN");
   const visible = technologies.filter((technology) => !term || `${technology.name} ${technology.summary} ${technology.unlocks.join(" ")}`.toLocaleLowerCase("zh-CN").includes(term));
   const technology = getTechnology(selectedId)!;
-  return <div className={`codex-master-detail${detailOnly ? " codex-master-detail--detail" : ""}`}>{!detailOnly ? <aside className="codex-index"><CatalogSearch value={query} onChange={setQuery} placeholder="搜索科技或解锁内容" /><small>{visible.length} 项科技</small><div>{visible.map((candidate) => <button className={candidate.id === selectedId ? "active" : ""} type="button" key={candidate.id} onClick={() => onSelect(candidate.id)}><i>{isTechnologyCompleted(game, candidate.id) ? <Check size={17} /> : <FlaskConical size={17} />}</i><span><strong>{candidate.name}</strong><small>层级 {candidate.tier} · {candidate.costs.reduce((sum, cost) => sum + cost.amount, 0).toLocaleString("zh-CN")} 矩阵</small></span></button>)}</div></aside> : null}<article className="codex-detail"><header className="codex-detail-heading"><i><FlaskConical size={22} /></i><span><small>科技层级 {technology.tier}</small><strong>{technology.name}</strong><p>{technology.summary}</p></span><b>{isTechnologyCompleted(game, technology.id) ? "已完成" : "未完成"}</b></header><section className="codex-section-block"><header><Atom size={16} /><strong>研究成本</strong></header><div className="codex-link-grid">{technology.costs.map((cost) => <ItemButton key={cost.itemId} itemId={cost.itemId} suffix={`×${cost.amount}`} onSelect={onSelectItem} />)}</div></section><section className="codex-section-block"><header><LockKeyhole size={16} /><strong>前置科技</strong></header><div className="codex-card-grid">{technology.prerequisites.length ? technology.prerequisites.map((techId) => <button type="button" key={techId} onClick={() => onSelect(techId)}><FlaskConical size={17} /><span><strong>{getTechnology(techId)?.name}</strong><small>{isTechnologyCompleted(game, techId) ? "已完成" : "尚未完成"}</small></span></button>) : <span>无前置科技</span>}</div></section><section className="codex-section-block"><header><BookOpen size={16} /><strong>主要解锁</strong></header><ul className="codex-unlock-list">{technology.unlocks.map((unlock) => <li key={unlock}>{unlock}</li>)}</ul></section></article></div>;
+  return <div className={`codex-master-detail${detailOnly ? " codex-master-detail--detail" : ""}`}>{!detailOnly ? <aside className="codex-index"><CatalogSearch draftId="codex-technology-search" value={query} onChange={setQuery} placeholder="搜索科技或解锁内容" /><small>{visible.length} 项科技</small><div>{visible.map((candidate) => <button className={candidate.id === selectedId ? "active" : ""} type="button" key={candidate.id} onClick={() => onSelect(candidate.id)}><i>{isTechnologyCompleted(game, candidate.id) ? <Check size={17} /> : <FlaskConical size={17} />}</i><span><strong>{candidate.name}</strong><small>层级 {candidate.tier} · {candidate.costs.reduce((sum, cost) => sum + cost.amount, 0).toLocaleString("zh-CN")} 矩阵</small></span></button>)}</div></aside> : null}<article className="codex-detail"><header className="codex-detail-heading"><i><FlaskConical size={22} /></i><span><small>科技层级 {technology.tier}</small><strong>{technology.name}</strong><p>{technology.summary}</p></span><b>{isTechnologyCompleted(game, technology.id) ? "已完成" : "未完成"}</b></header><section className="codex-section-block"><header><Atom size={16} /><strong>研究成本</strong></header><div className="codex-link-grid">{technology.costs.map((cost) => <ItemButton key={cost.itemId} itemId={cost.itemId} suffix={`×${cost.amount}`} onSelect={onSelectItem} />)}</div></section><section className="codex-section-block"><header><LockKeyhole size={16} /><strong>前置科技</strong></header><div className="codex-card-grid">{technology.prerequisites.length ? technology.prerequisites.map((techId) => <button type="button" key={techId} onClick={() => onSelect(techId)}><FlaskConical size={17} /><span><strong>{getTechnology(techId)?.name}</strong><small>{isTechnologyCompleted(game, techId) ? "已完成" : "尚未完成"}</small></span></button>) : <span>无前置科技</span>}</div></section><section className="codex-section-block"><header><BookOpen size={16} /><strong>主要解锁</strong></header><ul className="codex-unlock-list">{technology.unlocks.map((unlock) => <li key={unlock}>{unlock}</li>)}</ul></section></article></div>;
 }
 
 export function CodexSections({ section, game, selectedBuildingId, selectedTechId, selectedPlanetId, detailOnly, onSelectBuilding, onSelectTechnology, onSelectPlanet, onSelectItem }: {

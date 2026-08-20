@@ -6,6 +6,7 @@ import { getStarSystemProfile } from "../game/galaxy";
 import type { DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, GameState, StarSystemId } from "../game/types";
 import { QuantityValue } from "./QuantityValue";
 import { PowerValue } from "./PowerValue";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 
 const VIEW_CENTER = 300;
@@ -116,7 +117,7 @@ export function DysonPlannerWorkspace({
   };
 
   return (
-    <section className="dyson-planner-workspace" role="dialog" aria-modal="true" aria-label="戴森球规划">
+    <WorkspaceFrame className="dyson-planner-workspace" ariaLabel="戴森球规划" onRequestClose={onClose}>
       <header className="dyson-planner-header">
         <div className="dyson-planner-title"><i><Orbit size={20} /></i><div><span>恒星巨构设计协议</span><strong>戴森球规划</strong></div></div>
         <div className="dyson-planner-headline">
@@ -325,6 +326,6 @@ export function DysonPlannerWorkspace({
           </footer>
         </aside>
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

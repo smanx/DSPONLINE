@@ -22,6 +22,27 @@ const requestedReleaseChannel = process.env.VITE_RELEASE_CHANNEL?.trim().toLower
 const releaseChannel = requestedReleaseChannel === "beta" || requestedReleaseChannel === "nightly" ? requestedReleaseChannel : "stable";
 const apiProxyTarget = process.env.DSP_API_PROXY_TARGET?.trim() || "http://127.0.0.1:4320";
 
+export function resolveAssetBase(platform: string): string {
+  return platform === "web" ? "/" : "./";
+}
+
+export function resolveVersionGeneratedAt(
+  sourceDateEpoch = process.env.SOURCE_DATE_EPOCH,
+  now = new Date(),
+): string {
+  const raw = sourceDateEpoch?.trim();
+  if (raw && /^\d+$/.test(raw)) {
+    const seconds = Number(raw);
+    if (Number.isSafeInteger(seconds)) {
+      const generatedAt = new Date(seconds * 1_000);
+      if (Number.isFinite(generatedAt.getTime())) return generatedAt.toISOString();
+    }
+  }
+  return now.toISOString();
+}
+
+const versionGeneratedAt = resolveVersionGeneratedAt();
+
 function scaleUiFontSizes(): Plugin {
   return {
     name: "scale-ui-font-sizes",
@@ -49,16 +70,17 @@ function emitVersionMetadata(): Plugin {
       this.emitFile({
         type: "asset",
         fileName: "version.json",
-        source: `${JSON.stringify({ version: appVersion, buildId, generatedAt: new Date().toISOString() })}\n`,
+        source: `${JSON.stringify({ version: appVersion, buildId, generatedAt: versionGeneratedAt })}\n`,
       });
     },
   };
 }
 
 export default defineConfig({
-  // Relative assets are required by the packaged file:// Electron shell and
-  // remain valid for the root-served web/PWA build.
-  base: "./",
+  // Browser history routes such as /station/:publicId must still resolve the
+  // Web entry chunks from the origin root. Packaged file:// shells continue
+  // to require relative assets, so keep that behavior only for native builds.
+  base: resolveAssetBase(appPlatform),
   plugins: [scaleUiFontSizes(), react(), emitVersionMetadata()],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
@@ -67,6 +89,9 @@ export default defineConfig({
     __RELEASE_CHANNEL__: JSON.stringify(releaseChannel),
   },
   build: {
+    // The release gate consumes Vite's authoritative static/dynamic module
+    // graph instead of guessing startup cost from hashed filenames.
+    manifest: true,
     rolldownOptions: {
       output: {
         codeSplitting: {

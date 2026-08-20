@@ -1,13 +1,13 @@
-import { BoxSelect, ChevronRight, Focus, Layers3, LayoutTemplate, LockKeyhole, Map, MapPin, MousePointer2, Orbit, Palette, Redo2, Route, Undo2, WandSparkles, ZoomIn, ZoomOut } from "lucide-react";
+import { BoxSelect, ChevronRight, Focus, Layers3, LayoutTemplate, LockKeyhole, Map, MapPin, MousePointer2, Orbit, Palette, Redo2, Route, Truck, Undo2, WandSparkles, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PLANET_LIST, getPlanet } from "../../game/content";
 import { getPlanetMetrics, isPlanetColonized, type PlanetTrayDiscardRequest } from "../../game/engine";
 import { getPlanetDisplayName } from "../../game/galaxy";
-import type { FactoryAlert } from "../../game/alerts";
 import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, MaterialDeliverySlotMode, PlanetId, RecipeId } from "../../game/types";
 import type { MobileOverlay, MobileSheetSnap } from "../../hooks/useMobileNavigation";
 import { MobileBuildSheet, MobileInspectorSheet, MobileInventorySheet, type MobileCanvasMode } from "./MobileFactoryPanels";
 import { MobileSheetFrame } from "./MobileSheetFrame";
+import { clearStableTextDraft } from "../CompositionSafeInput";
 
 export interface MobileCanvasToolState {
   mode: MobileCanvasMode;
@@ -18,6 +18,7 @@ export interface MobileCanvasToolState {
   canRedo: boolean;
   canUndoAutoLayout: boolean;
   minimapOpen: boolean;
+  batchConnectionMode: boolean;
 }
 
 export interface MobileCanvasToolActions {
@@ -27,6 +28,7 @@ export interface MobileCanvasToolActions {
   onLayout: () => void;
   onOpenBlueprints: () => void;
   onOpenNetworks: () => void;
+  onBatchConnectionModeChange: (enabled: boolean) => void;
   onAutoLayout: () => void;
   onUndoAutoLayout: () => void;
   onUndo: () => void;
@@ -73,12 +75,12 @@ export interface MobileFactorySheetActions {
   onEjectorOrbitChange: (entityId: string, orbitId: string) => void;
 }
 
-function PlanetSheet({ game, alerts, snap, onSnap, onPlanetChange, onOpenStarMap, onClose }: {
+function PlanetSheet({ game, planetAlertCounts, snap, onSnap, onPlanetChange, onOpenStarMap, onClose }: {
   game: GameState;
-  alerts: FactoryAlert[];
+  planetAlertCounts: Partial<Record<PlanetId, number>>;
   snap: MobileSheetSnap;
   onSnap: (snap: MobileSheetSnap) => void;
-  onPlanetChange: (planetId: PlanetId) => void;
+  onPlanetChange: (planetId: PlanetId) => boolean;
   onOpenStarMap: () => void;
   onClose: () => void;
 }) {
@@ -91,8 +93,10 @@ function PlanetSheet({ game, alerts, snap, onSnap, onPlanetChange, onOpenStarMap
           const active = game.activePlanetId === planet.id;
           const metrics = getPlanetMetrics(game, planet.id);
           const devices = game.entities.reduce((sum, entity) => entity.planetId === planet.id ? sum + entity.machineCount + entity.minerCount : sum, 0);
-          const issues = alerts.filter((alert) => alert.planetId === planet.id).length;
-          return <button className={active ? "active" : ""} type="button" aria-pressed={active} key={planet.id} onClick={() => { onPlanetChange(planet.id); onClose(); }}>
+          const issues = planetAlertCounts[planet.id] ?? 0;
+          return <button className={active ? "active" : ""} type="button" aria-pressed={active} key={planet.id} onClick={() => {
+            if (onPlanetChange(planet.id)) onClose();
+          }}>
             <i style={{ color: planet.color }}><Orbit size={21} /></i>
             <span><strong>{getPlanetDisplayName(game, planet.id)}</strong><small>{planet.code} · {planet.environment}</small></span>
             <em>{devices} 台<br />供电 {Math.round(metrics.powerFactor * 100)}%</em>
@@ -119,6 +123,7 @@ function ToolsSheet({ state, actions, snap, onSnap, onClose }: { state: MobileCa
         <section><header>生产网络</header><div>
           <button type="button" onClick={() => runAndClose(actions.onOpenBlueprints)}><Layers3 size={20} /><span>蓝图库</span><b>{state.blueprintCount}</b></button>
           <button type="button" onClick={() => runAndClose(actions.onOpenNetworks)}><Route size={20} /><span>连续网络</span><b>{state.beltCount}</b></button>
+          <button className={state.batchConnectionMode ? "active" : ""} type="button" aria-label="连续拉线模式" aria-pressed={state.batchConnectionMode} onClick={() => runAndClose(() => actions.onBatchConnectionModeChange(!state.batchConnectionMode))}><Truck size={20} /><span>连续拉线</span></button>
           <button type="button" onClick={() => runAndClose(actions.onAutoLayout)}><WandSparkles size={20} /><span>自动整理</span></button>
           <button type="button" disabled={!state.canUndoAutoLayout} onClick={() => runAndClose(actions.onUndoAutoLayout)}><Undo2 size={20} /><span>撤销整理</span></button>
         </div></section>
@@ -135,9 +140,9 @@ function ToolsSheet({ state, actions, snap, onSnap, onClose }: { state: MobileCa
   );
 }
 
-export function MobileSheets({ game, alerts, overlay, tools, toolActions, factory, factoryActions, onSheetSnap, onClose, onPlanetChange, onOpenStarMap, onConfirmExit, onDismissExit }: {
+export function MobileSheets({ game, planetAlertCounts, overlay, tools, toolActions, factory, factoryActions, onSheetSnap, onClose, onPlanetChange, onOpenStarMap, onConfirmExit, onDismissExit }: {
   game: GameState;
-  alerts: FactoryAlert[];
+  planetAlertCounts: Partial<Record<PlanetId, number>>;
   overlay: MobileOverlay;
   tools: MobileCanvasToolState;
   toolActions: MobileCanvasToolActions;
@@ -145,21 +150,25 @@ export function MobileSheets({ game, alerts, overlay, tools, toolActions, factor
   factoryActions: MobileFactorySheetActions;
   onSheetSnap: (snap: MobileSheetSnap) => void;
   onClose: () => void;
-  onPlanetChange: (planetId: PlanetId) => void;
+  onPlanetChange: (planetId: PlanetId) => boolean;
   onOpenStarMap: () => void;
   onConfirmExit: () => void;
   onDismissExit: () => void;
 }) {
   const [buildQuery, setBuildQuery] = useState("");
   useEffect(() => {
-    if (overlay?.kind !== "sheet" || overlay.id !== "build") setBuildQuery("");
+    if (overlay?.kind !== "sheet" || overlay.id !== "build") {
+      setBuildQuery("");
+      clearStableTextDraft("mobile-build-search");
+    }
+    if (overlay?.kind !== "sheet" || overlay.id !== "inventory") clearStableTextDraft("mobile-inventory-search");
   }, [overlay]);
   if (!overlay) return null;
   if (overlay.kind === "modal") {
     if (overlay.id === "command") return null;
     return <div className="mobile-next-confirm-backdrop" role="presentation"><section className="mobile-next-confirm" role="alertdialog" aria-modal="true" aria-label="保存并返回主菜单"><i><LockKeyhole size={24} /></i><span><strong>保存并返回主菜单？</strong><small>系统会先校验主存档，保存失败时不会离开当前工厂。</small></span><footer><button type="button" onClick={onDismissExit}>继续游戏</button><button className="primary" type="button" onClick={onConfirmExit}>保存并返回</button></footer></section></div>;
   }
-  if (overlay.id === "planet") return <PlanetSheet game={game} alerts={alerts} snap={overlay.snap} onSnap={onSheetSnap} onPlanetChange={onPlanetChange} onOpenStarMap={onOpenStarMap} onClose={onClose} />;
+  if (overlay.id === "planet") return <PlanetSheet game={game} planetAlertCounts={planetAlertCounts} snap={overlay.snap} onSnap={onSheetSnap} onPlanetChange={onPlanetChange} onOpenStarMap={onOpenStarMap} onClose={onClose} />;
   if (overlay.id === "tools") return <ToolsSheet state={tools} actions={toolActions} snap={overlay.snap} onSnap={onSheetSnap} onClose={onClose} />;
   if (overlay.id === "build") return <MobileBuildSheet game={game} snap={overlay.snap} placement={factory.placement} beltTier={factory.beltTier} beltTierMode={factory.beltTierMode} query={buildQuery} onQueryChange={setBuildQuery} onSnap={onSheetSnap} onClose={onClose} onPlacement={factoryActions.onPlacement} onBelt={factoryActions.onBelt} onCraft={factoryActions.onCraft} onCraftFleet={factoryActions.onCraftFleet} onMissingCraft={factoryActions.onMissingCraft} onDeleteConstruction={factoryActions.onDeleteConstruction} />;
   if (overlay.id === "inventory") return <MobileInventorySheet game={game} snap={overlay.snap} onSnap={onSheetSnap} onClose={onClose} onPickTray={factoryActions.onPickTray} onDropCargo={factoryActions.onDropCargo} onDiscardTrayItems={factoryActions.onDiscardTrayItems} onSetTrayItemLimit={factoryActions.onSetTrayItemLimit} />;

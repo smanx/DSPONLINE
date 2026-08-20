@@ -1,6 +1,8 @@
-import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 
-import { LegacyTextTranslationBridge } from "./legacyTranslations";
+const EnglishTextTranslationBridge = lazy(() => import("./legacyTranslations").then((module) => ({
+  default: module.LegacyTextTranslationBridge,
+})));
 
 export type AppLocale = "zh-CN" | "en";
 
@@ -54,7 +56,10 @@ export function AppLocaleProvider({ children }: { children: ReactNode }) {
     window.history.replaceState(window.history.state, "", url);
   }, []);
   const value = useMemo(() => ({ locale, setLocale, isEnglish: locale === "en" }), [locale, setLocale]);
-  return <LocaleContext.Provider value={value}><LegacyTextTranslationBridge locale={locale} />{children}</LocaleContext.Provider>;
+  return <LocaleContext.Provider value={value}>
+    {locale === "en" ? <Suspense fallback={null}><EnglishTextTranslationBridge locale="en" /></Suspense> : null}
+    {children}
+  </LocaleContext.Provider>;
 }
 
 export function useAppLocale(): LocaleContextValue {

@@ -15,6 +15,7 @@ const WORKSPACE_TITLES = {
   operations: "运营中心",
   galaxy: "银河网络",
   "construction-center": "建筑制造中心",
+  "orbital-station": "全星系空间站",
 } as const;
 
 export function MobileTopBar({ game, route, alertCount, onBack, onOpenPlanet, onTogglePause, onOpenAlerts }: {

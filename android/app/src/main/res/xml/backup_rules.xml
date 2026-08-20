@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <exclude domain="root" path="app_webview/Default/Cache" />
-    <exclude domain="root" path="app_webview/Default/Code Cache" />
-    <exclude domain="root" path="app_webview/Default/GPUCache" />
+    <!-- Player-authored normal/speedrun saves live in this IndexedDB tree. -->
+    <include domain="root" path="app_webview/Default/IndexedDB" />
+    <!-- An include creates an allowlist: credentials, cookies, exports,
+         localStorage and caches in every other domain remain excluded. -->
 </full-backup-content>

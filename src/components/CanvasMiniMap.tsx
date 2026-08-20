@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef } from "react";
 import type { CanvasEntityTopology } from "../game/canvasTopology";
 import type { CanvasViewport } from "../game/types";
 
@@ -13,6 +13,10 @@ interface CanvasMiniMapProps {
   onUnavailable: () => void;
 }
 
+export interface CanvasMiniMapHandle {
+  setViewport: (viewport: CanvasViewport) => void;
+}
+
 interface MiniMapProjection {
   minX: number;
   minY: number;
@@ -24,6 +28,7 @@ interface MiniMapProjection {
 const MINIMAP_WIDTH = 200;
 const MINIMAP_HEIGHT = 150;
 const MINIMAP_PADDING = 10;
+const MINIMAP_GESTURE_FRAME_MS = 80;
 const NODE_WIDTH = 256;
 const NODE_HEIGHT = 180;
 
@@ -46,10 +51,16 @@ export function projectCanvasMiniMap(
   const visibleTop = -viewport.y / Math.max(0.01, viewport.zoom);
   const visibleRight = visibleLeft + canvasWidth / Math.max(0.01, viewport.zoom);
   const visibleBottom = visibleTop + canvasHeight / Math.max(0.01, viewport.zoom);
-  const minX = Math.min(visibleLeft, ...nodes.map((node) => node.x));
-  const minY = Math.min(visibleTop, ...nodes.map((node) => node.y));
-  const maxX = Math.max(visibleRight, ...nodes.map((node) => node.x + NODE_WIDTH));
-  const maxY = Math.max(visibleBottom, ...nodes.map((node) => node.y + NODE_HEIGHT));
+  let minX = visibleLeft;
+  let minY = visibleTop;
+  let maxX = visibleRight;
+  let maxY = visibleBottom;
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x);
+    minY = Math.min(minY, node.y);
+    maxX = Math.max(maxX, node.x + NODE_WIDTH);
+    maxY = Math.max(maxY, node.y + NODE_HEIGHT);
+  }
   const worldWidth = Math.max(1, maxX - minX);
   const worldHeight = Math.max(1, maxY - minY);
   const scale = Math.min(
@@ -66,20 +77,24 @@ export function projectCanvasMiniMap(
 }
 
 /** Extreme-mode minimap that redraws only from the low-frequency topology snapshot. */
-export const CanvasMiniMap = memo(function CanvasMiniMap({ nodes, viewport, canvasWidth, canvasHeight, lightTheme, onCenter, onZoom, onUnavailable }: CanvasMiniMapProps) {
+export const CanvasMiniMap = memo(forwardRef<CanvasMiniMapHandle, CanvasMiniMapProps>(function CanvasMiniMap({ nodes, viewport, canvasWidth, canvasHeight, lightTheme, onCenter, onZoom, onUnavailable }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const draggingRef = useRef(false);
   const drawCountRef = useRef(0);
-  const projection = useMemo(
-    () => projectCanvasMiniMap(nodes, viewport, canvasWidth, canvasHeight),
-    [canvasHeight, canvasWidth, nodes, viewport],
-  );
-  const projectionRef = useRef(projection);
-  projectionRef.current = projection;
+  const viewportRef = useRef(viewport);
+  const projectionRef = useRef(projectCanvasMiniMap(nodes, viewport, canvasWidth, canvasHeight));
+  const drawFrameRef = useRef<number | null>(null);
+  const drawTimerRef = useRef<number | null>(null);
+  const lastDrawAtRef = useRef(0);
 
-  useEffect(() => {
+  const draw = useCallback(() => {
+    drawFrameRef.current = null;
+    lastDrawAtRef.current = performance.now();
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const currentViewport = viewportRef.current;
+    const projection = projectCanvasMiniMap(nodes, currentViewport, canvasWidth, canvasHeight);
+    projectionRef.current = projection;
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
     canvas.width = Math.ceil(MINIMAP_WIDTH * dpr);
     canvas.height = Math.ceil(MINIMAP_HEIGHT * dpr);
@@ -100,9 +115,9 @@ export const CanvasMiniMap = memo(function CanvasMiniMap({ nodes, viewport, canv
       context.fillRect(x, y, Math.max(2, NODE_WIDTH * projection.scale), Math.max(2, NODE_HEIGHT * projection.scale));
     }
 
-    const zoom = Math.max(0.01, viewport.zoom);
-    const visibleLeft = -viewport.x / zoom;
-    const visibleTop = -viewport.y / zoom;
+    const zoom = Math.max(0.01, currentViewport.zoom);
+    const visibleLeft = -currentViewport.x / zoom;
+    const visibleTop = -currentViewport.y / zoom;
     context.globalAlpha = 1;
     context.fillStyle = lightTheme ? "rgba(97, 169, 164, 0.12)" : "rgba(98, 181, 174, 0.14)";
     context.strokeStyle = lightTheme ? "#28746f" : "#78d0c8";
@@ -113,10 +128,54 @@ export const CanvasMiniMap = memo(function CanvasMiniMap({ nodes, viewport, canv
     const maskHeight = canvasHeight / zoom * projection.scale;
     context.fillRect(maskX, maskY, maskWidth, maskHeight);
     context.strokeRect(maskX, maskY, maskWidth, maskHeight);
+  }, [canvasHeight, canvasWidth, lightTheme, nodes, onUnavailable]);
+
+  const scheduleDraw = useCallback(() => {
+    if (drawFrameRef.current != null || drawTimerRef.current != null) return;
+    const remaining = MINIMAP_GESTURE_FRAME_MS - (performance.now() - lastDrawAtRef.current);
+    if (remaining <= 0) {
+      drawFrameRef.current = window.requestAnimationFrame(draw);
+      return;
+    }
+    drawTimerRef.current = window.setTimeout(() => {
+      drawTimerRef.current = null;
+      drawFrameRef.current = window.requestAnimationFrame(draw);
+    }, remaining);
+  }, [draw]);
+
+  useImperativeHandle(ref, () => ({
+    setViewport(nextViewport) {
+      viewportRef.current = nextViewport;
+      scheduleDraw();
+    },
+  }), [scheduleDraw]);
+
+  useEffect(() => {
+    viewportRef.current = viewport;
+    // Declarative changes are infrequent (planet/size/topology switches) and
+    // should finish before the component is considered settled. Gesture-end
+    // updates use the imperative RAF path below, so a delayed initial frame
+    // cannot be mistaken for a redraw during an active pan.
+    if (drawFrameRef.current != null) window.cancelAnimationFrame(drawFrameRef.current);
+    if (drawTimerRef.current != null) window.clearTimeout(drawTimerRef.current);
+    drawFrameRef.current = null;
+    drawTimerRef.current = null;
+    draw();
+  }, [draw, viewport]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
     const handleContextLoss = () => onUnavailable();
     canvas.addEventListener("contextlost", handleContextLoss, { once: true });
-    return () => canvas.removeEventListener("contextlost", handleContextLoss);
-  }, [canvasHeight, canvasWidth, lightTheme, nodes, onUnavailable, projection, viewport]);
+    return () => {
+      canvas.removeEventListener("contextlost", handleContextLoss);
+      if (drawFrameRef.current != null) window.cancelAnimationFrame(drawFrameRef.current);
+      if (drawTimerRef.current != null) window.clearTimeout(drawTimerRef.current);
+      drawFrameRef.current = null;
+      drawTimerRef.current = null;
+    };
+  }, [onUnavailable]);
 
   const centerAtPointer = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
@@ -165,4 +224,4 @@ export const CanvasMiniMap = memo(function CanvasMiniMap({ nodes, viewport, canv
       }}
     />
   </div>;
-});
+}));

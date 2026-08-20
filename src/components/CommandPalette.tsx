@@ -2,6 +2,11 @@ import { BarChart3, BookOpen, Check, Command, Factory, Flag, FlaskConical, Focus
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ITEMS, getBuilding, getPlanet } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
+import "../styles/command-palette.css";
+import { AccessibleDialog } from "./AccessibleDialog";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
+
+const COMMAND_PALETTE_DRAFT_ID = "command-palette-search";
 
 export type CommandWorkspace = "operations" | "campaign" | "galaxy" | "star-map" | "statistics" | "recipes" | "technology" | "blueprints" | "dyson" | "inspector" | "resources";
 
@@ -18,6 +23,8 @@ interface CommandPaletteProps {
   onToggleReducedMotion: () => void;
 }
 
+type OpenCommandPaletteProps = Omit<CommandPaletteProps, "open">;
+
 interface PaletteCommand {
   id: string;
   label: string;
@@ -26,15 +33,22 @@ interface PaletteCommand {
   run: () => void;
 }
 
-export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRecipe, onFocusEntity, onAutoLayout, onPauseToggle, onTogglePerformance, onToggleReducedMotion }: CommandPaletteProps) {
+export function CommandPalette({ open, ...props }: CommandPaletteProps) {
+  return open ? <OpenCommandPalette {...props} /> : null;
+}
+
+function OpenCommandPalette({ game, onClose, onOpenWorkspace, onFocusRecipe, onFocusEntity, onAutoLayout, onPauseToggle, onTogglePerformance, onToggleReducedMotion }: OpenCommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const paletteRef = useRef<HTMLElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const close = () => {
+    clearStableTextDraft(COMMAND_PALETTE_DRAFT_ID);
+    setQuery("");
+    onClose();
+  };
   const run = (action: () => void) => {
     action();
-    onClose();
+    close();
   };
   const commands = useMemo<PaletteCommand[]>(() => {
     const workspace = (id: string, label: string, detail: string, icon: ReactNode, target: CommandWorkspace): PaletteCommand => ({
@@ -68,19 +82,47 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
       icon: <span className="command-item-swatch" style={{ backgroundColor: item.color }}>{item.symbol.slice(0, 3)}</span>,
       run: () => run(() => onFocusRecipe(item.id)),
     }));
-    const entityCommands: PaletteCommand[] = game.entities.map((entity) => {
-      const name = entity.buildingId ? getBuilding(entity.buildingId).name : entity.resourceId ? ITEMS[entity.resourceId].name : "生产节点";
-      const recipe = entity.recipeId ? ` · ${entity.recipeId}` : "";
-      return {
-        id: `entity:${entity.id}`,
-        label: `定位：${name}`,
-        detail: `${getPlanet(entity.planetId).name} · ${entity.id}${recipe}`,
-        icon: <Focus size={16} />,
-        run: () => run(() => onFocusEntity(entity.id)),
-      };
-    });
+    // Do not materialize tens of thousands of entity commands just to show the
+    // empty palette. A large factory can publish a new runtime state while the
+    // palette is open; deferring this map until there is an actual search term
+    // prevents every steady publication from rebuilding the full command list.
+    const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+    const entityCommands: PaletteCommand[] = [];
+    if (normalizedQuery.length >= 2) {
+      // Filter the raw scalar identity first and only create React command
+      // objects for the first visible matches. Mapping every entity into JSX
+      // before filtering is particularly expensive for a 27k-entity save.
+      const buildingNames = new globalThis.Map<string, string>();
+      const planetNames = new globalThis.Map<string, string>();
+      for (const entity of game.entities) {
+        const name = entity.buildingId
+          ? (buildingNames.get(entity.buildingId) ?? (() => {
+            const value = getBuilding(entity.buildingId!).name;
+            buildingNames.set(entity.buildingId!, value);
+            return value;
+          })())
+          : entity.resourceId ? ITEMS[entity.resourceId].name : "生产节点";
+        const planetName = planetNames.get(entity.planetId) ?? (() => {
+          const value = getPlanet(entity.planetId).name;
+          planetNames.set(entity.planetId, value);
+          return value;
+        })();
+        const recipe = entity.recipeId ? ` · ${entity.recipeId}` : "";
+        const label = `定位：${name}`;
+        const detail = `${planetName} · ${entity.id}${recipe}`;
+        if (!`${label} ${detail}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery)) continue;
+        entityCommands.push({
+          id: `entity:${entity.id}`,
+          label,
+          detail,
+          icon: <Focus size={16} />,
+          run: () => run(() => onFocusEntity(entity.id)),
+        });
+        if (entityCommands.length >= 16) break;
+      }
+    }
     return [...base, ...itemCommands, ...entityCommands];
-  }, [game.entities, game.paused, game.settings.performanceMode, game.settings.reducedMotion, onAutoLayout, onFocusEntity, onFocusRecipe, onOpenWorkspace, onPauseToggle, onTogglePerformance, onToggleReducedMotion]);
+  }, [game.entities, game.paused, game.settings.performanceMode, game.settings.reducedMotion, onAutoLayout, onFocusEntity, onFocusRecipe, onOpenWorkspace, onPauseToggle, onTogglePerformance, onToggleReducedMotion, query]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("zh-CN");
     if (!normalized) return commands.slice(0, 12);
@@ -88,51 +130,35 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
   }, [commands, query]);
 
   useEffect(() => {
-    if (!open) return;
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setQuery("");
-    setActiveIndex(0);
-    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
-    return () => {
-      window.clearTimeout(timer);
-      if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus({ preventScroll: true });
-    };
-  }, [open]);
-
-  useEffect(() => {
     setActiveIndex((index) => Math.min(index, Math.max(0, filtered.length - 1)));
   }, [filtered.length]);
 
-  if (!open) return null;
+  const activeCommand = filtered[activeIndex];
   return (
-    <div className="command-palette-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section ref={paletteRef} className="command-palette" role="dialog" aria-modal="true" aria-label="命令面板" onKeyDown={(event) => {
-        if (event.key !== "Tab") return;
-        const focusable = [...(paletteRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? [])];
-        if (focusable.length === 0) return;
-        const current = focusable.indexOf(document.activeElement as HTMLElement);
-        const next = event.shiftKey
-          ? current <= 0 ? focusable.length - 1 : current - 1
-          : current >= focusable.length - 1 ? 0 : current + 1;
-        event.preventDefault();
-        focusable[next].focus();
-      }}>
+    <AccessibleDialog
+      open
+      title="命令面板"
+      layout="bare"
+      ariaLabel="命令面板"
+      className="command-palette"
+      backdropClassName="command-palette-backdrop"
+      initialFocusRef={inputRef}
+      onRequestClose={close}
+    >
         <header>
           <div className="command-palette-title"><i><Command size={17} /></i><span><strong>命令面板</strong><small>搜索设备、工作区、设置或物品</small></span></div>
-          <button type="button" onClick={onClose} title="关闭命令面板" aria-label="关闭命令面板"><X size={16} /></button>
+          <button type="button" onClick={close} title="关闭命令面板" aria-label="关闭命令面板"><X size={16} /></button>
         </header>
-        <label className="command-palette-search"><Search size={16} /><input ref={inputRef} value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={(event) => {
+        <label className="command-palette-search"><Search size={16} /><StableTextInput draftId={COMMAND_PALETTE_DRAFT_ID} ref={inputRef} role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-palette-results" aria-activedescendant={activeCommand ? `command-palette-option-${activeCommand.id.replace(/[^a-zA-Z0-9_-]/g, "-")}` : undefined} value={query} onValueChange={(value) => { setQuery(value); setActiveIndex(0); }} onKeyDown={(event) => {
           if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((index) => Math.min(index + 1, Math.max(0, filtered.length - 1))); }
           else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((index) => Math.max(0, index - 1)); }
           else if (event.key === "Enter") { event.preventDefault(); filtered[activeIndex]?.run(); }
-          else if (event.key === "Escape") { event.preventDefault(); onClose(); }
         }} placeholder="输入设备、物品、工作区或动作" aria-label="搜索命令" autoComplete="off" /><kbd>Esc</kbd></label>
-        <div className="command-palette-list" role="listbox" aria-label="命令结果">
-          {filtered.map((command, index) => <button type="button" role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "active" : ""} key={command.id} onMouseEnter={() => setActiveIndex(index)} onClick={command.run}><i>{command.icon}</i><span><strong>{command.label}</strong><small>{command.detail}</small></span>{index === activeIndex ? <Check size={14} /> : null}</button>)}
+        <div id="command-palette-results" className="command-palette-list" role="listbox" aria-label="命令结果">
+          {filtered.map((command, index) => <button id={`command-palette-option-${command.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`} type="button" role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "active" : ""} key={command.id} onMouseEnter={() => setActiveIndex(index)} onClick={command.run}><i>{command.icon}</i><span><strong>{command.label}</strong><small>{command.detail}</small></span>{index === activeIndex ? <Check size={14} /> : null}</button>)}
           {filtered.length === 0 ? <div className="command-palette-empty">没有匹配的命令或物品</div> : null}
         </div>
         <footer><span><kbd>↑</kbd><kbd>↓</kbd>选择</span><span><kbd>Enter</kbd>执行</span><span><kbd>Esc</kbd>关闭</span></footer>
-      </section>
-    </div>
+    </AccessibleDialog>
   );
 }

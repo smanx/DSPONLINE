@@ -11,7 +11,8 @@ export type MobileWorkspaceId =
   | "campaign"
   | "operations"
   | "galaxy"
-  | "construction-center";
+  | "construction-center"
+  | "orbital-station";
 
 export type MobileSheetId = "build" | "inventory" | "inspector" | "planet" | "tools";
 export type MobileSheetSnap = "peek" | "half" | "full";
@@ -109,6 +110,21 @@ export function useMobileNavigation({ enabled, onFactoryRequested }: {
     navigate({ kind: "workspace", id });
   }, [navigate]);
 
+  const replaceModalWithWorkspace = useCallback((id: MobileWorkspaceId) => {
+    if (!enabledRef.current) return;
+    if (overlayRef.current?.kind !== "modal") {
+      openWorkspace(id);
+      return;
+    }
+    workspaceSubviewStackRef.current = [];
+    const next: MobileRoute = { kind: "workspace", id };
+    routeRef.current = next;
+    overlayRef.current = null;
+    setRoute(next);
+    setOverlay(null);
+    writeHistory("replace", "route");
+  }, [openWorkspace, writeHistory]);
+
   const openSheet = useCallback((id: MobileSheetId, snap = defaultSheetSnap(id)) => {
     onFactoryRequestedRef.current();
     workspaceSubviewStackRef.current = [];
@@ -121,6 +137,22 @@ export function useMobileNavigation({ enabled, onFactoryRequested }: {
     setOverlay(next);
     for (let index = 0; index < extraDepth; index += 1) writeHistory("push", "route");
   }, [navigate, writeHistory]);
+
+  const replaceModalWithSheet = useCallback((id: MobileSheetId, snap = defaultSheetSnap(id)) => {
+    if (!enabledRef.current) return;
+    if (overlayRef.current?.kind !== "modal") {
+      openSheet(id, snap);
+      return;
+    }
+    onFactoryRequestedRef.current();
+    workspaceSubviewStackRef.current = [];
+    const nextOverlay: MobileOverlay = { kind: "sheet", id, snap };
+    routeRef.current = { kind: "factory" };
+    overlayRef.current = nextOverlay;
+    setRoute({ kind: "factory" });
+    setOverlay(nextOverlay);
+    writeHistory("replace", "route");
+  }, [openSheet, writeHistory]);
 
   const setSheetSnap = useCallback((snap: MobileSheetSnap) => {
     const current = overlayRef.current;
@@ -167,6 +199,12 @@ export function useMobileNavigation({ enabled, onFactoryRequested }: {
       setOverlay(null);
       return;
     }
+    window.history.back();
+  }, []);
+
+  const dismissModal = useCallback((id: "command" | "offline") => {
+    const current = overlayRef.current;
+    if (!enabledRef.current || current?.kind !== "modal" || current.id !== id) return;
     window.history.back();
   }, []);
 
@@ -279,13 +317,16 @@ export function useMobileNavigation({ enabled, onFactoryRequested }: {
     overlay,
     openHub,
     openWorkspace,
+    replaceModalWithWorkspace,
     openWorkspaceSubview,
     replaceWorkspaceSubview,
     openSheet,
+    replaceModalWithSheet,
     setSheetSnap,
     openModal,
     goFactory: setFactory,
     requestBack,
+    dismissModal,
     requestExit,
     dismissExit,
     syncWorkspace,

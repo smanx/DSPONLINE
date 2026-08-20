@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { getFactoryAlerts } from "./alerts";
-import { advanceSimulation, createInitialState, installMiner, placeBuilding, setPaused } from "./engine";
+import { createFactoryAlertProjection, getFactoryAlerts, materializeFactoryAlerts } from "./alerts";
+import { advanceSimulation, createInitialState, createSimulationPlanetPhaseLookup, installMiner, placeBuilding, setPaused } from "./engine";
 
 describe("factory alerts", () => {
   it("does not report undeveloped resource veins", () => {
@@ -37,5 +37,38 @@ describe("factory alerts", () => {
     state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 });
     const alert = getFactoryAlerts(state, { details: false }).find((candidate) => candidate.statusCode === "missing-input");
     expect(alert).toMatchObject({ title: "", reason: "", location: "" });
+  });
+
+  it("preserves exact alert semantics when the shared simulation lookup is supplied", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 });
+    state = placeBuilding(state, "planetary_logistics_station", { x: 200, y: 0 });
+
+    expect(getFactoryAlerts(state, {
+      lookup: createSimulationPlanetPhaseLookup(state),
+    })).toEqual(getFactoryAlerts(state));
+  });
+
+  it("projects and materializes exact global alerts across planets without a main-thread rescan", () => {
+    let state = placeBuilding(createInitialState(), "arc_smelter", { x: 0, y: 0 });
+    const local = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    state = {
+      ...state,
+      entities: [...state.entities, {
+        ...structuredClone(local),
+        id: "remote_alert_smelter",
+        planetId: "dune",
+        position: { x: 300, y: 0 },
+      }],
+    };
+    const lookup = createSimulationPlanetPhaseLookup(state);
+    const projection = createFactoryAlertProjection(state, lookup);
+    const materialized = materializeFactoryAlerts(state, projection);
+    const reorderedState = { ...state, entities: [...state.entities].reverse() };
+
+    expect(materialized).toEqual(getFactoryAlerts(state, { lookup }));
+    expect(materializeFactoryAlerts(reorderedState, projection)).toEqual(materialized);
+    expect(new Set(materialized.map((alert) => alert.planetId))).toEqual(new Set(["home", "dune"]));
+    expect(new TextEncoder().encode(JSON.stringify(projection)).byteLength).toBeLessThan(8 * 1024);
   });
 });

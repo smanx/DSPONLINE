@@ -6,11 +6,13 @@ import type { ConstructionAutomationTargetId, ConstructionId, GameState, ItemId,
 import { formatQuantityCompact } from "../game/quantityFormat";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
+import { StableTextInput } from "./CompositionSafeInput";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 
 type CenterCategory = "all" | "power" | "production" | "logistics" | "dyson";
 
 const POWER_IDS = new Set<ConstructionId>(["wind_turbine", "solar_panel", "geothermal_power_station", "thermal_power_plant", "mini_fusion_power_plant", "artificial_star", "accumulator", "energy_exchanger"]);
-const LOGISTICS_IDS = new Set<ConstructionId>(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "storage_tank", "splitter_4way", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]);
+const LOGISTICS_IDS = new Set<ConstructionId>(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "orbital_cargo_terminal", "storage_tank", "splitter_4way", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]);
 const DYSON_IDS = new Set<ConstructionId>(["em_rail_ejector", "ray_receiver", "vertical_launching_silo"]);
 
 interface AutomationDisplayDefinition {
@@ -131,18 +133,21 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
   const materialSeconds = getConstructionAutomationMaterialSeconds(game);
   const term = query.trim().toLocaleLowerCase("zh-CN");
   const definitions = useMemo(() => automationDefinitions().filter((definition) => {
+    if (definition.id === "orbital_cargo_terminal" && (game.mode !== "normal" || game.orbitalStation.status === "locked")) return false;
     if (category !== "all" && categoryFor(definition.id) !== category) return false;
     if (!term) return true;
     const materials = definition.costs.map((cost) => ITEMS[cost.itemId].name).join(" ");
     return `${definition.name} ${materials}`.toLocaleLowerCase("zh-CN").includes(term);
-  }), [category, term]);
+  }), [category, game.mode, game.orbitalStation.status, term]);
   const activeTargets = Object.values(game.constructionAutomation.targetStock).filter((target) => (target ?? 0) > 0).length;
   const completedTargets = automationDefinitions().filter((definition) => {
     const target = game.constructionAutomation.targetStock[definition.id] ?? 0;
     const current = isPortableFleetItem(definition.id) ? game.portableFleet[definition.id] ?? 0 : game.construction[definition.id] ?? 0;
     return target > 0 && current >= target;
   }).length;
-  const unlockedBuildingCount = automationDefinitions().filter((definition) => !isPortableFleetItem(definition.id) && (!definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId))).length;
+  const unlockedBuildingCount = automationDefinitions().filter((definition) => !isPortableFleetItem(definition.id) &&
+    (definition.id !== "orbital_cargo_terminal" || game.mode === "normal" && game.orbitalStation.status !== "locked") &&
+    (!definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId))).length;
   const applyBatchTarget = (target: number) => {
     if (!Number.isSafeInteger(target) || target < 1 || target > 100_000_000) {
       setBatchError("请输入 1～100,000,000 的正整数");
@@ -162,7 +167,7 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
 
   if (!open) return null;
   return (
-    <section className="construction-center-workspace" role="dialog" aria-modal="true" aria-label="建筑制造中心">
+    <WorkspaceFrame className="construction-center-workspace" ariaLabel="建筑制造中心" onRequestClose={onClose}>
       <header className="construction-center-header">
         <div><i><Factory size={20} /></i><span><small>巨构自动补给协议</small><strong>建筑制造中心</strong></span></div>
         <dl>
@@ -177,7 +182,7 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
 
       <div className="construction-center-toolbar">
         <label className="construction-center-toggle"><input type="checkbox" checked={game.constructionAutomation.enabled} onChange={(event) => onEnabledChange(event.target.checked)} /><i /><span><strong>自动补足</strong><small>{game.constructionAutomation.enabled ? "制造协议运行" : "制造协议暂停"}</small></span></label>
-        <label className="construction-center-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索建筑或材料" aria-label="搜索自动制造建筑" /></label>
+        <label className="construction-center-search"><Search size={14} /><StableTextInput draftId="construction-center-search" value={query} onValueChange={setQuery} placeholder="搜索建筑或材料" aria-label="搜索自动制造建筑" /></label>
         <div className="construction-center-categories" role="group" aria-label="建筑制造分类">
           {(["all", "power", "production", "logistics", "dyson"] as CenterCategory[]).map((id) => <button className={category === id ? "active" : ""} type="button" key={id} onClick={() => setCategory(id)}>{{ all: "全部", power: "能源", production: "生产", logistics: "物流", dyson: "戴森" }[id]}</button>)}
         </div>
@@ -210,7 +215,8 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
         {definitions.map((definition) => {
           const current = Math.floor(isPortableFleetItem(definition.id) ? game.portableFleet[definition.id] ?? 0 : game.construction[definition.id] ?? 0);
           const target = Math.floor(game.constructionAutomation.targetStock[definition.id] ?? 0);
-          const unlocked = !definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId);
+          const unlocked = (definition.id !== "orbital_cargo_terminal" || game.mode === "normal" && game.orbitalStation.status !== "locked") &&
+            (!definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId));
           const complete = target > 0 && current >= target;
           const missing = definition.costs.filter((cost) => (sourceTray[cost.itemId] ?? 0) < cost.amount);
           return <article className={`${target > 0 ? "construction-center-row construction-center-row--targeted" : "construction-center-row"}${complete ? " construction-center-row--complete" : ""}`} key={definition.id}>
@@ -225,6 +231,6 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
         })}
         {definitions.length === 0 ? <div className="construction-center-empty"><Search size={22} /><strong>没有符合条件的建筑</strong></div> : null}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

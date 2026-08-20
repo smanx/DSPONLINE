@@ -29,6 +29,8 @@ import {
 } from "../game/productionStatistics";
 import { ExactValue } from "./ExactValue";
 import { useAppLocale } from "../i18n/locale";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 
 export type StatisticsTab = "management" | "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
@@ -213,7 +215,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
         <label className="network-heatmap-toggle"><input type="checkbox" checked={game.settings.beltHeatmapEnabled} onChange={(event) => onBeltHeatmapChange(event.target.checked)} /><span>吞吐热力图</span><strong>{game.settings.beltHeatmapEnabled ? "显示中" : "关闭"}</strong></label>
       </section>
       <div className="network-toolbar">
-        <label className="statistics-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="物品、行星或状态" aria-label="筛选运输网络" /></label>
+        <label className="statistics-search"><Search size={14} /><StableTextInput draftId="network-overview-search" value={query} onValueChange={setQuery} placeholder="物品、行星或状态" aria-label="筛选运输网络" /></label>
         <div className="statistics-filter network-scope" aria-label="网络范围"><button type="button" className={scope === "active" ? "active" : ""} onClick={() => setScope("active")}>当前行星</button><button type="button" className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>全星区</button></div>
         <label className="statistics-sort"><span>状态</span><select value={health} onChange={(event) => setHealth(event.target.value as BeltHealth | "all")}><option value="all">全部</option>{Object.entries(NETWORK_HEALTH_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       </div>
@@ -257,8 +259,8 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
         </section>
         <aside className="canvas-bookmarks">
           <header><Bookmark size={15} /><span>画布书签</span><strong>{game.canvasBookmarks.length}/24</strong></header>
-          <form onSubmit={(event) => { event.preventDefault(); onAddCanvasBookmark(bookmarkName); setBookmarkName(""); }}><input value={bookmarkName} onChange={(event) => setBookmarkName(event.target.value)} maxLength={28} placeholder={`${getPlanetDisplayName(game, game.activePlanetId)}视角`} aria-label="画布书签名称" /><button type="submit" title="保存当前画布视角" aria-label="保存当前画布视角"><BookmarkPlus size={14} /></button></form>
-          <div>{game.canvasBookmarks.length === 0 ? <p><MapPin size={18} /><span>尚未保存视角</span></p> : game.canvasBookmarks.map((bookmark) => <article key={bookmark.id}><MapPin size={13} /><span><input defaultValue={bookmark.name} aria-label={`${bookmark.name}名称`} onBlur={(event) => onRenameCanvasBookmark(bookmark.id, event.target.value)} /><small>{getPlanetDisplayName(game, bookmark.planetId)} · {Math.round(bookmark.viewport.zoom * 100)}%</small></span><button type="button" onClick={() => onOpenCanvasBookmark(bookmark)} title={`打开${bookmark.name}`} aria-label={`打开${bookmark.name}`}><Focus size={13} /></button><button className="danger" type="button" onClick={() => onRemoveCanvasBookmark(bookmark.id)} title={`删除${bookmark.name}`} aria-label={`删除${bookmark.name}`}><Trash2 size={13} /></button></article>)}</div>
+          <form onSubmit={(event) => { event.preventDefault(); (event.currentTarget.elements.namedItem("bookmarkName") as HTMLInputElement | null)?.blur(); onAddCanvasBookmark(bookmarkName); setBookmarkName(""); clearStableTextDraft("canvas-bookmark-name"); }}><StableTextInput draftId="canvas-bookmark-name" name="bookmarkName" value={bookmarkName} onValueChange={setBookmarkName} maxLength={28} placeholder={`${getPlanetDisplayName(game, game.activePlanetId)}视角`} aria-label="画布书签名称" /><button type="submit" title="保存当前画布视角" aria-label="保存当前画布视角"><BookmarkPlus size={14} /></button></form>
+          <div>{game.canvasBookmarks.length === 0 ? <p><MapPin size={18} /><span>尚未保存视角</span></p> : game.canvasBookmarks.map((bookmark) => <article key={bookmark.id}><MapPin size={13} /><span><StableTextInput commitOnBlur draftId={`canvas-bookmark-name:${bookmark.id}`} value={bookmark.name} onValueChange={(name) => onRenameCanvasBookmark(bookmark.id, name)} aria-label={`${bookmark.name}名称`} onBlur={() => clearStableTextDraft(`canvas-bookmark-name:${bookmark.id}`)} /><small>{getPlanetDisplayName(game, bookmark.planetId)} · {Math.round(bookmark.viewport.zoom * 100)}%</small></span><button type="button" onClick={() => onOpenCanvasBookmark(bookmark)} title={`打开${bookmark.name}`} aria-label={`打开${bookmark.name}`}><Focus size={13} /></button><button className="danger" type="button" onClick={() => onRemoveCanvasBookmark(bookmark.id)} title={`删除${bookmark.name}`} aria-label={`删除${bookmark.name}`}><Trash2 size={13} /></button></article>)}</div>
         </aside>
       </div>
     </div>
@@ -463,7 +465,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
     : game.metrics.demandKw > 0 ? 100 : 0;
 
   return (
-    <section className={`statistics-workspace${mobile ? " mobile-workspace mobile-statistics" : ""}`} role="dialog" aria-modal="true" aria-label="生产统计">
+    <WorkspaceFrame className={`statistics-workspace${mobile ? " mobile-workspace mobile-statistics" : ""}`} ariaLabel="生产统计" onRequestClose={onClose}>
       <header className="statistics-header">
           <div className="statistics-title">
           <i><BarChart3 size={20} /></i>
@@ -508,7 +510,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
         <div className="statistics-content statistics-production">
           <div className="statistics-toolbar">
             <label className="statistics-planet-filter"><span>统计星球</span><select value={planetScope} onChange={(event) => setPlanetScope(event.target.value as PlanetId | "all")} aria-label="选择统计星球"><option value="all">全部星球</option><option value={game.activePlanetId}>当前星球：{getPlanetDisplayName(game, game.activePlanetId)} · {getStarSystem(activeStatisticsPlanet.systemId).name}</option>{PLANET_LIST.filter((planet) => planet.id !== game.activePlanetId).map((planet) => <option value={planet.id} key={planet.id}>{getPlanetDisplayName(game, planet.id)} · {getStarSystem(planet.systemId).name}</option>)}</select></label>
-            <label className="statistics-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选物品" aria-label="筛选统计物品" /></label>
+            <label className="statistics-search"><Search size={14} /><StableTextInput draftId="production-statistics-search" value={query} onValueChange={setQuery} placeholder="筛选物品" aria-label="筛选统计物品" /></label>
             <div className="statistics-filter" aria-label="物品统计筛选">
               {(["all", "producing", "deficit", "blocked"] as ItemFilter[]).map((option) => (
                 <button type="button" className={filter === option ? "active" : ""} key={option} onClick={() => setFilter(option)}>
@@ -561,8 +563,8 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
             <header><span>物品</span><button type="button" className={sort.key === "production" ? "active" : ""} onClick={() => toggleColumnSort("production")}>生产 {productionWindow.window.suffix}{sort.key === "production" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><button type="button" className={sort.key === "consumption" ? "active" : ""} onClick={() => toggleColumnSort("consumption")}>消耗 {productionWindow.window.suffix}{sort.key === "consumption" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><span>净增量 {productionWindow.window.suffix}</span><span>网络库存</span><span>节点</span></header>
             <div>
               {items.length === 0 ? <div className="statistics-empty"><Box size={20} /><span>没有符合条件的物品</span></div> : items.map((item) => (
-                <div className={`statistics-row${mobile && expandedItemId === item.itemId ? " statistics-row--expanded" : ""}${activeTrendItemId === item.itemId ? " statistics-row--trend-selected" : ""}`} key={item.itemId} role="button" tabIndex={0} onClick={() => { setTrendItemId(item.itemId); if (mobile) setExpandedItemId((current) => current === item.itemId ? null : item.itemId); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setTrendItemId(item.itemId); if (mobile) setExpandedItemId((current) => current === item.itemId ? null : item.itemId); } }}>
-                  <span className="statistics-item"><ItemMark itemId={item.itemId} /><strong>{getItem(item.itemId).name}</strong></span>
+                <div className={`statistics-row${mobile && expandedItemId === item.itemId ? " statistics-row--expanded" : ""}${activeTrendItemId === item.itemId ? " statistics-row--trend-selected" : ""}`} key={item.itemId}>
+                  <span className="statistics-item"><ItemMark itemId={item.itemId} /><strong>{getItem(item.itemId).name}</strong><button className="statistics-trend-command" type="button" aria-label={`${mobile && expandedItemId === item.itemId ? "收起" : "查看"}${getItem(item.itemId).name}趋势${mobile ? "和详情" : ""}`} aria-pressed={activeTrendItemId === item.itemId} aria-expanded={mobile ? expandedItemId === item.itemId : undefined} onClick={() => { setTrendItemId(item.itemId); if (mobile) setExpandedItemId((current) => current === item.itemId ? null : item.itemId); }}><TrendingUp size={14} /><span>{mobile && expandedItemId === item.itemId ? "收起" : "趋势"}</span></button></span>
                   <span className="rate-positive"><ProductionStatisticValue value={item.productionPerMinute} suffix={productionWindow.window.suffix} sign="+" /></span>
                   <span className="rate-negative"><ProductionStatisticValue value={item.consumptionPerMinute} suffix={productionWindow.window.suffix} sign="-" /></span>
                   <span className={item.netPerMinute > 0.005 ? "rate-positive" : item.netPerMinute < -0.005 ? "rate-negative" : "rate-neutral"}><ProductionStatisticValue value={item.netPerMinute} suffix={productionWindow.window.suffix} sign={item.netPerMinute > 0 ? "+" : item.netPerMinute < 0 ? "-" : ""} /></span>
@@ -619,7 +621,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
             </aside>
             <main className="planning-detail">
               <header className="planning-config">
-                <label><span>方案名称</span><input defaultValue={selectedPlan.name} key={`${selectedPlan.id}-${selectedPlan.name}`} onBlur={(event) => onUpdatePlan(selectedPlan.id, { name: event.target.value })} /></label>
+                <label><span>方案名称</span><StableTextInput commitOnBlur draftId={`production-plan-name:${selectedPlan.id}`} value={selectedPlan.name} onValueChange={(name) => onUpdatePlan(selectedPlan.id, { name })} onBlur={() => clearStableTextDraft(`production-plan-name:${selectedPlan.id}`)} /></label>
                 <label><span>目标物品</span><select value={selectedPlan.itemId} onChange={(event) => onUpdatePlan(selectedPlan.id, { itemId: event.target.value as ItemId })}>{Object.values(ITEMS).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
                 <label><span>产量 / min</span><input type="number" min={0.01} value={selectedPlan.targetPerMinute} onChange={(event) => onUpdatePlan(selectedPlan.id, { targetPerMinute: Number(event.target.value) })} /></label>
                 <label><span>范围</span><select value={selectedPlan.planetId} onChange={(event) => onUpdatePlan(selectedPlan.id, { planetId: event.target.value as PlanetId | "all" })}><option value="all">全星区</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{getPlanetDisplayName(game, planet.id)}</option>)}</select></label>
@@ -808,6 +810,6 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
           )}
         </div>
       ) : null}
-    </section>
+    </WorkspaceFrame>
   );
 }

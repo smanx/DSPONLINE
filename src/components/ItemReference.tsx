@@ -29,9 +29,22 @@ export function ItemReferenceActionsProvider({ actions, enabled = true, children
   return <ItemReferenceActionsContext.Provider value={{ actions, enabled }}>{children}</ItemReferenceActionsContext.Provider>;
 }
 
+export function getAccessibleItemGlyphTextColor(backgroundColor: string): "#000000" | "#ffffff" {
+  const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(backgroundColor);
+  if (!match) return "#000000";
+  const channel = (value: string) => {
+    const normalized = Number.parseInt(value, 16) / 255;
+    return normalized <= 0.04045
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * channel(match[1]) + 0.7152 * channel(match[2]) + 0.0722 * channel(match[3]);
+  return luminance > 0.179 ? "#000000" : "#ffffff";
+}
+
 export function ItemGlyph({ itemId, className = "" }: { itemId: ItemId; className?: string }) {
   const item = getItem(itemId);
-  return <i className={`item-glyph item-glyph--${item.kind}${className ? ` ${className}` : ""}`} style={{ backgroundColor: item.color }}>{item.symbol}</i>;
+  return <i className={`item-glyph item-glyph--${item.kind}${className ? ` ${className}` : ""}`} style={{ backgroundColor: item.color, color: getAccessibleItemGlyphTextColor(item.color) }}>{item.symbol}</i>;
 }
 
 export function ItemHoverCard({ itemId, children, className = "" }: {
@@ -108,7 +121,6 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
   return (
     <span
       className={`item-reference${className ? ` ${className}` : ""}`}
-      aria-haspopup="dialog"
       onMouseEnter={enabled ? (event) => open(event.currentTarget) : undefined}
       onMouseLeave={enabled ? scheduleClose : undefined}
       onFocus={enabled ? (event) => open(event.currentTarget) : undefined}
@@ -136,6 +148,7 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
       {anchor ? createPortal(
         <aside
           className="item-hover-card"
+          data-workspace-portal="true"
           role="dialog"
           aria-label={`${item.name}快捷操作`}
           style={anchor}

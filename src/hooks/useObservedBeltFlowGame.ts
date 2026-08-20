@@ -1,5 +1,6 @@
 import { useMemo, useRef } from "react";
 import { applyBeltFlowObservations, BeltFlowSampler } from "../game/beltFlow";
+import { measureRuntimeTransitionPhase } from "../game/runtimeTransitionDiagnostics";
 import type { GameState } from "../game/types";
 
 export function useObservedBeltFlowGame(game: GameState, sampleEnabled = true): GameState {
@@ -10,7 +11,9 @@ export function useObservedBeltFlowGame(game: GameState, sampleEnabled = true): 
     // rebuilding every belt observation until simulation or editing publishes
     // a new source state.
     if (!sampleEnabled) return game;
-    const observations = samplerRef.current!.sample(game, { planetId: game.activePlanetId });
-    return applyBeltFlowObservations(game, observations, game.activePlanetId);
+    return measureRuntimeTransitionPhase("belt-flow-observation", () => {
+      const observations = samplerRef.current!.sample(game, { planetId: game.activePlanetId });
+      return applyBeltFlowObservations(game, observations, game.activePlanetId);
+    }, { entities: game.entities.length, belts: game.belts.length });
   }, [game, game.activePlanetId, sampleEnabled]);
 }

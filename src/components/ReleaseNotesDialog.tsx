@@ -1,57 +1,131 @@
-import { Check, ChevronLeft, ChevronRight, CloudUpload, Gauge, History, Info, Link2, MessageCircle, Smartphone, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, CloudUpload, Database, Gauge, History, Info, Link2, LockKeyhole, MessageCircle, ShieldCheck, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useAppLocale } from "../i18n/locale";
+import { getCurrentReleaseNotes, getReleaseNotes1039, getReleaseNotes1041, getReleaseNotes1042, getReleaseNotes1043, getReleaseNotes1044, getReleaseNotes1045, getReleaseNotesUiCopy } from "../i18n/releaseNotes";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
+import { AccessibleDialog } from "./AccessibleDialog";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
-export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-09-v1.0.35",
-  date: "2026年8月9日",
-  version: "1.0.35",
-  title: "终局结算、云端安全与速通恢复更新",
-  summary: "1.0.35 为终局离线和纯挂机增加设备感知分级与内存预警，补齐大存档上传诊断、云数据库治理、匿名新设备登录提醒和排行榜复核；历史百万白糖里程碑可安全自愈，建筑堆叠快捷档扩展到 ±10000 与 ±100000。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+export const CURRENT_RELEASE_NOTES = getCurrentReleaseNotes("zh-CN");
+
+const RELEASE_NOTES_1_0_39 = getReleaseNotes1039("zh-CN");
+const RELEASE_NOTES_1_0_41 = getReleaseNotes1041("zh-CN");
+const RELEASE_NOTES_1_0_42 = getReleaseNotes1042("zh-CN");
+const RELEASE_NOTES_1_0_43 = getReleaseNotes1043("zh-CN");
+const RELEASE_NOTES_1_0_44 = getReleaseNotes1044("zh-CN");
+const RELEASE_NOTES_1_0_45 = getReleaseNotes1045("zh-CN");
+
+const RELEASE_NOTES_1_0_40 = {
+  ...getCurrentReleaseNotes("zh-CN"),
+  id: "2026-08-13-v1.0.40",
+  version: "1.0.40",
+  title: "云存档可靠性、排行榜与跨端体验更新",
+  summary: "1.0.40 让银河排行榜显示当前账号的真实名次和统计窗口状态，统一 30 MiB 大存档的跨端传输，并为多标签页、本地/云持久化、账号会话、PWA 更新和关键弹窗增加可恢复保护。玩法平衡、GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  items: [
+    { id: "leaderboard-self-rank", title: "银河榜显示本人真实名次", description: "公开榜仍只展示 Top 100；登录后从完整公开成绩中计算本人排名，并明确区分统计窗口、复核、隐藏和限制状态。" },
+    { id: "cross-platform-save-transfer", title: "30 MiB 大存档跨端传输", description: "Web、Windows 与 Android 共用直接正文、gzip、动态超时和精确 SHA-256 确认；取消或结果未知时不盲目重传。" },
+    { id: "local-save-fencing", title: "多标签页本地存档防覆盖", description: "writer lease、逐键 revision 与 fencing token 阻止陈旧页面覆盖；分叉双方原文由玩家选择。" },
+    { id: "atomic-cloud-archives", title: "云端原子持久化与账号归档", description: "SQLite 事务成功后才发布修订；容量、历史、流式 ZIP 与原子导入保留正文、模式、槽位和 checksum。" },
+    { id: "secure-session-speedrun-recovery", title: "账号会话与速通恢复隔离", description: "同源 HttpOnly 会话、Android 安全存储和普通/速通模式边界共同保护账号与排行榜资格。" },
+    { id: "startup-pwa-accessibility", title: "启动、PWA 与关键弹窗收口", description: "启动包按需加载，PWA 保留前一稳定壳；关键操作使用共享焦点、危险确认和跨浏览器门禁。" },
+  ],
+} as const;
+
+const RELEASE_NOTES_1_0_38 = {
+  id: "2026-08-11-v1.0.38",
+  date: "2026年8月11日",
+  version: "1.0.38",
+  title: "终局性能、存档瘦身与矿脉扩容更新",
+  summary: "1.0.38 减少大存档在主线程与 Worker 间的重复复制，复用传送带、生产、电力和量子物流批处理，并安全压缩可重建的默认存档字段；普通模式中仅有一个单极磁石矿脉的存档可在备份与双重确认后补到硬上限两个。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
     {
-      id: "offline-device-budget",
-      title: "终局离线按存档与设备分级",
-      description: "结算前评估实体、线路、物流、缓存、流体、戴森和施工边界，并结合设备内存与核心数选择精确、快速或保守宏观路径；高内存风险会提前提示，取消仍保留原存档。",
+      id: "worker-transfer",
+      title: "大存档只做一次权威序列化",
+      description: "保存、云上传、离线和纯挂机 Worker 返回带长度、哈希与状态校验的可转移缓冲区；槽位和快照也走后台序列化，失败仍保留原始状态和精确重试能力。",
     },
     {
-      id: "large-save-governance",
-      title: "大存档保存与上传可诊断",
-      description: "1、7、20、28 和 30 MiB 档位会给出明确体积提示；上传记录准备、压缩、网络、回退和取消阶段耗时，30 MiB 原始回退与 32 MiB 服务端展开边界保持不变。",
+      id: "exact-batching",
+      title: "终局结算复用稳定批次",
+      description: "传送带候选与容量账本、配方静态量、戴森接收与电网拓扑、量子供需索引在结构未变化时复用；完整状态、缓存、在途物资和稳定排序继续与既有 oracle 对照。",
     },
     {
-      id: "cloud-security",
-      title: "云端治理与账号安全增强",
-      description: "后台增加 SQLite/WAL、修订增长、备份窗口、写队列和磁盘水位指标；新设备或匿名区域登录会提醒，管理员动作要求精确账号、二次确认并写入最小化审计。",
+      id: "save-compaction",
+      title: "存档默认字段可安全瘦身",
+      description: "仅省略 v46 迁移可精确重建的实体和传送带零值默认字段，运行时拓扑与历史诊断不落盘；旧版未压缩 v46 存档仍可直接读取并保留失败回滚路径。",
     },
     {
-      id: "speedrun-recovery",
-      title: "百万白糖里程碑可自愈",
-      description: "合法 v46 速通存档按累计生产事实补齐漏写里程碑；服务端使用当前有效计时保守验榜，并提供要求最新主云修订、匹配备份和停服确认的一次性恢复工具。",
+      id: "second-unipolar-vein",
+      title: "单矿脉存档可受控补到两个",
+      description: "仅普通模式、恰好一个健康单极磁石矿脉且暂停时可操作；先创建持久快照并双重确认，只新增零缓存、零矿机的有限矿脉，不增加库存、产量或既有矿脉储量，重复执行会被硬上限阻止。",
     },
     {
-      id: "stack-shortcuts",
-      title: "终局建筑堆叠快捷调整",
-      description: "桌面与移动检查器增加 ±10000、±100000，继续使用既有原子增减、施工件守恒和 1～100,000,000 上下限。",
-    },
-    {
-      id: "save-compatibility",
-      title: "存档与在线协议保持兼容",
-      description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。",
+      id: "canvas-compatibility",
+      title: "高密度画布减少无效刷新",
+      description: "线路颜色与物品映射只在拓扑变化时重建，并新增暂停/运行拖动、缩放、建筑/线路选择、检查器、200% 字号和移动窗口的有界矩阵；不会承诺未经真机验证的统一 60 FPS。",
     },
   ],
 } as const;
 
-const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "offline-device-budget": Gauge,
-  "large-save-governance": CloudUpload,
-  "cloud-security": Smartphone,
-  "speedrun-recovery": History,
-  "stack-shortcuts": Link2,
-  "save-compatibility": Check,
+const RELEASE_NOTE_ICONS: Record<string, LucideIcon> = {
+  "dynamic-shell-safe-area": Gauge,
+  "atomic-mobile-navigation": Link2,
+  "workspace-accessibility": ShieldCheck,
+  "responsive-large-text": Check,
+  "stable-form-drafts": LockKeyhole,
+  "version-and-preview-integrity": Database,
+  "cloud-status-center": CloudUpload,
+  "large-save-upload": Database,
+  "offline-settlement-choice": Gauge,
+  "adaptive-connection-ports": Link2,
+  "atomic-continuous-connections": ShieldCheck,
+  "stable-mobile-input": Check,
+  "leaderboard-self-rank": Gauge,
+  "cross-platform-save-transfer": CloudUpload,
+  "local-save-fencing": LockKeyhole,
+  "atomic-cloud-archives": Database,
+  "secure-session-speedrun-recovery": ShieldCheck,
+  "startup-pwa-accessibility": Check,
+  "sparse-save-validation": ShieldCheck,
+  "payload-identity": Database,
+  "review-mode-isolation": LockKeyhole,
+  "worker-transfer": CloudUpload,
+  "exact-batching": Gauge,
+  "save-compaction": History,
+  "second-unipolar-vein": Link2,
+  "canvas-compatibility": Check,
 };
+
+const RELEASE_NOTES_1_0_37 = {
+  id: "2026-08-10-v1.0.37",
+  date: "2026年8月10日",
+  version: "1.0.37",
+  title: "单极磁石、离线决策与星图批量操作更新",
+  summary: "1.0.37 修复旧存档资源目录迁移边界，重排横向科技树导航，并让不可靠的离线近似先由玩家决策；星图批量物流操作同步收紧布局并支持轨道收集器一键接入量子网络。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  items: [
+    { id: "unipolar-integrity", title: "单极磁石资源边界可审计", description: "旧存档迁移只恢复其星球资源目录明确声明的稳定资源点，不再从重新生成的目录引入幽灵矿脉；人工修复工具提供预览、备份摘要、确认令牌、回滚和速通复核门禁。" },
+    { id: "technology-navigation", title: "科技树横向浏览更稳定", description: "桌面科技树按层级横向排列，滚轮、触控板、Shift 滚轮、拖动与键盘均只移动科技区域；100%～200% 字号和紧凑布局不会带动页面纵向跳动，手机仍使用纵向列表。" },
+    { id: "offline-decision", title: "不可靠离线近似不再自动落盘", description: "零校准、Worker 异常、内存风险和边界失败会保留原存档并进入决策界面；可从原状态精确重试、返回菜单，或在普通模式双重确认后按零收益推进时钟，速通模式只允许精确结算。" },
+    { id: "star-map-batch", title: "星图批量物流操作更集中", description: "升级全部星际物流站与切换全部量子物流站保持同排，并新增轨道收集器一键接入量子网络；批量操作会确认影响范围并显示成功数、跳过数和分组原因。" },
+    { id: "save-compatibility", title: "存档与在线协议保持兼容", description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；不会自动修改排行榜历史、批量增加资源或提交未确认的离线候选状态。" },
+  ],
+} as const;
+
+const RELEASE_NOTES_1_0_36 = {
+  id: "2026-08-10-v1.0.36",
+  date: "2026年8月10日",
+  version: "1.0.36",
+  title: "传送带、燃料与终局性能更新",
+  summary: "1.0.36 增加新建传送带默认并联数量与可燃冰火力发电支持，并以可重建运行时索引优化传送带、物流、生产缓存和高密度画布。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  items: [
+    { id: "belt-lane-default", title: "新建线路可预设并联数量", description: "设置中可选择 1、2、4 或自定义 1～4096 条并联线路；桌面、触摸和蓝图新建线路按实际数量原子扣除施工托盘，既有线路和货物堆叠不变。" },
+    { id: "fire-ice-fuel", title: "火力发电站支持可燃冰", description: "可燃冰按 4.8 MJ/个接入既有火电燃料、耗尽提示、供电和统计路径；煤、石墨、氢、氘与燃料棒规则不变。" },
+    { id: "active-belt-runtime", title: "终局线路按运行状态调度", description: "星球级线路、源端、目标端和物品索引复用稳定容量与路由计划；已证明休眠的线路只在库存、配方、供电或拓扑变化时唤醒，结算顺序与状态哈希保持一致。" },
+    { id: "dense-canvas", title: "高密度星球画布更轻量", description: "普通线路由 Canvas 批量绘制并通过空间索引命中，React Flow 只保留选中、悬浮、寻线和生产相关细节；Canvas 不可用时自动回退完整线路。" },
+    { id: "production-logistics-runtime", title: "生产缓存与物流调度复用", description: "配方静态量、矿脉列表、物流容量和稳定槽位排序改为运行时缓存；每座建筑缓存、量子库存、运输载荷和翘曲器仍独立守恒。" },
+    { id: "save-compatibility", title: "存档与在线协议保持兼容", description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。" },
+  ],
+} as const;
 
 export interface ReleaseNotesRecord {
   id: string;
@@ -65,6 +139,28 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  RELEASE_NOTES_1_0_45,
+  RELEASE_NOTES_1_0_44,
+  RELEASE_NOTES_1_0_43,
+  RELEASE_NOTES_1_0_42,
+  RELEASE_NOTES_1_0_41,
+  RELEASE_NOTES_1_0_40,
+  RELEASE_NOTES_1_0_39,
+  RELEASE_NOTES_1_0_38,
+  RELEASE_NOTES_1_0_37,
+  RELEASE_NOTES_1_0_36,
+  {
+    id: "2026-08-09-v1.0.35", date: "2026年8月9日", version: "1.0.35", title: "终局结算、云端安全与速通恢复更新",
+    summary: "1.0.35 为终局离线和纯挂机增加设备感知分级与内存预警，补齐大存档上传诊断、云数据库治理、匿名新设备登录提醒和排行榜复核；历史百万白糖里程碑可安全自愈，建筑堆叠快捷档扩展到 ±10000 与 ±100000。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    items: [
+      { id: "offline-device-budget", title: "终局离线按存档与设备分级", description: "结算前评估实体、线路、物流、缓存、流体、戴森和施工边界，并结合设备内存与核心数选择精确、快速或保守宏观路径；高内存风险会提前提示，取消仍保留原存档。" },
+      { id: "large-save-governance", title: "大存档保存与上传可诊断", description: "1、7、20、28 和 30 MiB 档位会给出明确体积提示；上传记录准备、压缩、网络、回退和取消阶段耗时，30 MiB 原始回退与 32 MiB 服务端展开边界保持不变。" },
+      { id: "cloud-security", title: "云端治理与账号安全增强", description: "后台增加 SQLite/WAL、修订增长、备份窗口、写队列和磁盘水位指标；新设备或匿名区域登录会提醒，管理员动作要求精确账号、二次确认并写入最小化审计。" },
+      { id: "speedrun-recovery", title: "百万白糖里程碑可自愈", description: "合法 v46 速通存档按累计生产事实补齐漏写里程碑；服务端使用当前有效计时保守验榜，并提供要求最新主云修订、匹配备份和停服确认的一次性恢复工具。" },
+      { id: "stack-shortcuts", title: "终局建筑堆叠快捷调整", description: "桌面与移动检查器增加 ±10000、±100000，继续使用既有原子增减、施工件守恒和 1～100,000,000 上下限。" },
+      { id: "save-compatibility", title: "存档与在线协议保持兼容", description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。" },
+    ],
+  },
   {
     id: "2026-08-08-v1.0.34", date: "2026年8月8日", version: "1.0.34", title: "云存档、纯挂机与排行榜可信度更新",
     summary: "1.0.34 修复历史唯一巨构堆叠和 Android 云上传，纯挂机停止复用已校准 Worker 并保留可恢复冻结边界；排行榜拆分实际结算吞吐、当前星球和全星区理论速率，同时增加拉线候选建筑高亮。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
@@ -422,15 +518,30 @@ export function markCurrentReleaseNotesSeen(): void {
 }
 
 export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const backdropRef = useRef<HTMLDivElement>(null);
+  const { locale } = useAppLocale();
+  const localizedCurrentRelease = getCurrentReleaseNotes(locale);
+  const localizedRelease1045 = getReleaseNotes1045(locale);
+  const localizedRelease1044 = getReleaseNotes1044(locale);
+  const localizedRelease1043 = getReleaseNotes1043(locale);
+  const localizedRelease1042 = getReleaseNotes1042(locale);
+  const localizedRelease1041 = getReleaseNotes1041(locale);
+  const localizedRelease1039 = getReleaseNotes1039(locale);
+  const uiCopy = getReleaseNotesUiCopy(locale);
   const releaseScrollRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const historyScrollTopRef = useRef(0);
   const [historyPage, setHistoryPage] = useState(0);
   const [selectedReleaseId, setSelectedReleaseId] = useState<string>(CURRENT_RELEASE_NOTES.id);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const selectedRelease = RELEASE_NOTES_HISTORY.find((release) => release.id === selectedReleaseId) ?? CURRENT_RELEASE_NOTES;
+  const selectedReleaseRecord = RELEASE_NOTES_HISTORY.find((release) => release.id === selectedReleaseId) ?? CURRENT_RELEASE_NOTES;
+  const selectedRelease = selectedReleaseRecord.id === CURRENT_RELEASE_NOTES.id
+    ? localizedCurrentRelease
+    : selectedReleaseRecord.id === RELEASE_NOTES_1_0_45.id ? localizedRelease1045
+    : selectedReleaseRecord.id === RELEASE_NOTES_1_0_44.id ? localizedRelease1044
+    : selectedReleaseRecord.id === RELEASE_NOTES_1_0_43.id ? localizedRelease1043
+    : selectedReleaseRecord.id === RELEASE_NOTES_1_0_42.id ? localizedRelease1042
+    : selectedReleaseRecord.id === RELEASE_NOTES_1_0_41.id ? localizedRelease1041
+    : selectedReleaseRecord.id === RELEASE_NOTES_1_0_39.id ? localizedRelease1039 : selectedReleaseRecord;
   const pageCount = getReleaseNotesPageCount();
   const pageEntries = getReleaseNotesPage(historyPage);
 
@@ -472,75 +583,64 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
 
   useEffect(() => {
     if (!open) return;
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previousBodyOverflow = document.body.style.overflow;
-    const previousRootOverflow = document.documentElement.style.overflow;
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-
     const syncVisualViewport = () => {
       const viewport = window.visualViewport;
       const height = Math.max(240, viewport?.height ?? window.innerHeight);
-      backdropRef.current?.style.setProperty("--release-notes-viewport-height", `${Math.round(height)}px`);
+      document.documentElement.style.setProperty("--release-notes-viewport-height", `${Math.round(height)}px`);
     };
     syncVisualViewport();
     window.addEventListener("resize", syncVisualViewport);
     window.visualViewport?.addEventListener("resize", syncVisualViewport);
     window.visualViewport?.addEventListener("scroll", syncVisualViewport);
-    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    const onNativeBack = (event: Event) => {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      onClose();
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener(NATIVE_BACK_EVENT, onNativeBack, true);
     return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener(NATIVE_BACK_EVENT, onNativeBack, true);
       window.removeEventListener("resize", syncVisualViewport);
       window.visualViewport?.removeEventListener("resize", syncVisualViewport);
       window.visualViewport?.removeEventListener("scroll", syncVisualViewport);
-      document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousRootOverflow;
-      previousFocusRef.current?.focus({ preventScroll: true });
+      document.documentElement.style.removeProperty("--release-notes-viewport-height");
     };
-  }, [onClose, open]);
-
-  if (!open) return null;
+  }, [open]);
 
   return (
-    <div ref={backdropRef} className="release-notes-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="release-notes-dialog" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+    <AccessibleDialog
+      open={open}
+      title={selectedRelease.title}
+      layout="bare"
+      ariaLabel={selectedRelease.title}
+      className="release-notes-dialog"
+      backdropClassName="release-notes-backdrop"
+      initialFocusRef={closeButtonRef}
+      externalCloseEventName={NATIVE_BACK_EVENT}
+      onRequestClose={onClose}
+    >
         <header className="release-notes-header">
           <span className="release-notes-version"><small>VERSION</small><strong>{selectedRelease.version}</strong></span>
-          <div><small>{selectedRelease.date} · 公开测试版</small><h2 id="release-notes-title">{selectedRelease.title}</h2></div>
-          <button ref={closeButtonRef} type="button" onClick={onClose} title="关闭版本更新记录" aria-label="关闭版本更新记录"><X size={18} /></button>
+          <div><small>{selectedRelease.date} · {uiCopy.publicBeta}</small><h2 id="release-notes-title">{selectedRelease.title}</h2></div>
+          <button ref={closeButtonRef} type="button" onClick={onClose} title={uiCopy.close} aria-label={uiCopy.close}><X size={18} /></button>
         </header>
         <div className="release-notes-body">
-          <div className="release-notes-history-toolbar" aria-label="版本历史分页">
-            <button type="button" onClick={historyOpen ? () => showRelease(CURRENT_RELEASE_NOTES.id) : showHistory}>{historyOpen ? <><ChevronLeft size={14} />返回当前版本</> : <><History size={14} />查看历史版本</>}</button>
-            <span>第 {historyPage + 1} / {pageCount} 页</span>
+          <div className="release-notes-history-toolbar" aria-label={uiCopy.historyPagination}>
+            <button type="button" onClick={historyOpen ? () => showRelease(CURRENT_RELEASE_NOTES.id) : showHistory}>{historyOpen ? <><ChevronLeft size={14} />{uiCopy.returnCurrent}</> : <><History size={14} />{uiCopy.viewHistory}</>}</button>
+            <span>{uiCopy.page(historyPage + 1, pageCount)}</span>
             <label>
-              <span>跳转页码</span>
-            <select aria-label="跳转版本页" value={historyPage} onChange={(event) => openHistoryPage(Number(event.currentTarget.value))}>
-                {Array.from({ length: pageCount }, (_, page) => <option value={page} key={page}>第 {page + 1} 页</option>)}
+              <span>{uiCopy.jumpPageLabel}</span>
+            <select aria-label={uiCopy.jumpPageLabel} value={historyPage} onChange={(event) => openHistoryPage(Number(event.currentTarget.value))}>
+                {Array.from({ length: pageCount }, (_, page) => <option value={page} key={page}>{uiCopy.jumpPageOption(page + 1)}</option>)}
               </select>
             </label>
-            <button type="button" disabled={historyPage <= 0} onClick={() => openHistoryPage(historyPage - 1)} aria-label="上一页版本"><ChevronLeft size={14} />上一页</button>
-            <button type="button" disabled={historyPage >= pageCount - 1} onClick={() => openHistoryPage(historyPage + 1)} aria-label="下一页版本">下一页<ChevronRight size={14} /></button>
+            <button type="button" disabled={historyPage <= 0} onClick={() => openHistoryPage(historyPage - 1)} aria-label={uiCopy.previousAria}><ChevronLeft size={14} />{uiCopy.previous}</button>
+            <button type="button" disabled={historyPage >= pageCount - 1} onClick={() => openHistoryPage(historyPage + 1)} aria-label={uiCopy.nextAria}>{uiCopy.next}<ChevronRight size={14} /></button>
           </div>
-          {historyOpen ? <nav className="release-notes-history-list" aria-label="版本列表">
+          {historyOpen ? <nav className="release-notes-history-list" aria-label={uiCopy.releaseList}>
             {pageEntries.map((release) => <button type="button" className={release.id === selectedRelease.id ? "active" : ""} key={release.id} onClick={() => showRelease(release.id)}><span><strong>{release.version} · {release.title}</strong><small>{release.date}</small></span><ChevronRight size={15} /></button>)}
           </nav> : null}
-          <div className="release-notes-scroll" ref={releaseScrollRef} onScroll={(event) => { historyScrollTopRef.current = event.currentTarget.scrollTop; }}>
+          <div
+            className="release-notes-scroll"
+            ref={releaseScrollRef}
+            role="region"
+            aria-label={`${selectedRelease.version} ${selectedRelease.title}`}
+            tabIndex={0}
+            onScroll={(event) => { historyScrollTopRef.current = event.currentTarget.scrollTop; }}
+          >
             <p className="release-notes-summary"><Info size={16} /><span>{selectedRelease.summary}</span></p>
             <ol>
               {selectedRelease.items.map((item, index) => {
@@ -556,10 +656,9 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
           </div>
         </div>
         <footer className="release-notes-footer">
-          <span><MessageCircle size={15} /><small>QQ 交流群</small><strong>1076757280</strong></span>
-          <button type="button" onClick={onClose}><Check size={16} />我知道了</button>
+          <span><MessageCircle size={15} /><small>{uiCopy.community}</small><strong>1076757280</strong></span>
+          <button type="button" onClick={onClose}><Check size={16} />{uiCopy.acknowledge}</button>
         </footer>
-      </section>
-    </div>
+    </AccessibleDialog>
   );
 }

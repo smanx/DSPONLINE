@@ -30,6 +30,8 @@ import type { BuildingId, GameState, ItemId, PlanetId, RecipeDefinition, TechId 
 import { CODEX_SECTION_LABELS, CodexSections, type CodexSection } from "./CodexSections";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 
 type ItemFilter = "all" | "raw" | "solid" | "fluid" | "matrix";
 
@@ -58,9 +60,9 @@ function ItemLink({ itemId, amount, ratePerMinute, onSelect }: {
 }) {
   return (
     <button className="recipe-item-link" type="button" onClick={() => onSelect(itemId)} title={`查看${getItem(itemId).name}`}>
-      <ItemMark itemId={itemId} />
+      <ItemGlyph itemId={itemId} className="item-mark" />
       <span>{getItem(itemId).name}</span>
-      {amount != null ? <strong>×<QuantityValue value={amount} /></strong> : null}
+      {amount != null ? <strong>×<QuantityValue value={amount} interactive={false} /></strong> : null}
       {ratePerMinute != null ? <small>{ratePerMinute.toFixed(1)}/min</small> : null}
     </button>
   );
@@ -137,12 +139,14 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onL
   const mobileScrollRef = useRef<HTMLElement | null>(null);
   const mobileScrollPositionRef = useRef(0);
   const previousMobileSubviewRef = useRef<string | null>(null);
+  const autoFocusedMobileSubviewRef = useRef<string | null>(null);
   const itemList = Object.values(ITEMS);
   useEffect(() => {
     if (!focusItemId) return;
     setSection("items");
     setSelectedItemId(focusItemId);
     setQuery("");
+    clearStableTextDraft("recipe-workspace-search");
     setFilter("all");
   }, [focusItemId]);
   useEffect(() => {
@@ -174,9 +178,12 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onL
   }, [mobile, mobileSubview, open]);
   useEffect(() => {
     if (!mobile || !open || !focusItemId || !onMobileOpenDetail) return;
+    const targetSubview = `item:${focusItemId}`;
+    if (mobileSubview === targetSubview || autoFocusedMobileSubviewRef.current === targetSubview) return;
+    autoFocusedMobileSubviewRef.current = targetSubview;
     if (mobileScrollRef.current) mobileScrollRef.current.scrollTop = 0;
-    onMobileOpenDetail(`item:${focusItemId}`);
-  }, [focusItemId, mobile, onMobileOpenDetail, open]);
+    onMobileOpenDetail(targetSubview);
+  }, [focusItemId, mobile, mobileSubview, onMobileOpenDetail, open]);
   const visibleItems = useMemo(() => itemList.filter((item) => {
     const term = query.trim().toLocaleLowerCase("zh-CN");
     const matchesSearch = !term || `${item.name} ${item.symbol} ${item.id} ${item.description}`.toLocaleLowerCase("zh-CN").includes(term);
@@ -221,7 +228,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onL
   const selectPlanet = (planetId: PlanetId) => { setSection("planets"); setSelectedPlanetId(planetId); openMobileDetail(`planet:${planetId}`); };
 
   return (
-    <section ref={mobile ? mobileScrollRef : undefined} className={`recipe-workspace${section === "items" ? " recipe-workspace--items" : ""}${mobile ? ` mobile-workspace mobile-recipe${mobileDetail ? " mobile-workspace--detail" : ""}` : ""}`} role="dialog" aria-modal="true" aria-label="生产资料库">
+    <WorkspaceFrame ref={mobile ? mobileScrollRef : undefined} className={`recipe-workspace${section === "items" ? " recipe-workspace--items" : ""}${mobile ? ` mobile-workspace mobile-recipe${mobileDetail ? " mobile-workspace--detail" : ""}` : ""}`} ariaLabel="生产资料库" onRequestClose={onClose}>
       <header className="recipe-header">
         <div className="recipe-title">
           <i><BookOpen size={20} /></i>
@@ -240,7 +247,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onL
       {!mobileDetail ? <nav className="codex-section-nav" aria-label="资料库分类">{(Object.keys(CODEX_SECTION_LABELS) as CodexSection[]).map((candidate) => <button className={section === candidate ? "active" : ""} type="button" key={candidate} onClick={() => setSection(candidate)}>{CODEX_SECTION_LABELS[candidate]}</button>)}</nav> : null}
 
       {section === "items" && !mobileDetail ? <div className="recipe-toolbar mobile-workspace-sticky">
-        <label className="recipe-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索物品、缩写或说明" aria-label="搜索配方物品" /></label>
+        <label className="recipe-search"><Search size={15} /><StableTextInput draftId="recipe-workspace-search" value={query} onValueChange={setQuery} placeholder="搜索物品、缩写或说明" aria-label="搜索配方物品" /></label>
         <div className="recipe-filters" aria-label="配方物品分类">
           {(["all", "raw", "solid", "fluid", "matrix"] as ItemFilter[]).map((option) => (
             <button className={filter === option ? "active" : ""} type="button" key={option} onClick={() => setFilter(option)}>
@@ -258,9 +265,9 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onL
             const natural = getResourceSources(candidate.id).length > 0;
             return (
               <button className={selectedItemId === candidate.id ? "active" : ""} type="button" key={candidate.id} onClick={() => selectItem(candidate.id)}>
-                <ItemMark itemId={candidate.id} />
+                <ItemGlyph itemId={candidate.id} className="item-mark" />
                 <span><strong>{candidate.name}</strong><small>{natural ? "天然资源" : producerCount > 0 ? `${producerCount} 种生产方式` : "特殊来源"}</small></span>
-                <em><QuantityValue value={networkItemStock(game, candidate.id)} /></em>
+                <em><QuantityValue value={networkItemStock(game, candidate.id)} interactive={false} /></em>
               </button>
             );
           })}
@@ -323,12 +330,12 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onL
             <section className="recipe-section recipe-research-uses">
               <header><FlaskConical size={16} /><span>科研用途</span><strong>{researchUses.length}</strong></header>
               <div>{researchUses.map((technology) => (
-                <button type="button" key={technology.id} onClick={() => selectTechnology(technology.id)}><i>{isTechnologyCompleted(game, technology.id) ? <Check size={12} /> : <FlaskConical size={12} />}</i><strong>{technology.name}</strong><small>消耗 <QuantityValue value={technology.costs.find((cost) => cost.itemId === selectedItemId)?.amount ?? 0} /></small></button>
+                <button type="button" key={technology.id} onClick={() => selectTechnology(technology.id)}><i>{isTechnologyCompleted(game, technology.id) ? <Check size={12} /> : <FlaskConical size={12} />}</i><strong>{technology.name}</strong><small>消耗 <QuantityValue value={technology.costs.find((cost) => cost.itemId === selectedItemId)?.amount ?? 0} interactive={false} /></small></button>
               ))}</div>
             </section>
           ) : null}
         </div> : null}
       </div> : <CodexSections section={section} game={game} selectedBuildingId={selectedBuildingId} selectedTechId={selectedTechId} selectedPlanetId={selectedPlanetId} detailOnly={mobileDetail} onSelectBuilding={selectBuilding} onSelectTechnology={selectTechnology} onSelectPlanet={selectPlanet} onSelectItem={selectItem} />}
-    </section>
+    </WorkspaceFrame>
   );
 }

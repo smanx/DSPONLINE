@@ -1,5 +1,5 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
-import { getWorkDisplayProgress, type WorkProgressMode, type WorkProgressSnapshot } from "../game/productionRefresh";
+import { getWorkDisplayProgress, reconcileWorkDisplaySnapshot, type WorkProgressMode, type WorkProgressSnapshot } from "../game/productionRefresh";
 
 type ClockListener = () => void;
 
@@ -64,8 +64,13 @@ export function useWorkDisplayProgress(input: {
   const previousInputRef = useRef("");
   const snapshotRef = useRef<WorkProgressSnapshot>({ ...input, snapshotProgress: normalized, publishedAtMs: typeof performance === "undefined" ? 0 : performance.now() });
   if (previousInputRef.current !== inputKey) {
+    const hasPreviousInput = previousInputRef.current !== "";
+    const publishedAtMs = typeof performance === "undefined" ? 0 : performance.now();
+    const nextSnapshot: WorkProgressSnapshot = { ...input, snapshotProgress: normalized, publishedAtMs };
     previousInputRef.current = inputKey;
-    snapshotRef.current = { ...input, snapshotProgress: normalized, publishedAtMs: typeof performance === "undefined" ? 0 : performance.now() };
+    snapshotRef.current = !hasPreviousInput
+      ? nextSnapshot
+      : reconcileWorkDisplaySnapshot(snapshotRef.current, nextSnapshot, publishedAtMs);
   }
   const visualTimeMs = useProductionVisualClock(input.active && input.cyclesPerSecond > 0 && input.mode !== "indeterminate" && input.mode !== "level");
   return getWorkDisplayProgress(snapshotRef.current, visualTimeMs || snapshotRef.current.publishedAtMs);
